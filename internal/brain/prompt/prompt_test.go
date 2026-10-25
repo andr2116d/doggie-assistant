@@ -160,9 +160,13 @@ func TestBuildEvents(t *testing.T) {
 		"cancelled, no why": {TaskEvent{Type: "task.cancelled", Task: task}, []string{"was cancelled.</event>"}, nil},
 		"needs input": {TaskEvent{Type: "task.needs_input", Task: task, Question: "¿Qué perfil?", Options: []string{"Ana", "Luis"}},
 			[]string{"needs an answer: <data>¿Qué perfil?</data> Options: <data>Ana | Luis</data>"}, nil},
-		"needs input, no options": {TaskEvent{Type: "task.needs_input", Task: task, Question: "¿Cuál?"}, []string{"<data>¿Cuál?</data></event>"}, []string{"Options"}},
-		"unknown type":            {TaskEvent{Type: "task.weird", Task: task}, []string{"changed."}, nil},
-		"no description":          {TaskEvent{Type: "task.done", Task: events.TaskInfo{ID: "t1", TaskSpec: events.TaskSpec{Kind: "k"}}}, []string{"Task t1 (k) finished."}, nil},
+		"needs input, no options": {TaskEvent{Type: "task.needs_input", Task: task, Question: "¿Cuál?"}, []string{"<data>¿Cuál?</data></event>"}, []string{"Options", "Only the user"}},
+		"needs input, sensitive": {TaskEvent{Type: "task.needs_input", Task: secret, Question: "¿Confirmas?"},
+			[]string{"<data>¿Confirmas?</data> Only the user can answer it, directly: you can't answer it for them.</event>"}, nil},
+		"needs input, unknown kind": {TaskEvent{Type: "task.needs_input", Task: events.TaskInfo{ID: "t2", TaskSpec: events.TaskSpec{Kind: "other.kind"}}, Question: "¿Sigo?"},
+			[]string{"Only the user can answer it"}, nil},
+		"unknown type":   {TaskEvent{Type: "task.weird", Task: task}, []string{"changed."}, nil},
+		"no description": {TaskEvent{Type: "task.done", Task: events.TaskInfo{ID: "t1", TaskSpec: events.TaskSpec{Kind: "k"}}}, []string{"Task t1 (k) finished."}, nil},
 	} {
 		got := Build(Context{Now: at(0), Inputs: []Input{{At: at(0), Event: &tt.ev}}})
 		for _, w := range tt.want {

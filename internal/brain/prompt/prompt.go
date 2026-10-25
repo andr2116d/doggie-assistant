@@ -271,6 +271,9 @@ func writeInput(b *strings.Builder, in Input, clk clock, omitAt string, maxText 
 		if len(e.Options) > 0 {
 			fmt.Fprintf(b, " Options: <data>%s</data>", esc(cut(strings.Join(e.Options, " | "), maxDataText)))
 		}
+		if events.PersonMustAnswer(e.Task, events.TaskKinds()) {
+			b.WriteString(" Only the user can answer it, directly: you can't answer it for them.")
+		}
 	default:
 		b.WriteString("changed.")
 	}

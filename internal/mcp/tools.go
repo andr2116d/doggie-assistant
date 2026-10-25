@@ -177,7 +177,7 @@ func (s *Server) addTaskTools() {
 	}, events.RiskAct, s.cancelTask)
 	addTool(s, &sdk.Tool{
 		Name:        "answer_task",
-		Description: "Give a task waiting for input the user's answer to its question. Only answer with what the user actually said; never make up an answer.",
+		Description: "Give a task waiting for input the user's answer to its question. Only answer with what the user actually said; never make up an answer. Never use it for a question only the user can answer: it is refused.",
 	}, events.RiskAct, s.answerTask)
 }
 

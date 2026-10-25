@@ -164,6 +164,23 @@ func TestProgressAndRunningAreNotAnnounced(t *testing.T) {
 	}
 }
 
+// The LLM is told which questions only the user may answer.
+func TestSensitiveQuestionsAreTheUsers(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	for i, spec := range []events.TaskSpec{{Kind: "demo.ask", ThreadID: "th", Sensitive: true}, {Kind: "demo.ask", ThreadID: "th"}} {
+		if _, err := bus.Request(context.Background(), h.client, events.StartTask, spec); err != nil {
+			t.Fatal(err)
+		}
+		h.nextTurn()
+		in := h.fake.requests()[i+1].Input
+		if got := strings.Contains(inputOf(in), "Only the user can answer it"); got != spec.Sensitive {
+			t.Errorf("sensitive %v: told only the user may answer = %v:\n%s", spec.Sensitive, got, inputOf(in))
+		}
+	}
+}
+
 func TestQuestionsAndFailuresAreAnnounced(t *testing.T) {
 	h := newHarness(t, Options{})
 	h.say("th", "terminal", "hola")

@@ -29,7 +29,7 @@ func TestParseLine(t *testing.T) {
 		{"/Tasks", "", &command{name: "/Tasks"}},
 	} {
 		sentence, cmd := parseLine(tt.line)
-		if sentence != tt.sentence || (cmd == nil) != (tt.cmd == nil) || (cmd != nil && *cmd != *tt.cmd) {
+		if sentence != tt.sentence || (cmd == nil) != (tt.cmd == nil) || (cmd != nil && (cmd.name != tt.cmd.name || cmd.id != tt.cmd.id || cmd.text != tt.cmd.text)) {
 			t.Errorf("parseLine(%q) = %q, %+v; want %q, %+v", tt.line, sentence, cmd, tt.sentence, tt.cmd)
 		}
 	}

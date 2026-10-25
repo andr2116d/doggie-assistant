@@ -32,6 +32,8 @@ type command struct {
 	name string
 	// id is the task it acts on; text the rest of the line.
 	id, text string
+	// asked is the task /answer found waiting.
+	asked events.TaskInfo
 }
 
 // parseLine tells a sentence for DOGGIE from a command. A line starting with
@@ -90,7 +92,16 @@ func (cmd *command) check() string {
 
 // run runs a checked command against DOGGIE, other than /help, and returns
 // what to show and whether it worked. thread and channel are the chat's.
-func (cmd *command) run(ctx context.Context, conn *bus.Conn, thread, channel string) (string, bool) {
+func (cmd *command) run(ctx context.Context, conn *bus.Conn, thread, channel string) commandResult {
+	out, ok := cmd.exec(ctx, conn, thread, channel)
+	r := commandResult{out: out, ok: ok}
+	if ok && cmd.name == "/answer" {
+		r.answered = &cmd.asked
+	}
+	return r
+}
+
+func (cmd *command) exec(ctx context.Context, conn *bus.Conn, thread, channel string) (string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	switch cmd.name {
@@ -118,6 +129,7 @@ func (cmd *command) run(ctx context.Context, conn *bus.Conn, thread, channel str
 		if err != nil {
 			return fmt.Sprintf("· could not answer %s: %s", cmd.id, commandError(err)), false
 		}
+		cmd.asked = info
 		if info.Status != events.StatusWaitingInput {
 			return fmt.Sprintf("· could not answer %s: it isn't waiting for an answer (it is %s)", cmd.id, info.Status), false
 		}
@@ -219,6 +231,8 @@ func tasksCount(n int) string {
 type commandResult struct {
 	out string
 	ok  bool
+	// answered is the task whose question /answer answered.
+	answered *events.TaskInfo
 }
 
 // commander runs commands in order, so each sees what the one before did,
@@ -227,9 +241,8 @@ func commander(ctx context.Context, conn *bus.Conn, thread, channel string, cmds
 	for {
 		select {
 		case cmd := <-cmds:
-			out, ok := cmd.run(ctx, conn, thread, channel)
 			select {
-			case done <- commandResult{out, ok}:
+			case done <- cmd.run(ctx, conn, thread, channel):
 			case <-ctx.Done():
 				return
 			}

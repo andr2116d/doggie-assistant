@@ -437,6 +437,10 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 			running--
 			failed = failed || !r.ok
 			c.view.note(r.out)
+			if r.answered != nil {
+				c.board.answered(*r.answered)
+				c.showStatus()
+			}
 			idleSince = time.Now()
 		case r := <-results:
 			inFlight--

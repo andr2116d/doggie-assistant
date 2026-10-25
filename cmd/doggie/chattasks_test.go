@@ -347,3 +347,37 @@ func (u *fakeUI) waitStatusPrefix(t *testing.T, prefix string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// The user's own answer clears its question at once, but not a newer one.
+func TestBoardTakesTheUsersAnswer(t *testing.T) {
+	b := newTaskBoard("terminal")
+	b.event(created("t1", "terminal", ""))
+	b.event(env(events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: "t1", Question: "¿Sigo?"}))
+	first := events.TaskInfo{ID: "t1", Question: "¿Sigo?"}
+	b.answered(first)
+	if got := b.status(); got != "· t1 demo.sleep" {
+		t.Errorf("status = %q", got)
+	}
+	b.event(env(events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: "t1", Question: "¿Y ahora?"}))
+	b.answered(first)
+	if got := b.status(); !strings.Contains(got, "asks") {
+		t.Errorf("an old answer cleared a newer question: %q", got)
+	}
+	b.answered(events.TaskInfo{ID: "t9"}) // unknown: nothing happens
+}
+
+func TestAnswerCommandTellsWhatItAnswered(t *testing.T) {
+	c := taskEnv(t)
+	waitForWorker(t, c)
+	id := startTask(t, c, events.TaskSpec{Kind: "demo.ask", Input: json.RawMessage(`{"question":"¿Sigo?"}`)})
+	waitStatus(t, c, id, events.StatusWaitingInput)
+	_, cmd := parseLine("/answer " + id + " sí")
+	r := cmd.run(context.Background(), c, "terminal", "terminal")
+	if !r.ok || r.answered == nil || r.answered.ID != id || r.answered.Question != "¿Sigo?" {
+		t.Errorf("result = %+v", r)
+	}
+	_, cmd = parseLine("/answer " + id + " otra vez")
+	if r := cmd.run(context.Background(), c, "terminal", "terminal"); r.ok || r.answered != nil {
+		t.Errorf("a failed answer = %+v", r)
+	}
+}

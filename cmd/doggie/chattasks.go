@@ -388,3 +388,15 @@ func (c *chatState) lookup(ctx context.Context, conn *bus.Conn, id string, after
 		}
 	}()
 }
+
+// answered notes that the user answered a task's question here, so the
+// status line needn't wait for the manager to say so. A newer question
+// stays.
+func (b *taskBoard) answered(asked events.TaskInfo) {
+	t, ok := b.tasks[asked.ID]
+	if !ok || t.info.Status != events.StatusWaitingInput || t.info.Question != asked.Question {
+		return
+	}
+	t.info.Status, t.info.Question, t.info.Options = events.StatusRunning, "", nil
+	t.seen = time.Now()
+}

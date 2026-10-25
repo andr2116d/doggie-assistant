@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
+	"github.com/andr2116d/doggie-assistant/internal/bus/events"
 	"github.com/andr2116d/doggie-assistant/internal/config"
 	"github.com/andr2116d/doggie-assistant/internal/supervisor"
 )
@@ -121,12 +122,13 @@ func startBus(ctx context.Context, cfg config.Config, log *slog.Logger) (*bus.Se
 		return nil, err
 	}
 	opts := bus.Options{
-		Listen:   cfg.Bus.Listen,
-		Token:    token,
-		StoreDir: filepath.Join(cfg.DataDir, "nats"),
-		MaxAge:   cfg.Bus.EventLog.MaxAge,
-		MaxBytes: cfg.Bus.EventLog.MaxSizeMB << 20,
-		Log:      log,
+		Listen:               cfg.Bus.Listen,
+		Token:                token,
+		SatellitePermissions: events.SatellitePermissions(),
+		StoreDir:             filepath.Join(cfg.DataDir, "nats"),
+		MaxAge:               cfg.Bus.EventLog.MaxAge,
+		MaxBytes:             cfg.Bus.EventLog.MaxSizeMB << 20,
+		Log:                  log,
 	}
 	tlsOn := cfg.Bus.Listen != "" && cfg.Bus.TLS.Enabled
 	if tlsOn {

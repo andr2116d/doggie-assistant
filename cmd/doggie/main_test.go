@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
+	"github.com/andr2116d/doggie-assistant/internal/bus/events"
 	"github.com/andr2116d/doggie-assistant/internal/config"
 )
 
@@ -58,5 +60,32 @@ func TestStartBusInProcessOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(tlsDir(cfg)); !os.IsNotExist(err) {
 		t.Error("TLS files were created although the bus does not listen on TCP")
+	}
+}
+
+func TestStartBusRestrictsSatellites(t *testing.T) {
+	cfg := testConfig(t, "127.0.0.1:-1")
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := startBus(context.Background(), cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+	token, _ := bus.LoadToken(tokenPath(cfg))
+	sat, err := bus.Dial(srv.ClientURL(), bus.DialOptions{Name: "satellite", Token: token, CAFile: caFile("", cfg), Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sat.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// A satellite may run tasks as a worker...
+	if _, err := bus.Serve(ctx, sat, events.RunTask.With("tv.open_app")); err != nil {
+		t.Errorf("satellite cannot serve as a worker: %v", err)
+	}
+	// ...but not impersonate the task manager.
+	if _, err := bus.Serve(ctx, sat, events.StartTask); err == nil {
+		t.Error("satellite could impersonate the task manager")
 	}
 }

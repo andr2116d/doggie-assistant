@@ -338,3 +338,14 @@ func TestCut(t *testing.T) {
 		}
 	}
 }
+
+func TestResumedSentences(t *testing.T) {
+	got := Build(Context{Now: at(0), Inputs: []Input{{At: at(0), Said: "abre la tele", Channel: "terminal", Resumed: true}, said(0, "hola")}})
+	mustContain := func(s string) {
+		if !strings.Contains(got, s) {
+			t.Errorf("missing %q in\n%s", s, got)
+		}
+	}
+	mustContain(`<said channel="terminal" at="15:40" resumed="yes">abre la tele</said>`)
+	mustContain(`<said channel="terminal" at="15:40">hola</said>`)
+}

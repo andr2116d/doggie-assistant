@@ -644,3 +644,93 @@ func TestCaughtUpEventsAreToldWithoutWaitingForInput(t *testing.T) {
 		t.Errorf("turn = %+v", turn.Data.Inputs)
 	}
 }
+
+// DOGGIE never goes silent on someone because it restarted: what was said
+// while the brain was down, or during a turn that died without a word, is
+// answered when it comes back, marked as resumed.
+func TestUnansweredSentencesAreResumedAfterARestart(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+
+	// A turn stopped mid-way, before it said or did anything.
+	h.fake.set(func(f *fake) { f.gate = make(chan struct{}) })
+	h.say("th", "terminal", "¿qué hora es?")
+	waitFor(t, "the turn", func() bool { return len(h.fake.requests()) == 1 })
+	h.stop()
+	if turn := h.nextTurn(); turn.Data.Error == "" {
+		t.Fatalf("interrupted turn = %+v", turn.Data)
+	}
+	// Something said while the brain is down.
+	h.say("th", "terminal", "¿sigues ahí?")
+
+	h.fake.set(func(f *fake) { f.gate = nil })
+	h.startBrain(Options{})
+	turn := h.nextTurn()
+	var said []string
+	for _, in := range turn.Data.Inputs {
+		if !in.Resumed {
+			t.Errorf("input %q not marked resumed", in.Said)
+		}
+		said = append(said, in.Said)
+	}
+	if strings.Join(said, "|") != "¿qué hora es?|¿sigues ahí?" {
+		t.Errorf("resumed = %q", said)
+	}
+	mustContain(t, h.fake.requests()[0].Input, `resumed="yes">¿qué hora es?</said>`, `resumed="yes">¿sigues ahí?</said>`)
+
+	// Once answered, a further restart resumes nothing.
+	h.stop()
+	h.startBrain(Options{})
+	h.noTurn(300 * time.Millisecond)
+}
+
+// A sentence a turn acted on is not resumed, even if the turn then failed:
+// that could repeat the action.
+func TestSentencesATurnActedOnAreNotResumed(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.fake.set(func(f *fake) {
+		f.reply = func(ctx context.Context, req llm.Request) []llm.Output {
+			_, tool := h.startTask(ctx, req.Turn.ThreadID, "demo.sleep", "Algo")
+			return []llm.Output{tool, {Done: &llm.Done{Err: llm.ErrTurnTimeout}}}
+		}
+	})
+	h.say("th", "terminal", "haz algo")
+	if turn := h.nextTurn(); turn.Data.Error == "" || len(turn.Data.Actions) != 1 {
+		t.Fatalf("turn = %+v", turn.Data)
+	}
+	h.fake.set(func(f *fake) { f.reply = nil })
+	h.stop()
+	h.startBrain(Options{})
+	h.noTurn(300 * time.Millisecond)
+}
+
+// Sentences older than the catch-up window are not resumed.
+func TestOldSentencesAreNotResumed(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.stop()
+	h.say("th", "terminal", "hace mucho")
+	noCatchUp(t)
+	h.startBrain(Options{})
+	h.noTurn(300 * time.Millisecond)
+}
+
+// A sentence that keeps failing is resumed once, not on every restart.
+func TestFailingSentenceIsResumedOnlyOnce(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	h.fake.set(func(f *fake) { f.fail = errBoom })
+	h.say("th", "terminal", "frase venenosa")
+	if turn := h.nextTurn(); turn.Data.Error != "boom" {
+		t.Fatalf("turn = %+v", turn.Data)
+	}
+	h.stop()
+	h.startBrain(Options{}) // the probe works: fail only hits Generate
+	if turn := h.nextTurn(); !turn.Data.Inputs[0].Resumed || turn.Data.Error != "boom" {
+		t.Fatalf("resumed turn = %+v", turn.Data)
+	}
+	h.stop()
+	h.startBrain(Options{})
+	h.noTurn(300 * time.Millisecond)
+}

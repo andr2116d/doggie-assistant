@@ -41,6 +41,9 @@ type TurnInput struct {
 	At      time.Time `json:"at"`
 	Said    string    `json:"said,omitempty"`
 	Channel string    `json:"channel,omitempty"`
+	// Resumed marks a sentence the brain answers after a restart: the turn
+	// that died may have acted on it already.
+	Resumed bool      `json:"resumed,omitempty"`
 	Task    *TurnTask `json:"task,omitempty"`
 }
 

@@ -77,6 +77,9 @@ type Input struct {
 	// Said is what the user said, on Channel.
 	Said    string
 	Channel string
+	// Resumed marks a sentence answered after a restart: the LLM may have
+	// acted on it already.
+	Resumed bool
 	Event   *TaskEvent
 }
 
@@ -229,7 +232,11 @@ func writeInput(b *strings.Builder, in Input, clk clock, omitAt string, maxText 
 		at = " at=\"" + s + "\""
 	}
 	if in.Event == nil {
-		fmt.Fprintf(b, "<said channel=\"%s\"%s>%s</said>\n", attr(in.Channel), at, esc(cut(in.Said, maxText)))
+		resumed := ""
+		if in.Resumed {
+			resumed = ` resumed="yes"`
+		}
+		fmt.Fprintf(b, "<said channel=\"%s\"%s%s>%s</said>\n", attr(in.Channel), at, resumed, esc(cut(in.Said, maxText)))
 		return
 	}
 	e := in.Event

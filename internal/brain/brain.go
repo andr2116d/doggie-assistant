@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -184,7 +185,10 @@ func (b *Brain) Run(ctx context.Context) error {
 				b.drain()
 				return ctx.Err()
 			}
-			b.onUtterance(env)
+			if b.seen[env.ID] {
+				continue // already read from the log
+			}
+			b.onUtterance(env, false)
 		case env, ok := <-taskEvents:
 			if !ok {
 				b.drain()
@@ -258,6 +262,19 @@ func (b *Brain) recover(ctx context.Context) error {
 			th.channel = ev.Data.Channel
 		}
 		b.remember(th, ev.Time, ev.Data)
+		// A turn that failed without saying or doing anything answered
+		// nothing: its inputs are caught up again, which can't repeat an
+		// action since none happened.
+		// A sentence gets one second chance: one that keeps failing (or
+		// crashing the brain) must not be retried on every restart.
+		if ev.Data.Error != "" && len(ev.Data.Replies) == 0 && len(ev.Data.Actions) == 0 {
+			for _, in := range ev.Data.Inputs {
+				if in.Resumed {
+					answered[in.EventID] = true
+				}
+			}
+			continue
+		}
 		for _, in := range ev.Data.Inputs {
 			answered[in.EventID] = true
 			if in.Task != nil && in.Task.Type != events.TaskNeedsInput.Type() {
@@ -268,19 +285,32 @@ func (b *Brain) recover(ctx context.Context) error {
 	return b.catchUp(ctx, answered)
 }
 
-// catchUp routes the recent task events no turn answered: those of the
-// tasks a restart interrupted (the task manager fails them while the brain
-// is starting) and those that came while the brain was down or was stopped
-// before answering them. Sentences are not replayed: the turn that missed
-// recording them may have acted on them already.
+// catchUp routes the recent events no turn answered, in the order they
+// happened: task events (e.g. the tasks a restart interrupted, which the task
+// manager fails while the brain is starting) and sentences that came while
+// the brain was down or was stopped before answering them, so DOGGIE never
+// goes silent on someone. The turn that died may have acted on a sentence
+// already, so those are marked resumed: the LLM checks the tasks before
+// acting again.
 func (b *Brain) catchUp(ctx context.Context, answered map[string]bool) error {
-	recent, err := bus.History(ctx, b.conn, time.Now().Add(-catchUpWindow), "task.>")
+	since := time.Now().Add(-catchUpWindow)
+	tasks, err := bus.History(ctx, b.conn, since, "task.>")
 	if err != nil {
 		return fmt.Errorf("brain: read recent task events: %w", err)
 	}
+	said, err := bus.History(ctx, b.conn, since, events.UserUtterance.Type()+".*")
+	if err != nil {
+		return fmt.Errorf("brain: read recent utterances: %w", err)
+	}
+	recent := append(tasks, said...)
+	slices.SortStableFunc(recent, func(x, y bus.Envelope) int { return x.Time.Compare(y.Time) })
 	for _, env := range recent {
 		b.seen[env.ID] = true
-		if !answered[env.ID] {
+		switch {
+		case answered[env.ID]:
+		case strings.HasPrefix(env.Type, events.UserUtterance.Type()+"."):
+			b.onUtterance(env, true)
+		default:
 			b.onTaskEvent(ctx, env)
 		}
 	}
@@ -349,7 +379,7 @@ func (b *Brain) remember(th *thread, at time.Time, rec events.BrainTurnData) {
 // onUtterance queues a sentence for its thread. The channel comes from the
 // event's subject, which the bus only lets each satellite use for its own
 // channels; a payload claiming another channel is a forgery.
-func (b *Brain) onUtterance(env bus.Envelope) {
+func (b *Brain) onUtterance(env bus.Envelope, resumed bool) {
 	ev, channel, err := bus.DecodeUnder(env, events.UserUtterance)
 	if err != nil {
 		b.log.Warn("brain: dropping undecodable utterance", "id", env.ID, "err", err)
@@ -383,7 +413,7 @@ func (b *Brain) onUtterance(env bus.Envelope) {
 		return
 	}
 	th.channel = u.Channel
-	b.enqueue(th, events.TurnInput{EventID: ev.ID, At: ev.Time, Said: text, Channel: u.Channel})
+	b.enqueue(th, events.TurnInput{EventID: ev.ID, At: ev.Time, Said: text, Channel: u.Channel, Resumed: resumed})
 }
 
 // onTaskEvent routes a task event to the thread that asked for the task.
@@ -563,7 +593,7 @@ func validID(s string) bool {
 }
 
 func promptInput(in events.TurnInput) prompt.Input {
-	p := prompt.Input{At: in.At, Said: in.Said, Channel: in.Channel}
+	p := prompt.Input{At: in.At, Said: in.Said, Channel: in.Channel, Resumed: in.Resumed}
 	if t := in.Task; t != nil {
 		p.Event = &prompt.TaskEvent{
 			Type: t.Type,

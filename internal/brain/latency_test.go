@@ -51,7 +51,7 @@ func TestRealLatency(t *testing.T) {
 				firstBlock.add(s - time.Duration(turn.FirstTextMS)*time.Millisecond)
 				time.Sleep(2 * time.Second)
 				// An order and conversation: one tool call.
-				s, _ = r.measure(thread, "Abre Netflix en la tele (demo.sleep de 2 segundos) y cuéntame un chiste corto.")
+				s, _ = r.measure(thread, "Pon un temporizador de 2 segundos (demo.sleep) y cuéntame un chiste corto.")
 				action.add(s)
 				// The notice when that task ends.
 				notice.add(r.notice(thread))

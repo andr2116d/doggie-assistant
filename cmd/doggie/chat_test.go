@@ -105,7 +105,7 @@ func TestChatTalks(t *testing.T) {
 	})
 	ui := newFakeUI(true)
 	done, _ := runChat(t, client, ui, make(chan connState), testChatOptions())
-	ui.lines <- "  ábreme netflix  "
+	ui.lines <- "  recuérdame comprar pan  "
 	ui.waitPrinted(t, "doggie> Voy.\ndoggie> Un chiste corto.\n")
 	ui.lines <- "   "
 	ui.lines <- "¿y la hora?"
@@ -116,7 +116,7 @@ func TestChatTalks(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(got) != 2 || got[0].Text != "ábreme netflix" || got[0].ThreadID != "terminal" || got[0].Channel != "terminal" || got[1].Text != "¿y la hora?" {
+	if len(got) != 2 || got[0].Text != "recuérdame comprar pan" || got[0].ThreadID != "terminal" || got[0].Channel != "terminal" || got[1].Text != "¿y la hora?" {
 		t.Errorf("sent %+v", got)
 	}
 	if strings.Contains(ui.printed(), "not for you") {
@@ -133,10 +133,10 @@ func TestChatShowsLaterNotices(t *testing.T) {
 	})
 	ui := newFakeUI(true)
 	runChat(t, client, ui, make(chan connState), testChatOptions())
-	ui.lines <- "abre netflix"
+	ui.lines <- "pon un temporizador"
 	ui.waitPrinted(t, "doggie> En eso.\n")
-	streamReply(context.Background(), <-brains, "terminal", "", "Listo, Netflix abierto.")
-	ui.waitPrinted(t, "doggie> Listo, Netflix abierto.\n")
+	streamReply(context.Background(), <-brains, "terminal", "", "Listo, te lo recuerdo.")
+	ui.waitPrinted(t, "doggie> Listo, te lo recuerdo.\n")
 }
 
 func TestChatTellsAFailedTurn(t *testing.T) {

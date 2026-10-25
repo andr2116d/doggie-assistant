@@ -26,8 +26,8 @@ func TestRealResumeDoesNotRepeatAnAction(t *testing.T) {
 	}
 	system, _ := prompts.System(prompts.Persona{AssistantName: "DOGGIE", OwnerName: "Alex", Language: "es"})
 	for _, tc := range []struct{ name, said string }{
-		{"explicit", "Abre Netflix en la tele, usa demo.sleep de 60 segundos."},
-		{"vague", "Ponme Netflix en la tele (demo.sleep, 60 segundos)."},
+		{"explicit", "Pon un temporizador, usa demo.sleep de 60 segundos."},
+		{"vague", "Avísame en un minuto (demo.sleep, 60 segundos)."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRealStackDown(t)
@@ -38,7 +38,7 @@ func TestRealResumeDoesNotRepeatAnAction(t *testing.T) {
 			}
 			// ...and the task the dead turn started for it.
 			first, err := bus.Request(ctx, r.client, events.StartTask, events.TaskSpec{
-				Kind: "demo.sleep", Description: "Abrir Netflix en la TV", ThreadID: "th", Input: json.RawMessage(`{"seconds":60}`),
+				Kind: "demo.sleep", Description: "Poner un temporizador", ThreadID: "th", Input: json.RawMessage(`{"seconds":60}`),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -72,11 +72,11 @@ func TestRealGuardStopsARepeatTheLLMCantSee(t *testing.T) {
 	system, _ := prompts.System(prompts.Persona{AssistantName: "DOGGIE", OwnerName: "Alex", Language: "es"})
 	r := newRealStackDown(t)
 	ctx := context.Background()
-	if _, err := bus.Publish(ctx, r.client, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: "th", Text: "Abre Netflix en la tele, usa demo.sleep de 1 segundo."}); err != nil {
+	if _, err := bus.Publish(ctx, r.client, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: "th", Text: "Pon un temporizador, usa demo.sleep de 1 segundo."}); err != nil {
 		t.Fatal(err)
 	}
 	first, err := bus.Request(ctx, r.client, events.StartTask, events.TaskSpec{
-		Kind: "demo.sleep", Description: "Abrir Netflix en la TV", ThreadID: "th", Input: json.RawMessage(`{"seconds":1}`),
+		Kind: "demo.sleep", Description: "Poner un temporizador", ThreadID: "th", Input: json.RawMessage(`{"seconds":1}`),
 	})
 	if err != nil {
 		t.Fatal(err)

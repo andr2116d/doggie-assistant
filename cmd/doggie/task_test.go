@@ -165,7 +165,7 @@ func TestDetailAndAge(t *testing.T) {
 	if got := detail(events.TaskInfo{Status: events.StatusRunning, Progress: "2/5 s"}); got != "2/5 s" {
 		t.Errorf("running detail = %q", got)
 	}
-	if got := detail(events.TaskInfo{Status: events.StatusFailed, Error: "tv unreachable"}); got != "tv unreachable" {
+	if got := detail(events.TaskInfo{Status: events.StatusFailed, Error: "service unreachable"}); got != "service unreachable" {
 		t.Errorf("failed detail = %q", got)
 	}
 	for d, want := range map[time.Duration]string{5 * time.Second: "5s", 3 * time.Minute: "3m", 2 * time.Hour: "2h"} {
@@ -195,11 +195,11 @@ func waitForWorker(t *testing.T, c *bus.Conn) {
 }
 
 func TestParseTaskFlagOrder(t *testing.T) {
-	args, o, _, err := parseTask("start", []string{"-desc", "abrir netflix", "-timeout", "30s", "demo.sleep", `{"seconds":2}`})
+	args, o, _, err := parseTask("start", []string{"-desc", "esperar un rato", "-timeout", "30s", "demo.sleep", `{"seconds":2}`})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(args) != 2 || args[0] != "demo.sleep" || o.desc != "abrir netflix" || o.timeout != 30*time.Second {
+	if len(args) != 2 || args[0] != "demo.sleep" || o.desc != "esperar un rato" || o.timeout != 30*time.Second {
 		t.Errorf("args=%v opts=%+v", args, o)
 	}
 

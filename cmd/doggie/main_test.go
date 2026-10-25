@@ -82,7 +82,7 @@ func TestStartBusRestrictsSatellites(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// A satellite may run tasks as a worker...
-	if _, err := bus.Serve(ctx, sat, events.RunTask.With("tv.open_app")); err != nil {
+	if _, err := bus.Serve(ctx, sat, events.RunTask.With("reminder.set")); err != nil {
 		t.Errorf("satellite cannot serve as a worker: %v", err)
 	}
 	// ...but not impersonate the task manager.

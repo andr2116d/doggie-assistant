@@ -358,11 +358,11 @@ func TestSubtasksAreCancelledWithTheirParent(t *testing.T) {
 
 func TestWorkerErrorsAndPanicsFailTheTask(t *testing.T) {
 	h := newHarness(t, testOptions(), map[string]worker.Func{
-		"test.error": func(context.Context, *worker.Task) (any, error) { return nil, errors.New("tv unreachable") },
+		"test.error": func(context.Context, *worker.Task) (any, error) { return nil, errors.New("service unreachable") },
 		"test.panic": func(context.Context, *worker.Task) (any, error) { panic("boom") },
 		"test.echo":  echo,
 	})
-	for kind, want := range map[string]string{"test.error": "tv unreachable", "test.panic": "panic: boom"} {
+	for kind, want := range map[string]string{"test.error": "service unreachable", "test.panic": "panic: boom"} {
 		info := h.waitStatus(h.mustStart(events.TaskSpec{Kind: kind}), events.StatusFailed)
 		if info.Error != want {
 			t.Errorf("%s: Error = %q, want %q", kind, info.Error, want)

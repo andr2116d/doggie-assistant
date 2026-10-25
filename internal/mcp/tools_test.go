@@ -17,13 +17,13 @@ func TestStartTask(t *testing.T) {
 
 	var out startTaskOut
 	callOK(t, cs, "start_task", map[string]any{
-		"kind": "demo.sleep", "description": "  Abrir Netflix en la TV 📺  ", "input": map[string]any{"seconds": 3},
+		"kind": "demo.sleep", "description": "  Poner un temporizador ⏰  ", "input": map[string]any{"seconds": 3},
 	}, &out)
 	if out.TaskID == "" || out.Status != "started" {
 		t.Fatalf("got %+v", out)
 	}
 	info := h.waitStatus(out.TaskID, events.StatusRunning)
-	if info.Kind != "demo.sleep" || info.ThreadID != "th1" || info.Description != "Abrir Netflix en la TV 📺" || string(info.Input) != `{"seconds":3}` {
+	if info.Kind != "demo.sleep" || info.ThreadID != "th1" || info.Description != "Poner un temporizador ⏰" || string(info.Input) != `{"seconds":3}` {
 		t.Errorf("task = %+v", info)
 	}
 	if info.Sensitive || info.ParentID != "" || info.TimeoutS != 0 {
@@ -61,7 +61,7 @@ func TestStartTaskRejectsBadArguments(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{"unknown kind", map[string]any{"kind": "tv.open_app", "description": "x"}, "unknown task kind"},
+		{"unknown kind", map[string]any{"kind": "reminder.set", "description": "x"}, "unknown task kind"},
 		{"kind not in catalog but served", map[string]any{"kind": "other.ask", "description": "x"}, "unknown task kind"},
 		{"empty kind", map[string]any{"kind": "", "description": "x"}, "unknown task kind"},
 		{"kind with wildcard", map[string]any{"kind": "demo.>", "description": "x"}, "unknown task kind"},
@@ -411,15 +411,15 @@ func TestResumedTurnDoesNotRepeatAnAction(t *testing.T) {
 	h := newHarness(t)
 	c, cs := h.bound("th")
 	sentence := time.Now()
-	netflix := map[string]any{"kind": "demo.sleep", "description": "Abrir Netflix", "input": map[string]any{"seconds": 5}}
+	timer := map[string]any{"kind": "demo.sleep", "description": "Poner un temporizador", "input": map[string]any{"seconds": 5}}
 
 	// The turn that died started it.
 	var first startTaskOut
-	callOK(t, cs, "start_task", netflix, &first)
+	callOK(t, cs, "start_task", timer, &first)
 
 	// The resumed turn tries again: refused, whatever the description.
 	c.Bind(Turn{ThreadID: "th", Channel: "terminal", Resumed: sentence})
-	again := map[string]any{"kind": "demo.sleep", "description": "Abriendo Netflix otra vez", "input": map[string]any{"seconds": 5}}
+	again := map[string]any{"kind": "demo.sleep", "description": "Poniendo el temporizador otra vez", "input": map[string]any{"seconds": 5}}
 	msg := callErr(t, cs, "start_task", again)
 	mustContain(t, msg, "already started")
 	mustContain(t, msg, first.TaskID)

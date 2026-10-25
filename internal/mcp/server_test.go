@@ -129,7 +129,7 @@ func TestToolsNeedABoundTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cs.Close()
-	start := map[string]any{"kind": "demo.sleep", "description": "Open Netflix"}
+	start := map[string]any{"kind": "demo.sleep", "description": "Set a timer"}
 
 	// A pre-spawned process connects before its turn: tools refuse to act.
 	mustContain(t, callErr(t, cs, "start_task", start), "no conversation turn")
@@ -357,7 +357,7 @@ func TestCompileKindsRejectsBadCatalogs(t *testing.T) {
 	ok := json.RawMessage(`{"type":"object"}`)
 	tests := map[string][]events.TaskKind{
 		"invalid name":   {{Name: "bad kind", Risk: events.RiskAct, InputSchema: ok}},
-		"wildcard name":  {{Name: "tv.*", Risk: events.RiskAct, InputSchema: ok}},
+		"wildcard name":  {{Name: "notes.*", Risk: events.RiskAct, InputSchema: ok}},
 		"empty name":     {{Name: "", Risk: events.RiskAct, InputSchema: ok}},
 		"duplicate":      {{Name: "a.b", Risk: events.RiskAct, InputSchema: ok}, {Name: "a.b", Risk: events.RiskRead, InputSchema: ok}},
 		"no risk":        {{Name: "a.b", InputSchema: ok}},

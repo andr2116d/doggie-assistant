@@ -26,7 +26,7 @@ func TestSaysTheReplyAndRecordsTheTurn(t *testing.T) {
 			}
 		}
 	})
-	id := h.say("", "terminal", "  ábreme netflix y cuéntame un chiste  ")
+	id := h.say("", "terminal", "  recuérdame comprar pan y cuéntame un chiste  ")
 
 	for _, want := range []string{"Ya estoy en eso.", "¿Sabes por qué…?"} {
 		s := h.nextSpeak()
@@ -39,7 +39,7 @@ func TestSaysTheReplyAndRecordsTheTurn(t *testing.T) {
 	if d.ThreadID != "terminal" || d.Channel != "terminal" || d.Provider != "fake" || d.Model != "m1" || d.FirstTextMS != 900 || d.Error != "" || turn.CausedBy != id {
 		t.Errorf("turn = %+v", d)
 	}
-	if len(d.Inputs) != 1 || d.Inputs[0].Said != "ábreme netflix y cuéntame un chiste" || d.Inputs[0].EventID != id {
+	if len(d.Inputs) != 1 || d.Inputs[0].Said != "recuérdame comprar pan y cuéntame un chiste" || d.Inputs[0].EventID != id {
 		t.Errorf("inputs = %+v", d.Inputs)
 	}
 	if len(d.Replies) != 2 || len(d.Actions) != 1 || d.Actions[0].Tool != "list_tasks" || d.FiveHourUsage != 0.2 || d.SevenDayUsage != 0.4 {
@@ -50,7 +50,7 @@ func TestSaysTheReplyAndRecordsTheTurn(t *testing.T) {
 	if len(reqs) != 1 || reqs[0].Turn != (mcp.Turn{ThreadID: "terminal", Channel: "terminal"}) {
 		t.Fatalf("requests = %+v", reqs)
 	}
-	mustContain(t, reqs[0].Input, "<world>", "Active tasks: none", `<said channel="terminal"`, "ábreme netflix y cuéntame un chiste</said>")
+	mustContain(t, reqs[0].Input, "<world>", "Active tasks: none", `<said channel="terminal"`, "recuérdame comprar pan y cuéntame un chiste</said>")
 }
 
 func TestInputsArrivingMidTurnWaitForTheNextTurn(t *testing.T) {
@@ -86,15 +86,15 @@ func TestTaskEndIsAnnouncedInItsThread(t *testing.T) {
 	var taskID string
 	h.fake.set(func(f *fake) {
 		f.reply = func(ctx context.Context, req llm.Request) []llm.Output {
-			if strings.Contains(req.Input, "ábreme netflix") && !strings.Contains(req.Input, "<event") {
+			if strings.Contains(req.Input, "recuérdame comprar pan") && !strings.Contains(req.Input, "<event") {
 				var tool llm.Output
-				taskID, tool = h.startTask(ctx, req.Turn.ThreadID, "demo.sleep", "Abrir Netflix")
+				taskID, tool = h.startTask(ctx, req.Turn.ThreadID, "demo.sleep", "Recordar el pan")
 				return []llm.Output{{Text: "Ya estoy en eso."}, tool, {Text: "Un chiste…"}}
 			}
-			return []llm.Output{{Text: "Listo, Netflix abierto."}}
+			return []llm.Output{{Text: "Listo, te lo recuerdo."}}
 		}
 	})
-	h.say("terminal", "terminal", "ábreme netflix y cuéntame un chiste")
+	h.say("terminal", "terminal", "recuérdame comprar pan y cuéntame un chiste")
 	if turn := h.nextTurn(); len(turn.Data.Actions) != 1 || len(turn.Data.Replies) != 2 {
 		t.Fatalf("first turn = %+v", turn.Data)
 	}
@@ -104,7 +104,7 @@ func TestTaskEndIsAnnouncedInItsThread(t *testing.T) {
 		t.Fatalf("second turn inputs = %+v", turn.Data.Inputs)
 	}
 	task := turn.Data.Inputs[0].Task
-	if task.Type != "task.done" || task.TaskID != taskID || task.Kind != "demo.sleep" || task.Description != "Abrir Netflix" || string(task.Result) != `{"ok":true}` {
+	if task.Type != "task.done" || task.TaskID != taskID || task.Kind != "demo.sleep" || task.Description != "Recordar el pan" || string(task.Result) != `{"ok":true}` {
 		t.Errorf("task input = %+v", task)
 	}
 	in := h.fake.requests()[1].Input

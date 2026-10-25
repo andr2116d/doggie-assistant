@@ -65,7 +65,7 @@ func TestRealClaudeCode(t *testing.T) {
 		thread := "real-" + string(rune('0'+warm))
 		ch, err := p.Generate(ctx, llm.Request{
 			Turn:  mcp.Turn{ThreadID: thread, Channel: "terminal"},
-			Input: "Abre Netflix en la tele (usa demo.sleep, 1 segundo) y dime que ya estás en eso.",
+			Input: "Pon un temporizador de 1 segundo (usa demo.sleep) y dime que ya estás en eso.",
 		})
 		if err != nil {
 			t.Fatal(err)

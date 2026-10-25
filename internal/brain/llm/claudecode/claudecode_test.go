@@ -193,8 +193,8 @@ func TestTurnOutputs(t *testing.T) {
 	outs, done := collect(t, p, context.Background(), scriptOf(
 		step{Garbage: true},
 		step{Text: "Ya estoy en eso. "},
-		step{Thinking: "the user wants Netflix"},
-		step{Tool: "start_task", Args: json.RawMessage(`{"kind":"demo.sleep","description":"Abrir Netflix"}`)},
+		step{Thinking: "the user wants a timer"},
+		step{Tool: "start_task", Args: json.RawMessage(`{"kind":"demo.sleep","description":"Temporizador"}`)},
 		step{Text: "   "}, // blank blocks are not said
 		step{Rate: []float64{0.25, 0.5}},
 		step{Text: "¿Sabes por qué los pájaros vuelan al sur? 🐦"},
@@ -205,7 +205,7 @@ func TestTurnOutputs(t *testing.T) {
 	if len(outs) != 3 || outs[0].Text != "Ya estoy en eso. " || outs[2].Text != "¿Sabes por qué los pájaros vuelan al sur? 🐦" {
 		t.Fatalf("outputs = %+v", outs)
 	}
-	if tool := outs[1].Tool; tool == nil || tool.Name != "start_task" || string(tool.Input) != `{"kind":"demo.sleep","description":"Abrir Netflix"}` {
+	if tool := outs[1].Tool; tool == nil || tool.Name != "start_task" || string(tool.Input) != `{"kind":"demo.sleep","description":"Temporizador"}` {
 		t.Errorf("tool = %+v", outs[1].Tool)
 	}
 	if done.Model != "fake-model" || done.FirstText <= 0 || done.Duration < done.FirstText {

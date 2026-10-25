@@ -44,20 +44,20 @@ func said(min int, text string) Input { return Input{At: at(min), Said: text, Ch
 
 // An order plus a joke, then the task's end.
 func TestBuildDemo(t *testing.T) {
-	netflix := events.TaskInfo{
-		ID: "t3", TaskSpec: events.TaskSpec{Kind: "demo.sleep", Description: "Abrir Netflix en la TV", ThreadID: "terminal"},
+	timer := events.TaskInfo{
+		ID: "t3", TaskSpec: events.TaskSpec{Kind: "demo.sleep", Description: "Poner un temporizador", ThreadID: "terminal"},
 		Status: events.StatusRunning, Percent: 60, Progress: "3/5 s", CreatedAt: at(0),
 	}
 	got := Build(Context{
 		Now: at(1), Location: lima, ThreadID: "terminal", MaxTurns: 20,
-		Tasks: []events.TaskInfo{netflix},
+		Tasks: []events.TaskInfo{timer},
 		History: []Turn{{
 			At:      at(0),
-			Inputs:  []Input{said(0, "ábreme netflix y cuéntame un chiste")},
-			Actions: []Action{{Tool: "start_task", Input: json.RawMessage(`{"kind": "demo.sleep",  "description":"Abrir Netflix en la TV"}`)}},
+			Inputs:  []Input{said(0, "recuérdame comprar pan y cuéntame un chiste")},
+			Actions: []Action{{Tool: "start_task", Input: json.RawMessage(`{"kind": "demo.sleep",  "description":"Poner un temporizador"}`)}},
 			Replies: []string{"Ya estoy en eso.", "¿Sabes por qué los pájaros vuelan al sur? Porque caminando tardarían mucho."},
 		}},
-		Inputs: []Input{{At: at(1), Event: &TaskEvent{Type: "task.done", Task: netflix, Result: json.RawMessage(`{"slept_s": 5}`)}}},
+		Inputs: []Input{{At: at(1), Event: &TaskEvent{Type: "task.done", Task: timer, Result: json.RawMessage(`{"slept_s": 5}`)}}},
 	})
 	golden(t, "demo.golden", got)
 }
@@ -340,12 +340,12 @@ func TestCut(t *testing.T) {
 }
 
 func TestResumedSentences(t *testing.T) {
-	got := Build(Context{Now: at(0), Inputs: []Input{{At: at(0), Said: "abre la tele", Channel: "terminal", Resumed: true}, said(0, "hola")}})
+	got := Build(Context{Now: at(0), Inputs: []Input{{At: at(0), Said: "pon música", Channel: "terminal", Resumed: true}, said(0, "hola")}})
 	mustContain := func(s string) {
 		if !strings.Contains(got, s) {
 			t.Errorf("missing %q in\n%s", s, got)
 		}
 	}
-	mustContain(`<said channel="terminal" at="15:40" resumed="yes">abre la tele</said>`)
+	mustContain(`<said channel="terminal" at="15:40" resumed="yes">pon música</said>`)
 	mustContain(`<said channel="terminal" at="15:40">hola</said>`)
 }

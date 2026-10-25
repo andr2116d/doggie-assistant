@@ -1,0 +1,15 @@
+# DOGGIE configuration example.
+#
+# Copy it to ~/.config/doggie/config.yaml (or $XDG_CONFIG_HOME/doggie/config.yaml)
+# and adjust it. Keep secrets out of this file.
+
+owner:
+  # How DOGGIE addresses you.
+  name: "Alex"
+
+# Language DOGGIE speaks and understands (BCP 47: en, es, ...).
+language: "en"
+
+log:
+  # debug | info | warn | error
+  level: "info"

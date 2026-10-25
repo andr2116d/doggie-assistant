@@ -55,6 +55,9 @@ type decoder struct {
 	pasting bool
 	paste   []byte
 	afterCR bool // a "\n" right after "\r" is the same Enter
+	// skipping drops the rest of an escape sequence too long to keep, up
+	// to its final byte.
+	skipping bool
 }
 
 func (d *decoder) feed(p []byte) []key {
@@ -65,6 +68,10 @@ func (d *decoder) feed(p []byte) []key {
 			if !d.readPaste(&keys) {
 				break
 			}
+			continue
+		}
+		if d.skipping {
+			d.skip()
 			continue
 		}
 		k, n, ok := d.next()
@@ -141,8 +148,8 @@ func (d *decoder) next() (k *key, n int, ok bool) {
 		return nil, 0, false
 	}
 	r, size := utf8.DecodeRune(d.buf)
-	if r == utf8.RuneError && size == 1 {
-		return nil, 1, true
+	if (r == utf8.RuneError && size == 1) || !printable(r) {
+		return nil, size, true
 	}
 	return &key{kind: keyRune, r: r}, size, true
 }
@@ -160,6 +167,23 @@ var controls = map[byte]keyKind{
 	0x10: keyUp,        // Ctrl+P
 	0x15: keyKillStart, // Ctrl+U
 	0x17: keyKillWord,  // Ctrl+W
+}
+
+// skip drops parameter bytes of a sequence being skipped, and its final
+// byte. Any other byte ends the skipping and is decoded as usual, as when a
+// short sequence is cut by one.
+func (d *decoder) skip() {
+	i := 0
+	for i < len(d.buf) && d.buf[i] >= 0x20 && d.buf[i] <= 0x3f {
+		i++
+	}
+	if i < len(d.buf) {
+		d.skipping = false
+		if d.buf[i] >= 0x40 && d.buf[i] <= 0x7e {
+			i++
+		}
+	}
+	d.buf = d.buf[i:]
 }
 
 // escape decodes a sequence that starts with ESC.
@@ -192,13 +216,16 @@ var ss3 = map[byte]keyKind{'A': keyUp, 'B': keyDown, 'C': keyRight, 'D': keyLeft
 // csi decodes ESC [ parameters final.
 func (d *decoder) csi() (*key, int, bool) {
 	i := 2
-	for i < len(d.buf) && d.buf[i] >= 0x20 && d.buf[i] <= 0x3f {
+	for i < len(d.buf) && i <= maxSequence && d.buf[i] >= 0x20 && d.buf[i] <= 0x3f {
 		i++
 	}
-	if i >= len(d.buf) {
-		if len(d.buf) >= maxSequence {
-			return nil, len(d.buf), true
-		}
+	// Too long, whether it ends here or not: the same however the input
+	// is split.
+	if i > maxSequence {
+		d.skipping = true
+		return nil, i, true
+	}
+	if i == len(d.buf) {
 		return nil, 0, false
 	}
 	final := d.buf[i]

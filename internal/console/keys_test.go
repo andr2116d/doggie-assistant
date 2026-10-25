@@ -85,7 +85,8 @@ func TestDecoderBoundsGarbage(t *testing.T) {
 	if len(d.buf) > maxSequence {
 		t.Errorf("kept %d bytes of an endless sequence", len(d.buf))
 	}
-	if got := d.feed([]byte("~a")); !reflect.DeepEqual(got, []key{r('~'), r('a')}) {
+	// Its final byte ends it, and what follows is typed as usual.
+	if got := d.feed([]byte("1~a")); !reflect.DeepEqual(got, []key{r('a')}) {
 		t.Errorf("after garbage: %v", got)
 	}
 }

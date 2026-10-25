@@ -156,8 +156,12 @@ func writeTasks(b *strings.Builder, tasks []events.TaskInfo, thread string) {
 			fmt.Fprintf(b, " <data>%s</data>", esc(cut(t.Description, maxDataText)))
 		}
 		fmt.Fprintf(b, ": %s", status(t))
-		if t.ThreadID == thread && thread != "" {
-			b.WriteString(", asked in this conversation")
+		if thread != "" {
+			if t.ThreadID == thread {
+				b.WriteString(", asked in this conversation")
+			} else {
+				b.WriteString(", asked in another conversation")
+			}
 		}
 		b.WriteString("\n")
 	}

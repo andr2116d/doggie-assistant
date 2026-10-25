@@ -195,7 +195,7 @@ func TestBuildTasks(t *testing.T) {
 	if lines[3] != "- t3 demo.sleep: running, asked in this conversation" {
 		t.Errorf("own task not first: %q", lines[3])
 	}
-	if lines[4] != "- t5 demo.sleep: pending" || lines[5] != "- t24 demo.sleep: running" {
+	if lines[4] != "- t5 demo.sleep: pending, asked in another conversation" || lines[5] != "- t24 demo.sleep: running, asked in another conversation" {
 		t.Errorf("then the most recent: %q, %q", lines[4], lines[5])
 	}
 	if strings.Contains(got, "- t6 ") {
@@ -215,8 +215,8 @@ func TestBuildTasks(t *testing.T) {
 	if !strings.Contains(none, "Active tasks: none") {
 		t.Errorf("no active tasks:\n%s", none)
 	}
-	// Without a thread, nothing is "asked in this conversation".
-	if s := Build(Context{Now: at(0), Tasks: []events.TaskInfo{{ID: "t1", Status: events.StatusRunning}}}); strings.Contains(s, "this conversation") {
+	// Without a thread, no task belongs to a conversation.
+	if s := Build(Context{Now: at(0), Tasks: []events.TaskInfo{{ID: "t1", Status: events.StatusRunning}}}); strings.Contains(s, "conversation") {
 		t.Error("task matched an empty thread")
 	}
 }

@@ -416,7 +416,7 @@ func TestPromptListsTheActiveTasks(t *testing.T) {
 	h.say("th", "terminal", "¿cómo va?")
 	h.nextTurn()
 	in := h.fake.requests()[0].Input
-	mustContain(t, in, "- "+mine.TaskID+" demo.sleep <data>Mía</data>: running, asked in this conversation", "- "+theirs.TaskID+" demo.sleep <data>Ajena</data>: running\n")
+	mustContain(t, in, "- "+mine.TaskID+" demo.sleep <data>Mía</data>: running, asked in this conversation", "- "+theirs.TaskID+" demo.sleep <data>Ajena</data>: running, asked in another conversation\n")
 	close(h.release)
 }
 

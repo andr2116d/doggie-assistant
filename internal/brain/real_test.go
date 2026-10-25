@@ -6,7 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
@@ -96,5 +99,37 @@ func TestRealGuardStopsARepeatTheLLMCantSee(t *testing.T) {
 		if task.ID != first.TaskID {
 			t.Errorf("the action ran twice: %s %s %s", task.ID, task.Input, task.Status)
 		}
+	}
+}
+
+// A similar task running for another conversation doesn't do what this
+// one asks: the LLM starts its own, and doesn't talk about the other's.
+func TestRealOtherConversationsTasksAreNotOurs(t *testing.T) {
+	if os.Getenv("DOGGIE_REAL_CLAUDE") != "1" {
+		t.Skip("set DOGGIE_REAL_CLAUDE=1 to run on the real claude CLI")
+	}
+	system, err := prompts.System(prompts.Persona{AssistantName: "DOGGIE", OwnerName: "Alex", Language: "es"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newRealStack(t, system, 1)
+	say := func(thread, text string) events.BrainTurnData {
+		if _, err := bus.Publish(context.Background(), r.client, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: thread, Text: text}); err != nil {
+			t.Fatal(err)
+		}
+		return r.waitTurn(thread)
+	}
+	// The same request in both: the trap is taking the other's for ours.
+	const ask = "Espera 30 segundos y después dime qué hora es"
+	if turn := say("other", ask); len(turn.Actions) == 0 {
+		t.Fatalf("the other conversation started nothing: %q", turn.Replies)
+	}
+	time.Sleep(8 * time.Second)
+	if turn := say("mine", ask); len(turn.Actions) == 0 {
+		t.Errorf("took the other conversation's wait as its own: %q", turn.Replies)
+	}
+	reply := strings.Join(say("mine2", "¿Cómo has estado?").Replies, " ")
+	if regexp.MustCompile(`(?i)espera|\d+\s*(%|seg)|va por`).MatchString(reply) {
+		t.Errorf("brought up another conversation's task: %q", reply)
 	}
 }

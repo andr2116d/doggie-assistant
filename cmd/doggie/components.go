@@ -4,15 +4,21 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/andr2116d/doggie-assistant/internal/brain"
+	"github.com/andr2116d/doggie-assistant/internal/brain/llm"
+	"github.com/andr2116d/doggie-assistant/internal/brain/llm/claudecode"
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/config"
 	"github.com/andr2116d/doggie-assistant/internal/demo"
 	"github.com/andr2116d/doggie-assistant/internal/heartbeat"
+	"github.com/andr2116d/doggie-assistant/internal/mcp"
 	"github.com/andr2116d/doggie-assistant/internal/supervisor"
 	"github.com/andr2116d/doggie-assistant/internal/task/manager"
+	"github.com/andr2116d/doggie-assistant/prompts"
 )
 
 // deps is what a component receives when it is built.
@@ -25,21 +31,22 @@ type deps struct {
 // factory builds one component. Its name must match the component's Name.
 type factory struct {
 	name  string
-	build func(d deps) supervisor.Component
+	build func(d deps) (supervisor.Component, error)
 }
 
 // factories lists every component DOGGIE knows how to run.
 func factories() []factory {
 	return []factory{
-		{name: "heartbeat", build: func(d deps) supervisor.Component {
-			return heartbeat.New(d.conn, d.log, time.Minute)
+		{name: "heartbeat", build: func(d deps) (supervisor.Component, error) {
+			return heartbeat.New(d.conn, d.log, time.Minute), nil
 		}},
-		{name: "tasks", build: func(d deps) supervisor.Component {
-			return manager.New(d.conn, d.log, manager.DefaultOptions())
+		{name: "tasks", build: func(d deps) (supervisor.Component, error) {
+			return manager.New(d.conn, d.log, manager.DefaultOptions()), nil
 		}},
-		{name: "demo", build: func(d deps) supervisor.Component {
-			return demo.New(d.conn, d.log)
+		{name: "demo", build: func(d deps) (supervisor.Component, error) {
+			return demo.New(d.conn, d.log), nil
 		}},
+		{name: "brain", build: newBrain},
 	}
 }
 
@@ -60,7 +67,12 @@ func buildComponents(fs []factory, cfg config.Config, log *slog.Logger, srv *bus
 			return nil, nil, err
 		}
 		conns = append(conns, conn)
-		comps = append(comps, f.build(deps{cfg: cfg, log: log.With("component", f.name), conn: conn}))
+		c, err := f.build(deps{cfg: cfg, log: log.With("component", f.name), conn: conn})
+		if err != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("%s: %w", f.name, err)
+		}
+		comps = append(comps, c)
 	}
 	return comps, closeAll, nil
 }
@@ -121,4 +133,39 @@ func names(fs []factory) []string {
 		out[i] = f.name
 	}
 	return out
+}
+
+// newBrain builds the brain with the Claude Code provider. The system prompt
+// is fixed for the brain's life, so warm processes can start ahead.
+func newBrain(d deps) (supervisor.Component, error) {
+	system, err := prompts.System(prompts.Persona{
+		AssistantName: d.cfg.Assistant.Name,
+		OwnerName:     d.cfg.Owner.Name,
+		OwnerAbout:    d.cfg.Owner.About,
+		Persona:       d.cfg.Assistant.Persona,
+		Language:      d.cfg.Language,
+	})
+	if err != nil {
+		return nil, err
+	}
+	bc := d.cfg.Brain
+	return brain.New(d.conn, d.log, brain.Options{
+		HistoryTurns: bc.HistoryTurns,
+		NewProvider: func(tools *mcp.Server) (llm.Brain, func(), error) {
+			p, err := claudecode.New(claudecode.Options{
+				Command:     bc.ClaudeCode.Command,
+				Model:       bc.Model,
+				System:      system,
+				TurnTimeout: bc.TurnTimeout,
+				Dir:         filepath.Join(d.cfg.DataDir, "brain", "claudecode"),
+				Tools:       tools,
+				Log:         d.log,
+				Warm:        1,
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+			return p, p.Close, nil
+		},
+	}), nil
 }

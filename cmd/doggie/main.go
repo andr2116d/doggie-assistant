@@ -30,6 +30,7 @@ Usage:
   doggie run [flags]      run DOGGIE (see "doggie run -h")
   doggie events [flags]   watch bus events live (see "doggie events -h")
   doggie task <cmd>       start, list, get, cancel or answer tasks (see "doggie task help")
+  doggie say <text>       say something to DOGGIE and print its replies (see "doggie say -h")
   doggie version          print the version
 `
 
@@ -54,6 +55,8 @@ func run(args []string, stdout io.Writer) error {
 		return eventsCmd(args[1:], stdout)
 	case "task":
 		return taskCmd(args[1:], stdout)
+	case "say":
+		return sayCmd(args[1:], stdout)
 	case "version":
 		fmt.Fprintln(stdout, version)
 		return nil

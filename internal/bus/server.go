@@ -85,11 +85,12 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bus: %w", err)
 	}
-	ns.SetLoggerV2(natsLogger{opts.Log}, false, false, false)
+	logger := natsLogger{log: opts.Log, fatal: make(chan string, 1)}
+	ns.SetLoggerV2(logger, false, false, false)
 	ns.Start()
-	if !ns.ReadyForConnections(10 * time.Second) {
+	if err := waitReady(ns, logger.fatal, 10*time.Second); err != nil {
 		ns.Shutdown()
-		return nil, errors.New("bus: server not ready after 10s")
+		return nil, err
 	}
 
 	s := &Server{ns: ns, token: opts.Token, log: opts.Log}
@@ -98,6 +99,23 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// waitReady waits until the server accepts connections. It fails fast when
+// the server reports a fatal error, e.g. the listen address is in use.
+func waitReady(ns *server.Server, fatal <-chan string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case msg := <-fatal:
+			return fmt.Errorf("bus: %s", msg)
+		default:
+		}
+		if ns.ReadyForConnections(50 * time.Millisecond) {
+			return nil
+		}
+	}
+	return fmt.Errorf("bus: server not ready after %s", timeout)
 }
 
 func (s *Server) ensureEventLog(ctx context.Context, maxAge time.Duration, maxBytes int64) error {
@@ -205,8 +223,12 @@ func errorHandler(log *slog.Logger, name string) nats.Option {
 }
 
 // natsLogger routes the NATS server's logs to slog. Notices are routine
-// startup chatter, so they go to debug.
-type natsLogger struct{ log *slog.Logger }
+// startup chatter, so they go to debug. The first fatal error is also sent on
+// fatal, so Start can fail with it.
+type natsLogger struct {
+	log   *slog.Logger
+	fatal chan string
+}
 
 func (l natsLogger) Noticef(format string, v ...any) {
 	l.log.Debug(fmt.Sprintf(format, v...), "src", "nats")
@@ -215,7 +237,12 @@ func (l natsLogger) Warnf(format string, v ...any) {
 	l.log.Warn(fmt.Sprintf(format, v...), "src", "nats")
 }
 func (l natsLogger) Fatalf(format string, v ...any) {
-	l.log.Error(fmt.Sprintf(format, v...), "src", "nats")
+	msg := fmt.Sprintf(format, v...)
+	l.log.Error(msg, "src", "nats")
+	select {
+	case l.fatal <- msg:
+	default:
+	}
 }
 func (l natsLogger) Errorf(format string, v ...any) {
 	l.log.Error(fmt.Sprintf(format, v...), "src", "nats")

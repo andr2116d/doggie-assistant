@@ -9,8 +9,10 @@ import (
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/config"
+	"github.com/andr2116d/doggie-assistant/internal/demo"
 	"github.com/andr2116d/doggie-assistant/internal/heartbeat"
 	"github.com/andr2116d/doggie-assistant/internal/supervisor"
+	"github.com/andr2116d/doggie-assistant/internal/task/manager"
 )
 
 // deps is what a component receives when it is built.
@@ -31,6 +33,12 @@ func factories() []factory {
 	return []factory{
 		{name: "heartbeat", build: func(d deps) supervisor.Component {
 			return heartbeat.New(d.conn, d.log, time.Minute)
+		}},
+		{name: "tasks", build: func(d deps) supervisor.Component {
+			return manager.New(d.conn, d.log, manager.DefaultOptions())
+		}},
+		{name: "demo", build: func(d deps) supervisor.Component {
+			return demo.New(d.conn, d.log)
 		}},
 	}
 }

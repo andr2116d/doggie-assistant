@@ -15,8 +15,9 @@ import (
 
 const chatHelp = `· commands, run by the chat itself, not by DOGGIE's brain:
   /tasks               tasks in progress; /tasks all adds the last ones that ended
-  /answer <id> <text>  answer a task's question yourself; the only way for
-                       the ones DOGGIE may not answer for you
+  /answer <id> [text]  answer a task's question yourself, the only way for
+                       the ones DOGGIE may not answer for you; without text,
+                       type it hidden
   /cancel <id> [why]   cancel a task
   /help                this list
   //text               say text that starts with "/"`
@@ -250,4 +251,11 @@ func commander(ctx context.Context, conn *bus.Conn, thread, channel string, cmds
 			return
 		}
 	}
+}
+
+// isAnswer reports whether a line is an /answer, which may carry a secret
+// and so isn't kept for Up and Down.
+func isAnswer(line string) bool {
+	_, cmd := parseLine(line)
+	return cmd != nil && cmd.name == "/answer"
 }

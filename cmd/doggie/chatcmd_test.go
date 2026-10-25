@@ -104,7 +104,7 @@ func TestChatAnswersTasksDirectly(t *testing.T) {
 
 	ui.lines <- "/answer t999 sí"
 	ui.waitPrinted(t, "· could not answer t999: unknown task")
-	ui.lines <- "/answer " + id
+	ui.lines <- "/answer"
 	ui.waitPrinted(t, "· usage: /answer <id> <text>")
 }
 
@@ -241,5 +241,58 @@ func TestTaskTableHasNoTrailingSpaces(t *testing.T) {
 		if strings.TrimRight(line, " ") != line {
 			t.Errorf("trailing spaces in %q", line)
 		}
+	}
+}
+
+// /answer without text asks for the answer unseen.
+func TestChatAsksForAHiddenAnswer(t *testing.T) {
+	c, ui := chatOnTasks(t)
+	id := startTask(t, c, events.TaskSpec{Kind: "demo.ask", Input: json.RawMessage(`{"question":"¿PIN?"}`), ThreadID: "terminal", Sensitive: true})
+	waitStatus(t, c, id, events.StatusWaitingInput)
+
+	ui.lines <- "/answer " + id
+	ui.typeHidden(t, "   ")
+	ui.waitPrinted(t, "· not answered\n")
+	if info, _ := bus.Request(context.Background(), c, events.GetTask, events.TaskRef{TaskID: id}); info.Status != events.StatusWaitingInput {
+		t.Fatalf("task is %s", info.Status)
+	}
+	ui.lines <- "/answer " + id
+	ui.typeHidden(t, " 1234 ")
+	ui.waitPrinted(t, "· answered "+id+"\n")
+	waitStatus(t, c, id, events.StatusDone)
+	ui.mu.Lock()
+	prompts := ui.hiddenPrompts
+	ui.mu.Unlock()
+	if len(prompts) != 2 || prompts[0] != "answer for "+id+" (hidden): " {
+		t.Errorf("prompts = %q", prompts)
+	}
+	if strings.Contains(ui.printed(), "1234") {
+		t.Errorf("the hidden answer shows:\n%s", ui.printed())
+	}
+}
+
+// Piped, there is nothing to hide: /answer needs its text.
+func TestPipedChatNeedsTheAnswerText(t *testing.T) {
+	client := sayEnv(t, nil)
+	ui := newFakeUI(false)
+	done, _ := runChat(t, client, ui, make(chan connState), testChatOptions())
+	ui.lines <- "/answer t1"
+	close(ui.lines)
+	if err := result(t, done); err == nil || !strings.Contains(ui.printed(), "usage: /answer") {
+		t.Errorf("err = %v, printed %q", err, ui.printed())
+	}
+}
+
+func TestIsAnswer(t *testing.T) {
+	for line, want := range map[string]bool{"/answer t1 1234": true, "  /answer t1": true, "/answer": true, "//answer t1": false, "/answers t1": false, "answer t1": false} {
+		if got := isAnswer(line); got != want {
+			t.Errorf("isAnswer(%q) = %v", line, got)
+		}
+	}
+}
+
+func TestChatConsoleForgetsAnswers(t *testing.T) {
+	if chatConsole.Forget == nil || !chatConsole.Forget("/answer t1 1234") || chatConsole.Forget("hola") {
+		t.Error("the chat's console keeps answers for Up and Down")
 	}
 }

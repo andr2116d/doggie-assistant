@@ -30,7 +30,7 @@ about tasks arrive when they happen. Ctrl+C or Ctrl+D on an empty line
 quits.
 
 Commands start with "/" and are run by the chat, not by DOGGIE's brain:
-/tasks, /answer <id> <text>, /cancel <id> and /help.
+/tasks, /answer <id> [text], /cancel <id> and /help.
 
 If DOGGIE isn't running on this machine, the chat starts it in this
 process, logging to $XDG_DATA_HOME/doggie/doggie.log, and stops it on quit.
@@ -126,8 +126,12 @@ func chatCmd(args []string) error {
 var chatName = fmt.Sprintf("chat-%d", os.Getpid())
 
 func openChatUI() (*console.Console, error) {
-	return console.Open(os.Stdin, os.Stdout, console.Options{Prompt: "you> ", MaxRunes: events.MaxUtteranceRunes})
+	return console.Open(os.Stdin, os.Stdout, chatConsole)
 }
+
+// chatConsole is how the chat's console edits: answers, which may carry
+// secrets, aren't kept for Up and Down.
+var chatConsole = console.Options{Prompt: "you> ", MaxRunes: events.MaxUtteranceRunes, Forget: isAnswer}
 
 // dialChat connects the chat to the bus, reporting what happens to the
 // connection on states.
@@ -280,6 +284,8 @@ type chatUI interface {
 	IsInteractive() bool
 	// SetStatus shows the status line; empty removes it.
 	SetStatus(text string)
+	// AskHidden has the user type a line unseen.
+	AskHidden(prompt string) <-chan string
 }
 
 // sent is the outcome of publishing a sentence.
@@ -332,6 +338,10 @@ type chatState struct {
 	statusShown string
 	statusAt    time.Time
 	statusDue   <-chan time.Time
+
+	// hidden delivers the answer to hiddenFor's question, typed unseen.
+	hidden    <-chan string
+	hiddenFor string
 }
 
 // chat runs until the user quits, the input ends and replies are in, or
@@ -421,6 +431,8 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 			}
 			sentence, cmd := parseLine(line)
 			switch {
+			case cmd != nil && cmd.name == "/answer" && cmd.id != "" && cmd.text == "" && ui.IsInteractive():
+				c.hidden, c.hiddenFor = ui.AskHidden(fmt.Sprintf("answer for %s (hidden): ", short(cmd.id))), cmd.id
 			case cmd == nil:
 				inFlight++
 				toSend <- sentence
@@ -432,6 +444,17 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 			default:
 				running++
 				commands <- cmd
+			}
+		case text, ok := <-c.hidden:
+			id := c.hiddenFor
+			c.hidden, c.hiddenFor = nil, ""
+			switch {
+			case !ok:
+			case strings.TrimSpace(text) == "":
+				c.view.note("· not answered")
+			case c.accept(text):
+				running++
+				commands <- &command{name: "/answer", id: id, text: strings.TrimSpace(text)}
 			}
 		case r := <-commandsDone:
 			running--

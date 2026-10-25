@@ -20,6 +20,9 @@ type fakeUI struct {
 	mu          sync.Mutex
 	out         strings.Builder
 	statuses    []string
+	// hidden takes the line asked for unseen, if any.
+	hidden        chan string
+	hiddenPrompts []string
 }
 
 func newFakeUI(interactive bool) *fakeUI {
@@ -39,6 +42,34 @@ func (u *fakeUI) SetStatus(text string) {
 	defer u.mu.Unlock()
 	if u.interactive {
 		u.statuses = append(u.statuses, text)
+	}
+}
+
+func (u *fakeUI) AskHidden(prompt string) <-chan string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.hiddenPrompts = append(u.hiddenPrompts, prompt)
+	u.hidden = make(chan string, 1)
+	return u.hidden
+}
+
+// typeHidden types the line the chat asked for unseen.
+func (u *fakeUI) typeHidden(t *testing.T, text string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		u.mu.Lock()
+		ch := u.hidden
+		u.hidden = nil
+		u.mu.Unlock()
+		if ch != nil {
+			ch <- text
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the chat asked for no hidden line")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

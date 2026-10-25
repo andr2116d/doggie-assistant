@@ -81,7 +81,7 @@ Commands start with `/` and are run by the chat itself, without the LLM:
 | Command | What it does |
 |---|---|
 | `/tasks` | The tasks in progress; `/tasks all` adds the last ones that ended |
-| `/answer <id> <text>` | Answer a task's question yourself. The only way for the questions DOGGIE may not answer for you, e.g. a confirmation a sensitive task asks for |
+| `/answer <id> [text]` | Answer a task's question yourself. The only way for the questions DOGGIE may not answer for you, e.g. a confirmation a sensitive task asks for. Without the text, the chat asks for it unseen, as for a password, e.g. a PIN. Answers are never kept for Up and Down |
 | `/cancel <id> [why]` | Cancel a task |
 | `/help` | The list of commands |
 | `//text` | Say text that starts with `/` |

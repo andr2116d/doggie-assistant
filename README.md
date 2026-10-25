@@ -30,27 +30,49 @@ DOGGIE talks with you, runs many tasks in parallel without blocking the conversa
 - [Go](https://go.dev/dl/) 1.27.1 or newer.
 - The `claude` CLI, logged in with a Claude subscription: run `claude` once and log in. DOGGIE removes `ANTHROPIC_API_KEY` from the CLI's environment, so it always uses that login.
 
-## Quick start
+## Install
 
-Build and configure:
+From a clone, into `~/.local/bin`, which needs no root:
 
 ```sh
 git clone https://github.com/andr2116d/doggie-assistant.git
 cd doggie-assistant
-make build
+make install                      # or: make install PREFIX=/usr/local
+```
+
+If `~/.local/bin` isn't in your `PATH`, `make install` says so and shows the line to add to your shell profile. `make uninstall` removes it. Or, with Go alone, into `$(go env GOPATH)/bin`:
+
+```sh
+go install github.com/andr2116d/doggie-assistant/cmd/doggie@latest
+```
+
+Then configure it:
+
+```sh
 mkdir -p ~/.config/doggie
 cp configs/doggie.example.yaml ~/.config/doggie/config.yaml
 ```
 
-Edit `~/.config/doggie/config.yaml`: your name and profile, the assistant's persona, the language it speaks (`en`, `es`, ...). Without the file, DOGGIE starts with defaults.
+Edit `~/.config/doggie/config.yaml`: your name and profile, the assistant's persona, the language it speaks (`en`, `es`, ...). Without the file, DOGGIE starts with defaults. The example is also [in the repo](configs/doggie.example.yaml).
 
-Run DOGGIE:
+## Quick start
+
+From any directory:
 
 ```sh
-./bin/doggie run
+doggie
 ```
 
-In a terminal, `doggie run` opens a chat with DOGGIE right there, and its logs go to `~/.local/share/doggie/doggie.log`. Ctrl+D quits the chat and stops DOGGIE. To print the logs instead, e.g. under a service manager, use `doggie run --no-chat`.
+It opens a chat with DOGGIE, and starts DOGGIE first if it isn't running on this machine; quitting the chat (Ctrl+D) stops the DOGGIE it started. `doggie` alone is `doggie chat`, and takes its flags.
+
+To run DOGGIE on its own, so chats come and go:
+
+```sh
+doggie run
+```
+
+In a terminal, `doggie run` opens a chat with DOGGIE right there,
+ and its logs go to `~/.local/share/doggie/doggie.log`. Ctrl+D quits the chat and stops DOGGIE. To print the logs instead, e.g. under a service manager, use `doggie run --no-chat`.
 
 ### Talk to it
 
@@ -89,9 +111,9 @@ Commands start with `/` and are run by the chat itself, without the LLM:
 More ways to talk to it:
 
 ```sh
-./bin/doggie chat                                  # another chat, e.g. from another terminal
-./bin/doggie say "What time is it in Tokyo?"       # one sentence to a running DOGGIE, then its replies
-echo "Tell me a short joke" | ./bin/doggie chat    # piped: each line, then the replies
+doggie                                       # another chat, e.g. from another terminal
+doggie say "What time is it in Tokyo?"       # one sentence to a running DOGGIE, then its replies
+echo "Tell me a short joke" | doggie         # piped: each line, then the replies
 ```
 
 Chats on the same channel share the conversation: each one shows what the others say.
@@ -103,18 +125,18 @@ Chats on the same channel share the conversation: each one shows what the others
 Start, follow and stop tasks yourself, without the brain. `task start` prints the new task's ID (`t1`, `t2`, ...):
 
 ```sh
-./bin/doggie task start demo.sleep '{"seconds": 30}'
-./bin/doggie task list -active
-./bin/doggie task get <id>
-./bin/doggie task cancel <id>
-./bin/doggie task start demo.ask '{"question": "Which color?", "options": ["red", "blue"]}'
-./bin/doggie task answer <id> blue
+doggie task start demo.sleep '{"seconds": 30}'
+doggie task list -active
+doggie task get <id>
+doggie task cancel <id>
+doggie task start demo.ask '{"question": "Which color?", "options": ["red", "blue"]}'
+doggie task answer <id> blue
 ```
 
 Watch everything that happens on the bus, from 10 minutes ago and then live:
 
 ```sh
-./bin/doggie events -since 10m
+doggie events -since 10m
 ```
 
 ### Satellites
@@ -122,10 +144,10 @@ Watch everything that happens on the bus, from 10 minutes ago and then live:
 A satellite gets its own token and may only speak for its channels. The token is shown once and saved for this machine:
 
 ```sh
-./bin/doggie satellite add -channel voice:kitchen kitchen
-./bin/doggie satellite list
-./bin/doggie say -as kitchen -channel voice:kitchen "Hello from the kitchen"
-./bin/doggie satellite remove kitchen
+doggie satellite add -channel voice:kitchen kitchen
+doggie satellite list
+doggie say -as kitchen -channel voice:kitchen "Hello from the kitchen"
+doggie satellite remove kitchen
 ```
 
 A running DOGGIE applies the changes within seconds, without a restart. The shared token, used by `say`, `task` and `events` by default, may only speak for the `terminal` channel.
@@ -141,7 +163,7 @@ To connect from another machine, set `bus.listen` to `0.0.0.0:4222` in the confi
 
 ```sh
 DOGGIE_BUS_USER=kitchen DOGGIE_BUS_TOKEN=<token> DOGGIE_BUS_CA=ca.pem \
-  ./bin/doggie say -server tls://<doggie-host>:4222 -channel voice:kitchen "Hello"
+  doggie say -server tls://<doggie-host>:4222 -channel voice:kitchen "Hello"
 ```
 
 For the shared token, leave out `DOGGIE_BUS_USER` and pass the contents of `bus.token` from the data dir.
@@ -157,6 +179,7 @@ Planned: home control through Home Assistant, a local and free voice pipeline (V
 ## Development
 
 ```sh
+make build   # bin/doggie, to try changes without installing
 make lint    # gofmt + go vet
 make test    # go test -race ./...
 ```

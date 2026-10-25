@@ -31,10 +31,10 @@ func (s TaskStatus) Terminal() bool {
 
 // TaskSpec is what a requester asks for.
 type TaskSpec struct {
-	// Kind selects the worker, e.g. "tv.open_app".
+	// Kind selects the worker, e.g. "demo.sleep".
 	Kind  string          `json:"kind"`
 	Input json.RawMessage `json:"input,omitempty"`
-	// Description is human-readable, e.g. "Open Netflix on the TV".
+	// Description is human-readable, e.g. "Wait 30 seconds".
 	Description string `json:"description,omitempty"`
 	// ParentID makes this a subtask, cancelled with its parent.
 	ParentID string `json:"parent_id,omitempty"`

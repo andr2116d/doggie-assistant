@@ -10,7 +10,7 @@ type Risk string
 const (
 	// RiskRead only looks at the world.
 	RiskRead Risk = "read"
-	// RiskAct changes the world in ways that are easy to undo (lights, TV).
+	// RiskAct changes the world in ways that are easy to undo (lights, music, reminders).
 	RiskAct Risk = "act"
 	// RiskSensitive needs a person's confirmation on a trusted channel
 	// (locks, messages to other people, purchases).

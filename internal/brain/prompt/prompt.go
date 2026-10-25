@@ -44,7 +44,6 @@ type Context struct {
 	Now time.Time
 	// Location is the owner's time zone. Nil means UTC.
 	Location *time.Location
-	// ThreadID is the thread the turn belongs to.
 	ThreadID string
 	// Tasks are the active tasks.
 	Tasks []events.TaskInfo

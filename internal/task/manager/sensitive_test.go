@@ -33,8 +33,7 @@ func TestSensitiveTaskStaysOutOfTheLog(t *testing.T) {
 		}
 	}
 	// Look the task.done up by type: it is not always the last event, since
-	// the worker can finish before the manager logs task.running (ADR-0008,
-	// implicit start).
+	// the worker can finish before the manager logs task.running.
 	var dones int
 	for _, env := range logged {
 		if env.Type == events.TaskDone.Type() {

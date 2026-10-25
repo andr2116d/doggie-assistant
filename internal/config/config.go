@@ -63,7 +63,7 @@ type Assistant struct {
 
 // Brain configures the LLM brain.
 type Brain struct {
-	// Provider is the LLM provider. Only "claudecode" exists for now.
+	// Provider is the LLM provider. Only "claudecode" is supported.
 	Provider string `yaml:"provider"`
 	// Model is the provider's model name or alias, e.g. "sonnet".
 	Model string `yaml:"model"`

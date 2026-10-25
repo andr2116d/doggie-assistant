@@ -96,7 +96,7 @@ func TestSleepReportsProgressAndFinishes(t *testing.T) {
 
 func TestSleepRejectsBadInput(t *testing.T) {
 	c := setup(t)
-	// 9e18 s overflows time.Duration and used to pass the bound check.
+	// 9e18 s overflows time.Duration: the bound must be checked before converting.
 	for _, input := range []string{`{"seconds":0}`, `{"seconds":-3}`, `{"seconds":999999}`, `{"seconds":9000000000000000000}`, `{"seconds":"x"}`} {
 		info := waitFor(t, c, start(t, c, "demo.sleep", input), events.StatusFailed)
 		if info.Error == "" {

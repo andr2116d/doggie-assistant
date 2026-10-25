@@ -1,6 +1,6 @@
-// Package llm is the interface of DOGGIE's LLM providers (ADR-0003). DOGGIE
-// builds the whole context of every turn, so providers are interchangeable:
-// they only run one turn at a time with the input they are given.
+// Package llm is the interface of DOGGIE's LLM providers. DOGGIE builds the
+// whole context of every turn, so providers are interchangeable: they only
+// run one turn at a time with the input they are given.
 package llm
 
 import (

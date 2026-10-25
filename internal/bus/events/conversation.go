@@ -8,8 +8,8 @@ import (
 )
 
 // Conversation events: what people say to DOGGIE and what DOGGIE says back.
-// Every message belongs to a conversation thread (ADR-0004) and comes from,
-// or goes to, a channel.
+// Every message belongs to a conversation thread and comes from, or goes to,
+// a channel.
 
 // UtteranceData is something a person said or typed to DOGGIE.
 type UtteranceData struct {

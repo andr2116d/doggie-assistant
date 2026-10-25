@@ -42,7 +42,7 @@ func at(min int) time.Time { return t0.Add(time.Duration(min) * time.Minute) }
 
 func said(min int, text string) Input { return Input{At: at(min), Said: text, Channel: "terminal"} }
 
-// The demo of step 4: an order plus a joke, then the task's end.
+// An order plus a joke, then the task's end.
 func TestBuildDemo(t *testing.T) {
 	netflix := events.TaskInfo{
 		ID: "t3", TaskSpec: events.TaskSpec{Kind: "demo.sleep", Description: "Abrir Netflix en la TV", ThreadID: "terminal"},

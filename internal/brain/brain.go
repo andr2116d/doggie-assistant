@@ -1,5 +1,5 @@
 // Package brain is the brain component: it turns what people say, and what
-// happens to their tasks, into replies and actions (ADR-0003).
+// happens to their tasks, into replies and actions.
 //
 // Each conversation thread has a queue. A turn takes everything queued for
 // its thread, builds the whole context (internal/brain/prompt), runs the LLM
@@ -263,10 +263,9 @@ func (b *Brain) recover(ctx context.Context) error {
 		}
 		b.remember(th, ev.Time, ev.Data)
 		// A turn that failed without saying or doing anything answered
-		// nothing: its inputs are caught up again, which can't repeat an
-		// action since none happened.
-		// A sentence gets one second chance: one that keeps failing (or
-		// crashing the brain) must not be retried on every restart.
+		// nothing, so its inputs are caught up again (no action can repeat).
+		// Only once: a sentence that keeps failing, or crashing the brain,
+		// must not be retried on every restart.
 		if ev.Data.Error != "" && len(ev.Data.Replies) == 0 && len(ev.Data.Actions) == 0 {
 			for _, in := range ev.Data.Inputs {
 				if in.Resumed {

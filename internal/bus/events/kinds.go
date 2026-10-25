@@ -3,8 +3,8 @@ package events
 import "encoding/json"
 
 // Risk is how much harm an action can do. It decides whether the action needs
-// a person's confirmation (ADR-0003). It is declared here, in reviewed code,
-// never by the worker that runs the action or by the LLM that asks for it.
+// a person's confirmation. It is declared here, in reviewed code, never by
+// the worker that runs the action or by the LLM that asks for it.
 type Risk string
 
 const (

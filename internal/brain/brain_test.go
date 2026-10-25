@@ -80,8 +80,7 @@ func TestInputsArrivingMidTurnWaitForTheNextTurn(t *testing.T) {
 	h.noTurn(200 * time.Millisecond)
 }
 
-// The demo of step 4: an order and a joke, then the task's end is told in
-// the same thread.
+// An order and a joke, then the task's end is told in the same thread.
 func TestTaskEndIsAnnouncedInItsThread(t *testing.T) {
 	h := newHarness(t, Options{})
 	var taskID string

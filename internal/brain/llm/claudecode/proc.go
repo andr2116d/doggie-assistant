@@ -83,9 +83,8 @@ func (p *Provider) spawn() (*proc, error) {
 	return pr, nil
 }
 
-// args are the CLI flags validated in spike 1: no built-in tools, only
-// DOGGIE's MCP server, no settings, sessions or slash commands, and DOGGIE's
-// own system prompt. Files carry the system prompt and the MCP config, since
+// args lock the CLI down: no built-in tools, only DOGGIE's MCP server, no
+// settings, sessions or slash commands, and DOGGIE's own system prompt. Files carry the system prompt and the MCP config, since
 // one argument is limited to 128 KiB on Linux and any local user can read
 // the command line.
 func (p *Provider) args(cfgFile string) []string {

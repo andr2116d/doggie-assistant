@@ -2,8 +2,8 @@
 // CLI in headless mode (claude -p, stream-json), with the owner's
 // subscription login.
 //
-// Processes are disposable (ADR-0003): each one serves a single turn whose
-// whole context DOGGIE builds. To hide the CLI's startup, warm processes are
+// Processes are disposable: each one serves a single turn whose whole
+// context DOGGIE builds. To hide the CLI's startup, warm processes are
 // started ahead: they connect to DOGGIE's tools and wait for their input,
 // without calling the model. Their tools only act once a turn binds them.
 package claudecode

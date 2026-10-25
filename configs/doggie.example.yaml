@@ -6,6 +6,15 @@
 owner:
   # How DOGGIE addresses you.
   name: "Alex"
+  # What DOGGIE should always know about you, in any language (max 8 KB).
+  about: |
+    Lives in Lisbon. Likes sci-fi movies and early mornings.
+
+assistant:
+  name: "DOGGIE"
+  # How DOGGIE talks and behaves, in any language (max 8 KB).
+  persona: |
+    A calm butler with a dry sense of humor. Brief and warm.
 
 # Language DOGGIE speaks and understands (BCP 47: en, es, ...).
 language: "en"
@@ -32,3 +41,18 @@ bus:
   event_log:
     max_age: "168h"
     max_size_mb: 512
+
+brain:
+  # LLM provider. Only "claudecode" (the official Claude Code CLI, using your
+  # subscription login) for now.
+  provider: "claudecode"
+  # Model name or alias for the provider.
+  model: "sonnet"
+  # Recent turns of a conversation thread included in every prompt.
+  history_turns: 20
+  # Upper bound for one turn of the LLM, tool calls included (5s-10m).
+  turn_timeout: "90s"
+  claudecode:
+    # The claude executable. Use an absolute path if it is not in PATH (e.g.
+    # when DOGGIE runs as a service).
+    command: "claude"

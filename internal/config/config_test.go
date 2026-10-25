@@ -123,7 +123,59 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "persona and profile",
+			content: "owner:\n  name: Alex\n  about: |\n    Lives by the sea.\nassistant:\n  name: Rex\n  persona: Dry humor.\n",
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Owner.About != "Lives by the sea.\n" || cfg.Assistant.Name != "Rex" || cfg.Assistant.Persona != "Dry humor." {
+					t.Errorf("unexpected persona: %+v %+v", cfg.Owner, cfg.Assistant)
+				}
+			},
+		},
+		{
+			name:    "brain defaults",
+			content: "",
+			check: func(t *testing.T, cfg Config) {
+				b := cfg.Brain
+				if cfg.Assistant.Name != "DOGGIE" || b.Provider != "claudecode" || b.Model != "sonnet" ||
+					b.HistoryTurns != 20 || b.TurnTimeout != 90*time.Second || b.ClaudeCode.Command != "claude" {
+					t.Errorf("unexpected defaults: %+v %+v", cfg.Assistant, b)
+				}
+			},
+		},
+		{
+			name:    "brain settings",
+			content: "brain:\n  model: \"claude-opus-5-5[1m]\"\n  history_turns: 0\n  turn_timeout: 2m\n  claudecode:\n    command: /opt/claude/bin/claude\n",
+			check: func(t *testing.T, cfg Config) {
+				b := cfg.Brain
+				if b.Model != "claude-opus-5-5[1m]" || b.HistoryTurns != 0 || b.TurnTimeout != 2*time.Minute || b.ClaudeCode.Command != "/opt/claude/bin/claude" {
+					t.Errorf("unexpected brain config: %+v", b)
+				}
+			},
+		},
 		{name: "unknown key", content: "langauge: es\n", wantErr: "langauge"},
+		{name: "empty assistant name", content: "assistant:\n  name: \" \"\n", wantErr: "assistant.name"},
+		{name: "huge persona", content: "assistant:\n  persona: " + strings.Repeat("x", maxProfileText+1) + "\n", wantErr: "assistant.persona"},
+		{name: "huge about", content: "owner:\n  about: " + strings.Repeat("x", maxProfileText+1) + "\n", wantErr: "owner.about"},
+		{name: "unknown provider", content: "brain:\n  provider: gpt\n", wantErr: "brain.provider"},
+		{name: "empty model", content: "brain:\n  model: \"\"\n", wantErr: "brain.model"},
+		{name: "model looks like a flag", content: "brain:\n  model: \"--dangerously-skip-permissions\"\n", wantErr: "brain.model"},
+		{name: "model with spaces", content: "brain:\n  model: \"sonnet --tools default\"\n", wantErr: "brain.model"},
+		{name: "model with control characters", content: "brain:\n  model: \"sonnet\\x00\"\n", wantErr: "brain.model"},
+		{
+			name:    "empty brain section keeps defaults",
+			content: "brain:\n",
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Brain.Model != "sonnet" {
+					t.Errorf("brain defaults lost: %+v", cfg.Brain)
+				}
+			},
+		},
+		{name: "negative history", content: "brain:\n  history_turns: -1\n", wantErr: "history_turns"},
+		{name: "huge history", content: "brain:\n  history_turns: 201\n", wantErr: "history_turns"},
+		{name: "short turn timeout", content: "brain:\n  turn_timeout: 1s\n", wantErr: "turn_timeout"},
+		{name: "long turn timeout", content: "brain:\n  turn_timeout: 11m\n", wantErr: "turn_timeout"},
+		{name: "empty claude command", content: "brain:\n  claudecode:\n    command: \"\"\n", wantErr: "claudecode.command"},
 		{name: "bad listen", content: "bus:\n  listen: \"4222\"\n", wantErr: "bus.listen"},
 		{name: "bad event log", content: "bus:\n  event_log:\n    max_size_mb: 0\n", wantErr: "event_log"},
 		{name: "invalid level", content: "log:\n  level: loud\n", wantErr: "log.level"},
@@ -149,5 +201,17 @@ func TestLoad(t *testing.T) {
 func TestLoadExplicitMissingIsError(t *testing.T) {
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.yaml")); err == nil {
 		t.Fatal("expected an error for a missing explicit config file")
+	}
+}
+
+// The example shipped with the repo must stay loadable as the config grows.
+func TestExampleConfigLoads(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cfg, err := Load(filepath.Join("..", "..", "configs", "doggie.example.yaml"))
+	if err != nil {
+		t.Fatalf("Load example: %v", err)
+	}
+	if cfg.Assistant.Persona == "" || cfg.Owner.About == "" || cfg.Brain.Model == "" {
+		t.Errorf("example lost its persona or brain settings: %+v", cfg)
 	}
 }

@@ -16,18 +16,22 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode"
 
 	"go.yaml.in/yaml/v3"
 )
 
 // Config is DOGGIE's configuration.
 type Config struct {
-	Owner Owner `yaml:"owner"`
+	Owner     Owner     `yaml:"owner"`
+	Assistant Assistant `yaml:"assistant"`
 	// Language is the language DOGGIE speaks and understands (BCP 47, e.g. "en", "es").
 	Language string `yaml:"language"`
 	Log      Log    `yaml:"log"`
 	Bus      Bus    `yaml:"bus"`
+	Brain    Brain  `yaml:"brain"`
 
 	// File is the resolved config file path.
 	File string `yaml:"-"`
@@ -37,9 +41,44 @@ type Config struct {
 	DataDir string `yaml:"-"`
 }
 
+// maxProfileText bounds the free-text profile fields, which go into every
+// prompt.
+const maxProfileText = 8 << 10
+
 // Owner describes the person DOGGIE works for.
 type Owner struct {
 	Name string `yaml:"name"`
+	// About is free text DOGGIE always knows about the owner: where they
+	// live, what they like. It may be written in any language.
+	About string `yaml:"about"`
+}
+
+// Assistant is who DOGGIE is.
+type Assistant struct {
+	Name string `yaml:"name"`
+	// Persona is free text describing how DOGGIE talks and behaves. It may
+	// be written in any language.
+	Persona string `yaml:"persona"`
+}
+
+// Brain configures the LLM brain.
+type Brain struct {
+	// Provider is the LLM provider. Only "claudecode" exists for now.
+	Provider string `yaml:"provider"`
+	// Model is the provider's model name or alias, e.g. "sonnet".
+	Model string `yaml:"model"`
+	// HistoryTurns is how many recent turns of a thread go into the prompt.
+	HistoryTurns int `yaml:"history_turns"`
+	// TurnTimeout bounds one turn of the LLM, tool calls included.
+	TurnTimeout time.Duration `yaml:"turn_timeout"`
+	ClaudeCode  ClaudeCode    `yaml:"claudecode"`
+}
+
+// ClaudeCode configures the Claude Code provider.
+type ClaudeCode struct {
+	// Command is the claude executable, looked up in PATH if it has no
+	// slash.
+	Command string `yaml:"command"`
 }
 
 // Log configures logging.
@@ -77,8 +116,9 @@ type EventLog struct {
 // Default returns the configuration used when no file exists.
 func Default() Config {
 	return Config{
-		Language: "en",
-		Log:      Log{Level: "info"},
+		Assistant: Assistant{Name: "DOGGIE"},
+		Language:  "en",
+		Log:       Log{Level: "info"},
 		Bus: Bus{
 			Listen: "127.0.0.1:4222",
 			TLS:    TLS{Enabled: true},
@@ -86,6 +126,13 @@ func Default() Config {
 				MaxAge:    7 * 24 * time.Hour,
 				MaxSizeMB: 512,
 			},
+		},
+		Brain: Brain{
+			Provider:     "claudecode",
+			Model:        "sonnet",
+			HistoryTurns: 20,
+			TurnTimeout:  90 * time.Second,
+			ClaudeCode:   ClaudeCode{Command: "claude"},
 		},
 	}
 }
@@ -152,6 +199,33 @@ func (c Config) Validate() error {
 	}
 	if c.Bus.EventLog.MaxAge <= 0 || c.Bus.EventLog.MaxSizeMB <= 0 {
 		return errors.New("config: bus.event_log.max_age and max_size_mb must be positive")
+	}
+	if strings.TrimSpace(c.Assistant.Name) == "" {
+		return errors.New("config: assistant.name must not be empty")
+	}
+	if len(c.Owner.About) > maxProfileText || len(c.Assistant.Persona) > maxProfileText {
+		return fmt.Errorf("config: owner.about and assistant.persona must be at most %d bytes", maxProfileText)
+	}
+	return c.Brain.validate()
+}
+
+func (b Brain) validate() error {
+	if b.Provider != "claudecode" {
+		return fmt.Errorf("config: brain.provider %q is unknown (want claudecode)", b.Provider)
+	}
+	// The model is passed as a command-line argument: it must not look like
+	// a flag.
+	if b.Model == "" || strings.HasPrefix(b.Model, "-") || strings.ContainsFunc(b.Model, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("config: brain.model %q must be a model name or alias", b.Model)
+	}
+	if b.HistoryTurns < 0 || b.HistoryTurns > 200 {
+		return fmt.Errorf("config: brain.history_turns %d must be between 0 and 200", b.HistoryTurns)
+	}
+	if b.TurnTimeout < 5*time.Second || b.TurnTimeout > 10*time.Minute {
+		return fmt.Errorf("config: brain.turn_timeout %s must be between 5s and 10m", b.TurnTimeout)
+	}
+	if b.ClaudeCode.Command == "" {
+		return errors.New("config: brain.claudecode.command must not be empty")
 	}
 	return nil
 }

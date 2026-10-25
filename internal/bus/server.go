@@ -168,20 +168,18 @@ func (s *Server) ensureEventLog(ctx context.Context, maxAge time.Duration, maxBy
 // Connect opens an in-process connection for the named component. Events it
 // publishes carry that name as their source.
 func (s *Server) Connect(name string) (*Conn, error) {
-	nc, err := s.dial(name)
-	if err != nil {
-		return nil, err
-	}
-	return newConn(nc, name, s.log)
+	return newConn(name, s.log, connHooks{}, func(opts ...nats.Option) (*nats.Conn, error) {
+		return s.dial(name, opts...)
+	})
 }
 
-func (s *Server) dial(name string) (*nats.Conn, error) {
-	nc, err := nats.Connect("",
+func (s *Server) dial(name string, extra ...nats.Option) (*nats.Conn, error) {
+	nc, err := nats.Connect("", append([]nats.Option{
 		nats.InProcessServer(s.ns),
 		nats.UserInfo(coreUser, s.coreSecret),
 		nats.Name(name),
 		errorHandler(s.log, name),
-	)
+	}, extra...)...)
 	if err != nil {
 		return nil, fmt.Errorf("bus: connect %s: %w", name, err)
 	}
@@ -237,6 +235,19 @@ type DialOptions struct {
 	// CAFile is the bus CA certificate. Required when the bus uses TLS.
 	CAFile string
 	Log    *slog.Logger
+	// OnDisconnect and OnReconnect are called when the connection to the
+	// bus is lost and when it is back; subscriptions resume by themselves.
+	// Events published meanwhile are missed (Replay can fetch them).
+	// OnClosed is called if the connection ends for good, e.g. when the bus
+	// refuses its credentials after its satellite was removed; err says
+	// why, if known.
+	//
+	// Closing the connection with Close is neither a disconnect nor reported
+	// to OnClosed. The callbacks run on the connection's callback goroutine,
+	// so they must not block.
+	OnDisconnect func(err error)
+	OnReconnect  func()
+	OnClosed     func(err error)
 }
 
 // Dial connects to a DOGGIE bus over TCP, for satellites and tools running in
@@ -255,14 +266,17 @@ func Dial(url string, opts DialOptions) (*Conn, error) {
 	if opts.CAFile != "" {
 		natsOpts = append(natsOpts, nats.RootCAs(opts.CAFile))
 	}
-	nc, err := nats.Connect(url, natsOpts...)
-	if errors.Is(err, nats.ErrNoServers) {
-		return nil, fmt.Errorf("bus: no server at %s (is doggie running?): %w", url, err)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("bus: dial %s: %w", url, err)
-	}
-	return newConn(nc, opts.Name, opts.Log)
+	hooks := connHooks{onDisconnect: opts.OnDisconnect, onReconnect: opts.OnReconnect, onClosed: opts.OnClosed}
+	return newConn(opts.Name, opts.Log, hooks, func(extra ...nats.Option) (*nats.Conn, error) {
+		nc, err := nats.Connect(url, append(natsOpts, extra...)...)
+		if errors.Is(err, nats.ErrNoServers) {
+			return nil, fmt.Errorf("bus: no server at %s (is doggie running?): %w", url, err)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("bus: dial %s: %w", url, err)
+		}
+		return nc, nil
+	})
 }
 
 func errorHandler(log *slog.Logger, name string) nats.Option {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -20,16 +21,53 @@ type Conn struct {
 	source string
 	log    *slog.Logger
 	closed chan struct{}
+	// closing is set by Close, so ending the connection on purpose isn't
+	// reported as losing it.
+	closing atomic.Bool
 }
 
-func newConn(nc *nats.Conn, source string, log *slog.Logger) (*Conn, error) {
+// connHooks report what happens to a connection (see DialOptions).
+type connHooks struct {
+	onDisconnect func(error)
+	onReconnect  func()
+	onClosed     func(error)
+}
+
+// newConn opens a connection with connect, passing it the options that track
+// its state. The Conn exists before connecting, so every callback sees
+// whether Close was called.
+func newConn(source string, log *slog.Logger, h connHooks, connect func(...nats.Option) (*nats.Conn, error)) (*Conn, error) {
+	c := &Conn{source: source, log: log, closed: make(chan struct{})}
+	opts := []nats.Option{nats.ClosedHandler(func(nc *nats.Conn) {
+		close(c.closed)
+		if h.onClosed != nil && !c.closing.Load() {
+			h.onClosed(nc.LastError())
+		}
+	})}
+	if h.onDisconnect != nil {
+		opts = append(opts, nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+			if !c.closing.Load() && !nc.IsClosed() {
+				h.onDisconnect(err)
+			}
+		}))
+	}
+	if h.onReconnect != nil {
+		opts = append(opts, nats.ReconnectHandler(func(*nats.Conn) {
+			if !c.closing.Load() {
+				h.onReconnect()
+			}
+		}))
+	}
+	nc, err := connect(opts...)
+	if err != nil {
+		return nil, err
+	}
 	js, err := jetstream.New(nc)
 	if err != nil {
 		nc.Close()
 		return nil, fmt.Errorf("bus: jetstream: %w", err)
 	}
-	c := &Conn{nc: nc, js: js, source: source, log: log, closed: make(chan struct{})}
-	nc.SetClosedHandler(func(*nats.Conn) { close(c.closed) })
+	c.nc, c.js = nc, js
 	return c, nil
 }
 
@@ -39,6 +77,7 @@ func (c *Conn) Name() string { return c.source }
 // Close flushes pending publishes, waits until they reach the server and
 // closes the connection. Calling it again is a no-op.
 func (c *Conn) Close() error {
+	c.closing.Store(true)
 	if c.nc.IsClosed() {
 		return nil
 	}

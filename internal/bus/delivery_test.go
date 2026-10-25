@@ -2,12 +2,15 @@ package bus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 func TestConcurrentPublishers(t *testing.T) {
@@ -181,5 +184,128 @@ func TestSatelliteReconnectsAfterRestart(t *testing.T) {
 		case <-deadline:
 			t.Fatal("satellite did not receive events after the core restarted")
 		}
+	}
+}
+
+// connStates records the connection callbacks of a satellite.
+type connStates struct {
+	down   chan error
+	up     chan struct{}
+	closed chan error
+}
+
+func newConnStates() *connStates {
+	return &connStates{down: make(chan error, 10), up: make(chan struct{}, 10), closed: make(chan error, 10)}
+}
+
+func (s *connStates) dial(t *testing.T, url string) *Conn {
+	t.Helper()
+	return s.dialAs(t, url, "", "test-token")
+}
+
+func (s *connStates) dialAs(t *testing.T, url, user, token string) *Conn {
+	t.Helper()
+	c, err := Dial(url, DialOptions{
+		Name: "satellite", User: user, Token: token, Log: discardLog(),
+		OnDisconnect: func(err error) { s.down <- err },
+		OnReconnect:  func() { s.up <- struct{}{} },
+		OnClosed:     func(err error) { s.closed <- err },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestSatelliteIsToldWhenTheBusGoesAndComesBack(t *testing.T) {
+	dir := t.TempDir()
+	s1 := mustStart(t, opts(dir, "127.0.0.1:-1", discardLog()))
+	url := s1.ClientURL()
+	states := newConnStates()
+	sat := states.dial(t, url)
+	defer sat.Close()
+
+	s1.Shutdown()
+	select {
+	case <-states.down:
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnDisconnect was not called when the bus stopped")
+	}
+	select {
+	case <-states.up:
+		t.Fatal("OnReconnect called while the bus is down")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	s2 := mustStart(t, opts(dir, strings.TrimPrefix(url, "nats://"), discardLog()))
+	defer s2.Shutdown()
+	select {
+	case <-states.up:
+	case <-time.After(10 * time.Second):
+		t.Fatal("OnReconnect was not called when the bus came back")
+	}
+}
+
+// quiet fails if any callback of s fires within a short while.
+func (s *connStates) quiet(t *testing.T) {
+	t.Helper()
+	select {
+	case err := <-s.down:
+		t.Errorf("OnDisconnect(%v) called", err)
+	case <-s.up:
+		t.Error("OnReconnect called")
+	case err := <-s.closed:
+		t.Errorf("OnClosed(%v) called", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestClosingIsNotLosingTheConnection(t *testing.T) {
+	s := startTestServer(t, "127.0.0.1:-1")
+	states := newConnStates()
+	sat := states.dial(t, s.ClientURL())
+	if err := sat.Close(); err != nil {
+		t.Fatal(err)
+	}
+	states.quiet(t)
+	if err := sat.Close(); err != nil {
+		t.Errorf("second Close: %v", err)
+	}
+}
+
+func TestClosingWhileTheBusIsDown(t *testing.T) {
+	s := mustStart(t, opts(t.TempDir(), "127.0.0.1:-1", discardLog()))
+	states := newConnStates()
+	sat := states.dial(t, s.ClientURL())
+	s.Shutdown()
+	select {
+	case <-states.down:
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnDisconnect was not called when the bus stopped")
+	}
+	sat.Close()
+	states.quiet(t)
+}
+
+func TestRemovedSatelliteIsToldItIsClosed(t *testing.T) {
+	s, token := startNamed(t)
+	states := newConnStates()
+	sat := states.dialAs(t, s.ClientURL(), "voice-room", token)
+	defer sat.Close()
+	if err := s.SetSatellites(nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-states.closed:
+		if !errors.Is(err, nats.ErrAuthorization) {
+			t.Errorf("OnClosed(%v), want an authorization error", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("OnClosed was not called for a removed satellite")
+	}
+	select {
+	case <-states.up:
+		t.Error("a removed satellite reconnected")
+	default:
 	}
 }

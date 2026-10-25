@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -108,24 +107,12 @@ func Publish[T any](ctx context.Context, c *Conn, s Subject[T], data T, opts ...
 	return meta, nil
 }
 
-// pendingLimit is how many events a subscription queues while its consumer
-// is busy. Beyond that, NATS drops events and reports a slow consumer, which
-// is logged. It is a variable so tests can lower it.
-var pendingLimit = 65536
-
 // Subscribe delivers events of type s on the returned channel until ctx is
 // cancelled, then unsubscribes and closes the channel. Every event published
 // after Subscribe returns is delivered. Undecodable events are logged and
 // skipped.
 func Subscribe[T any](ctx context.Context, c *Conn, s Subject[T]) (<-chan Event[T], error) {
-	out := make(chan Event[T])
-	// The handler holds mu (read) while it may send on out, so out is only
-	// closed once no handler can send on it anymore.
-	var (
-		mu     sync.RWMutex
-		closed bool
-	)
-	sub, err := c.nc.Subscribe(s.subject(), func(m *nats.Msg) {
+	out, err := subscribeChan(ctx, c, s.subject(), "", func(m *nats.Msg) (Event[T], bool) {
 		var env Envelope
 		err := json.Unmarshal(m.Data, &env)
 		var ev Event[T]
@@ -135,41 +122,13 @@ func Subscribe[T any](ctx context.Context, c *Conn, s Subject[T]) (<-chan Event[
 		}
 		if err != nil {
 			c.log.Warn("bus: dropping undecodable event", "subject", m.Subject, "err", err)
-			return
+			return ev, false
 		}
-		mu.RLock()
-		defer mu.RUnlock()
-		if closed {
-			return
-		}
-		select {
-		case out <- ev:
-		case <-ctx.Done():
-		}
-	})
+		return ev, true
+	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("bus: subscribe %s: %w", s.typ, err)
 	}
-	if err := sub.SetPendingLimits(pendingLimit, 64<<20); err != nil {
-		sub.Unsubscribe()
-		return nil, fmt.Errorf("bus: subscribe %s: %w", s.typ, err)
-	}
-	// Wait for the server to register the subscription, so every event
-	// published after Subscribe returns is delivered, even from another
-	// connection.
-	if err := c.nc.FlushTimeout(5 * time.Second); err != nil {
-		sub.Unsubscribe()
-		return nil, fmt.Errorf("bus: subscribe %s: %w", s.typ, err)
-	}
-
-	go func() {
-		<-ctx.Done()
-		sub.Unsubscribe()
-		mu.Lock()
-		closed = true
-		close(out)
-		mu.Unlock()
-	}()
 	return out, nil
 }
 

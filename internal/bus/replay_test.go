@@ -12,7 +12,7 @@ func TestReplayDeliversHistoryThenLive(t *testing.T) {
 	s := startTestServer(t, "")
 	c := connect(t, s, "test")
 	for i := range 3 {
-		Publish(c, testPing, ping{N: i})
+		Publish(context.Background(), c, testPing, ping{N: i})
 	}
 	waitForLogged(t, c, 3)
 
@@ -27,7 +27,7 @@ func TestReplayDeliversHistoryThenLive(t *testing.T) {
 			t.Errorf("history event %d = %s", i, got)
 		}
 	}
-	Publish(c, testPing, ping{N: 3})
+	Publish(context.Background(), c, testPing, ping{N: 3})
 	if got := receive(t, events).Data; !strings.Contains(string(got), `"n":3`) {
 		t.Errorf("live event = %s", got)
 	}
@@ -36,7 +36,7 @@ func TestReplayDeliversHistoryThenLive(t *testing.T) {
 func TestReplayZeroSinceOnlyNew(t *testing.T) {
 	s := startTestServer(t, "")
 	c := connect(t, s, "test")
-	Publish(c, testPing, ping{N: 1})
+	Publish(context.Background(), c, testPing, ping{N: 1})
 	waitForLogged(t, c, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -45,7 +45,7 @@ func TestReplayZeroSinceOnlyNew(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	Publish(c, testPing, ping{N: 99})
+	Publish(context.Background(), c, testPing, ping{N: 99})
 	if got := receive(t, events).Data; !strings.Contains(string(got), `"n":99`) {
 		t.Errorf("first event = %s, want only the new one", got)
 	}

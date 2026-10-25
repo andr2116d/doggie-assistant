@@ -40,7 +40,7 @@ func TestPublishSubscribeTyped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	meta, err := Publish(pub, testPing, ping{N: 7})
+	meta, err := Publish(context.Background(), pub, testPing, ping{N: 7})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,11 +64,11 @@ func TestCausedByChainsEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := Publish(c, testPing, ping{N: 1})
+	first, err := Publish(context.Background(), c, testPing, ping{N: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Publish(c, testPing, ping{N: 2}, CausedBy(first.ID)); err != nil {
+	if _, err := Publish(context.Background(), c, testPing, ping{N: 2}, CausedBy(first.ID)); err != nil {
 		t.Fatal(err)
 	}
 	receive(t, events)
@@ -101,7 +101,7 @@ func TestEventLogStoresEvents(t *testing.T) {
 	s := startTestServer(t, "")
 	c := connect(t, s, "test")
 	for i := range 3 {
-		if _, err := Publish(c, testPing, ping{N: i}); err != nil {
+		if _, err := Publish(context.Background(), c, testPing, ping{N: i}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -149,7 +149,7 @@ func (s *Server) Connect(name string) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newConn(nc, name, s.log), nil
+	return newConn(nc, name, s.log)
 }
 
 func (s *Server) dial(name string) (*nats.Conn, error) {
@@ -209,7 +209,7 @@ func Dial(url string, opts DialOptions) (*Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bus: dial %s: %w", url, err)
 	}
-	return newConn(nc, opts.Name, opts.Log), nil
+	return newConn(nc, opts.Name, opts.Log)
 }
 
 func errorHandler(log *slog.Logger, name string) nats.Option {

@@ -36,7 +36,7 @@ func (h *Heartbeat) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-t.C:
 			uptime := time.Since(h.start)
-			if _, err := bus.Publish(h.conn, events.Heartbeat, events.HeartbeatData{UptimeS: int64(uptime.Seconds())}); err != nil {
+			if _, err := bus.Publish(ctx, h.conn, events.Heartbeat, events.HeartbeatData{UptimeS: int64(uptime.Seconds())}); err != nil {
 				h.log.Warn("publish heartbeat", "err", err)
 				continue
 			}

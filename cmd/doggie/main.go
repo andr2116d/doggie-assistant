@@ -30,6 +30,7 @@ Usage:
   doggie run [flags]      run DOGGIE (see "doggie run -h")
   doggie events [flags]   watch bus events live (see "doggie events -h")
   doggie task <cmd>       start, list, get, cancel or answer tasks (see "doggie task help")
+  doggie chat [flags]     talk with DOGGIE (see "doggie chat -h")
   doggie say <text>       say something to DOGGIE and print its replies (see "doggie say -h")
   doggie satellite <cmd>  add, list or remove satellites (see "doggie satellite help")
   doggie version          print the version
@@ -37,7 +38,7 @@ Usage:
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
-		if !errors.Is(err, flag.ErrHelp) {
+		if !errors.Is(err, flag.ErrHelp) && !errors.Is(err, errShown) {
 			fmt.Fprintln(os.Stderr, "doggie:", err)
 		}
 		os.Exit(1)
@@ -58,6 +59,8 @@ func run(args []string, stdout io.Writer) error {
 		return taskCmd(args[1:], stdout)
 	case "say":
 		return sayCmd(args[1:], stdout)
+	case "chat":
+		return chatCmd(args[1:])
 	case "satellite":
 		return satelliteCmd(args[1:], stdout)
 	case "version":

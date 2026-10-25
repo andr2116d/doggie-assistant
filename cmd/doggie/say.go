@@ -245,6 +245,14 @@ func (v *replyView) close() {
 	v.open = nil
 }
 
+// note prints a line of its own, e.g. a status, after any open block.
+func (v *replyView) note(text string) {
+	if v.open != nil {
+		v.close()
+	}
+	fmt.Fprintln(v.w, text)
+}
+
 // recentIDs is a set of event IDs that forgets the oldest past maxRecent.
 type recentIDs struct {
 	set   map[string]bool

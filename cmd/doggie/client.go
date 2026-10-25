@@ -32,8 +32,8 @@ func addClientFlags(flags *flag.FlagSet) clientFlags {
 }
 
 // dial connects to the bus of a running DOGGIE and returns the connection
-// and its URL.
-func (f clientFlags) dial(name string) (*bus.Conn, string, error) {
+// and its URL. set adjusts the options, e.g. to follow the connection.
+func (f clientFlags) dial(name string, set ...func(*bus.DialOptions)) (*bus.Conn, string, error) {
 	cfg, err := config.Load(*f.config)
 	if err != nil {
 		return nil, "", err
@@ -65,13 +65,17 @@ func (f clientFlags) dial(name string) (*bus.Conn, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	conn, err := bus.Dial(url, bus.DialOptions{
+	opts := bus.DialOptions{
 		Name:   name,
 		User:   user,
 		Token:  token,
 		CAFile: caFile(*f.ca, cfg),
 		Log:    slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
-	})
+	}
+	for _, s := range set {
+		s(&opts)
+	}
+	conn, err := bus.Dial(url, opts)
 	return conn, url, err
 }
 

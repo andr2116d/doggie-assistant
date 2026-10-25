@@ -5,8 +5,8 @@ Active tasks:
 </world>
 
 <conversation>
-<turn at="2026-10-25 10:40">
-<said channel="terminal" at="2026-10-25 10:40">ábreme netflix y cuéntame un chiste</said>
+<turn at="10:40">
+<said channel="terminal">ábreme netflix y cuéntame un chiste</said>
 <action tool="start_task">{"kind":"demo.sleep","description":"Abrir Netflix en la TV"}</action>
 <reply>Ya estoy en eso.</reply>
 <reply>¿Sabes por qué los pájaros vuelan al sur? Porque caminando tardarían mucho.</reply>
@@ -14,5 +14,5 @@ Active tasks:
 </conversation>
 
 <input>
-<event type="task.done" task="t3" at="2026-10-25 10:41">Task t3 (demo.sleep, <data>Abrir Netflix en la TV</data>) finished. Result: <data>{"slept_s":5}</data></event>
+<event type="task.done" task="t3" at="10:41">Task t3 (demo.sleep, <data>Abrir Netflix en la TV</data>) finished. Result: <data>{"slept_s":5}</data></event>
 </input>

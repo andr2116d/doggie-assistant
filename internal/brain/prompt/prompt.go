@@ -19,7 +19,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
 )
@@ -102,13 +101,14 @@ func Build(c Context) string {
 	if loc == nil {
 		loc = time.UTC
 	}
+	clk := clock{now: c.Now, loc: loc}
 	var b strings.Builder
 	b.WriteString("<world>\n")
 	fmt.Fprintf(&b, "Now: %s\n", c.Now.In(loc).Format("Monday, 2 January 2006, 15:04 MST"))
 	writeTasks(&b, c.Tasks, c.ThreadID)
 	b.WriteString("</world>\n")
 
-	if conv := conversation(c.History, c.MaxTurns, loc); conv != "" {
+	if conv := conversation(c.History, c.MaxTurns, clk); conv != "" {
 		b.WriteString("\n<conversation>\n")
 		b.WriteString(conv)
 		b.WriteString("</conversation>\n")
@@ -116,7 +116,7 @@ func Build(c Context) string {
 
 	b.WriteString("\n<input>\n")
 	for _, in := range c.Inputs {
-		writeInput(&b, in, loc, maxInputText)
+		writeInput(&b, in, clk, "", maxInputText)
 	}
 	b.WriteString("</input>\n")
 	return b.String()
@@ -183,7 +183,7 @@ func status(t events.TaskInfo) string {
 }
 
 // conversation renders the most recent turns that fit, oldest first.
-func conversation(history []Turn, maxTurns int, loc *time.Location) string {
+func conversation(history []Turn, maxTurns int, clk clock) string {
 	if maxTurns <= 0 || len(history) == 0 {
 		return ""
 	}
@@ -193,7 +193,7 @@ func conversation(history []Turn, maxTurns int, loc *time.Location) string {
 	var parts []string
 	size := 0
 	for i := len(history) - 1; i >= 0; i-- {
-		s := renderTurn(history[i], loc)
+		s := renderTurn(history[i], clk)
 		if size+len(s) > maxConversation {
 			break
 		}
@@ -204,11 +204,13 @@ func conversation(history []Turn, maxTurns int, loc *time.Location) string {
 	return strings.Join(parts, "")
 }
 
-func renderTurn(t Turn, loc *time.Location) string {
+func renderTurn(t Turn, clk clock) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "<turn at=\"%s\">\n", stamp(t.At, loc))
+	turnAt := clk.stamp(t.At)
+	fmt.Fprintf(&b, "<turn at=\"%s\">\n", turnAt)
+	// Inputs at the turn's own time don't repeat it.
 	for _, in := range t.Inputs {
-		writeInput(&b, in, loc, maxHistoryText)
+		writeInput(&b, in, clk, turnAt, maxHistoryText)
 	}
 	for _, a := range t.Actions {
 		fmt.Fprintf(&b, "<action tool=\"%s\">%s</action>\n", attr(a.Tool), esc(cut(compact(a.Input), maxDataText)))
@@ -220,13 +222,18 @@ func renderTurn(t Turn, loc *time.Location) string {
 	return b.String()
 }
 
-func writeInput(b *strings.Builder, in Input, loc *time.Location, maxText int) {
+// writeInput writes an input. Its time is left out when it is omitAt.
+func writeInput(b *strings.Builder, in Input, clk clock, omitAt string, maxText int) {
+	at := ""
+	if s := clk.stamp(in.At); s != omitAt {
+		at = " at=\"" + s + "\""
+	}
 	if in.Event == nil {
-		fmt.Fprintf(b, "<said channel=\"%s\" at=\"%s\">%s</said>\n", attr(in.Channel), stamp(in.At, loc), esc(cut(in.Said, maxText)))
+		fmt.Fprintf(b, "<said channel=\"%s\"%s>%s</said>\n", attr(in.Channel), at, esc(cut(in.Said, maxText)))
 		return
 	}
 	e := in.Event
-	fmt.Fprintf(b, "<event type=\"%s\" task=\"%s\" at=\"%s\">", attr(e.Type), attr(e.Task.ID), stamp(in.At, loc))
+	fmt.Fprintf(b, "<event type=\"%s\" task=\"%s\"%s>", attr(e.Type), attr(e.Task.ID), at)
 	fmt.Fprintf(b, "Task %s (%s", esc(e.Task.ID), esc(e.Task.Kind))
 	if e.Task.Description != "" {
 		fmt.Fprintf(b, ", <data>%s</data>", esc(cut(e.Task.Description, maxDataText)))
@@ -260,12 +267,23 @@ func writeInput(b *strings.Builder, in Input, loc *time.Location, maxText int) {
 	b.WriteString("</event>\n")
 }
 
-// stamp is a local date and time, to the minute.
-func stamp(t time.Time, loc *time.Location) string {
+// clock renders times in the owner's zone, relative to now.
+type clock struct {
+	now time.Time
+	loc *time.Location
+}
+
+// stamp is a local time to the minute, with the date only when it is not
+// today: it saves tokens on every turn.
+func (c clock) stamp(t time.Time) string {
 	if t.IsZero() {
 		return "unknown"
 	}
-	return t.In(loc).Format("2006-01-02 15:04")
+	t, now := t.In(c.loc), c.now.In(c.loc)
+	if y, m, d := t.Date(); y == now.Year() && m == now.Month() && d == now.Day() {
+		return t.Format("15:04")
+	}
+	return t.Format("2006-01-02 15:04")
 }
 
 // compact returns JSON on one line, or the raw text if it isn't JSON.
@@ -290,10 +308,14 @@ func esc(s string) string { return textEscaper.Replace(strings.ToValidUTF8(s, "\
 // span lines.
 func attr(s string) string { return attrEscaper.Replace(strings.ToValidUTF8(s, "\uFFFD")) }
 
-// cut shortens s to maxRunes, marking the cut.
+// cut shortens s to maxRunes, marking the cut. It doesn't copy s.
 func cut(s string, maxRunes int) string {
-	if utf8.RuneCountInString(s) <= maxRunes {
-		return s
+	n := 0
+	for i := range s {
+		if n == maxRunes {
+			return s[:i] + "… [cut]"
+		}
+		n++
 	}
-	return string([]rune(s)[:maxRunes]) + "… [cut]"
+	return s
 }

@@ -4,5 +4,5 @@ Active tasks: none
 </world>
 
 <input>
-<said channel="terminal" at="2026-10-25 15:40">hola</said>
+<said channel="terminal" at="15:40">hola</said>
 </input>

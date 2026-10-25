@@ -265,7 +265,7 @@ func TestBuildInputLimitAndTime(t *testing.T) {
 	if strings.Contains(got, strings.Repeat("é", maxInputText+1)) {
 		t.Error("input not cut")
 	}
-	if !strings.Contains(got, "Now: Sunday, 25 October 2026, 10:40 -05") || !strings.Contains(got, `at="2026-10-25 10:40"`) {
+	if !strings.Contains(got, "Now: Sunday, 25 October 2026, 10:40 -05") || !strings.Contains(got, `at="10:40"`) {
 		t.Errorf("times not in the owner's zone:\n%s", got[:200])
 	}
 	if !strings.Contains(got, `at="unknown">sin hora`) {
@@ -281,5 +281,60 @@ func TestBuildEmptyInput(t *testing.T) {
 	got := Build(Context{Now: at(0)})
 	if !strings.HasSuffix(got, "<input>\n</input>\n") {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestStamps(t *testing.T) {
+	now := time.Date(2026, 10, 25, 4, 30, 0, 0, time.UTC) // 23:30 on the 24th in Lima
+	clk := clock{now: now, loc: lima}
+	for in, want := range map[time.Time]string{
+		now:                      "23:30",            // today in the owner's zone, though not in UTC
+		now.Add(-23 * time.Hour): "00:30",            // still today
+		now.Add(-24 * time.Hour): "2026-10-23 23:30", // yesterday gets its date
+		now.Add(time.Hour):       "2026-10-25 00:30", // past midnight: tomorrow
+		{}:                       "unknown",
+	} {
+		if got := clk.stamp(in); got != want {
+			t.Errorf("stamp(%s) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Inside a turn, inputs at the turn's time don't repeat it; others keep
+// theirs.
+func TestTurnInputsDontRepeatTheTime(t *testing.T) {
+	got := Build(Context{Now: at(10), MaxTurns: 1, History: []Turn{{
+		At:     at(5),
+		Inputs: []Input{said(5, "a la vez"), said(3, "antes"), {At: at(5), Event: &TaskEvent{Type: "task.done", Task: events.TaskInfo{ID: "t1"}}}},
+	}}})
+	for _, want := range []string{`<turn at="15:45">`, `<said channel="terminal">a la vez`, `<said channel="terminal" at="15:43">antes`, `<event type="task.done" task="t1">`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in\n%s", want, got)
+		}
+	}
+	// The current input always has its time.
+	if got := Build(Context{Now: at(0), Inputs: []Input{said(0, "ahora")}}); !strings.Contains(got, `at="15:40">ahora`) {
+		t.Errorf("current input lost its time:\n%s", got)
+	}
+}
+
+func TestCut(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		max  int
+		want string
+	}{
+		{"", 3, ""},
+		{"abc", 3, "abc"},
+		{"abcd", 3, "abc… [cut]"},
+		{"ñandú", 2, "ña… [cut]"},
+		{"ñandú", 5, "ñandú"},
+		{"abc", 0, "… [cut]"},
+		{"a\xffbc", 2, "a\xff… [cut]"}, // invalid bytes count as one rune each
+		{"🐕🐕🐕", 1, "🐕… [cut]"},
+	} {
+		if got := cut(tt.in, tt.max); got != tt.want {
+			t.Errorf("cut(%q, %d) = %q, want %q", tt.in, tt.max, got, tt.want)
+		}
 	}
 }

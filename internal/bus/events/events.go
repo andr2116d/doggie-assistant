@@ -1,5 +1,6 @@
-// Package events is the catalog of DOGGIE's bus events: the contract shared
-// by all components. Components never import each other, only this catalog.
+// Package events is the catalog of DOGGIE's bus events and commands: the
+// contract shared by all components. Components never import each other,
+// only this catalog.
 package events
 
 import "github.com/andr2116d/doggie-assistant/internal/bus"

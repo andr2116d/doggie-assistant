@@ -153,3 +153,17 @@ func TestTLSServerRequiresTrustedCA(t *testing.T) {
 	}
 	inproc.Close()
 }
+
+func TestEnsureTLSRejectsCorruptFiles(t *testing.T) {
+	dir := t.TempDir()
+	files := TLSFilesIn(dir)
+	if err := os.WriteFile(files.CA, []byte("garbage"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(files.CAKey, []byte("garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureTLS(dir, []string{"localhost"}, time.Now()); err == nil {
+		t.Fatal("EnsureTLS accepted a corrupt CA instead of failing")
+	}
+}

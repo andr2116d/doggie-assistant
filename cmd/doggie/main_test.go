@@ -218,3 +218,14 @@ func published[T any](c *bus.Conn, s bus.Subject[T], data T) bool {
 	_, err := bus.Publish(ctx, c, s, data)
 	return err == nil
 }
+
+// Plain doggie talks: flags without a command are the chat's.
+func TestFlagsAloneAreTheChats(t *testing.T) {
+	err := run([]string{"-bogus"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -bogus") {
+		t.Errorf("err = %v, want the chat's flag error", err)
+	}
+	if err := run([]string{"-h"}, io.Discard); err != nil {
+		t.Errorf("-h: %v", err)
+	}
+}

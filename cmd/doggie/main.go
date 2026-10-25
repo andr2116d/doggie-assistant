@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +29,7 @@ var version = "dev"
 const usage = `doggie: a self-hosted, Jarvis-style personal assistant.
 
 Usage:
+  doggie [flags]          talk with DOGGIE, starting it if needed: same as doggie chat
   doggie run [flags]      run DOGGIE; in a terminal, with its chat (see "doggie run -h")
   doggie events [flags]   watch bus events live (see "doggie events -h")
   doggie task <cmd>       start, list, get, cancel or answer tasks (see "doggie task help")
@@ -47,9 +49,9 @@ func main() {
 }
 
 func run(args []string, stdout io.Writer) error {
-	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, usage)
-		return errors.New("missing command")
+	// Like most chat tools, plain doggie talks: doggie -history 3 too.
+	if len(args) == 0 || (strings.HasPrefix(args[0], "-") && !isHelp(args[0])) {
+		return chatCmd(args)
 	}
 	switch args[0] {
 	case "run":
@@ -67,7 +69,7 @@ func run(args []string, stdout io.Writer) error {
 	case "version":
 		fmt.Fprintln(stdout, version)
 		return nil
-	case "help", "-h", "--help":
+	case "help", "-h", "-help", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil
 	}
@@ -189,4 +191,8 @@ func tokenPath(cfg config.Config) string {
 
 func tlsDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataDir, "tls")
+}
+
+func isHelp(arg string) bool {
+	return arg == "-h" || arg == "-help" || arg == "--help"
 }

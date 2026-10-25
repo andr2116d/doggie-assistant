@@ -12,13 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
 	"github.com/andr2116d/doggie-assistant/internal/config"
-	"github.com/andr2116d/doggie-assistant/internal/supervisor"
+	"github.com/andr2116d/doggie-assistant/internal/console"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -27,10 +28,10 @@ var version = "dev"
 const usage = `doggie: a self-hosted, Jarvis-style personal assistant.
 
 Usage:
-  doggie run [flags]      run DOGGIE (see "doggie run -h")
+  doggie run [flags]      run DOGGIE; in a terminal, with its chat (see "doggie run -h")
   doggie events [flags]   watch bus events live (see "doggie events -h")
   doggie task <cmd>       start, list, get, cancel or answer tasks (see "doggie task help")
-  doggie chat [flags]     talk with DOGGIE (see "doggie chat -h")
+  doggie chat [flags]     talk with DOGGIE, starting it if needed (see "doggie chat -h")
   doggie say <text>       say something to DOGGIE and print its replies (see "doggie say -h")
   doggie satellite <cmd>  add, list or remove satellites (see "doggie satellite help")
   doggie version          print the version
@@ -78,6 +79,7 @@ func runCmd(args []string) error {
 	configPath := fs.String("config", "", "config file (default $XDG_CONFIG_HOME/doggie/config.yaml)")
 	only := fs.String("only", "", "comma-separated list of components to run")
 	except := fs.String("except", "", "comma-separated list of components to skip")
+	noChat := fs.Bool("no-chat", false, "in a terminal, print the logs instead of opening the chat")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -86,11 +88,6 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel()}))
-	if cfg.UsingDefaults {
-		log.Warn("no config file, using defaults", "expected", cfg.File)
-	}
-
 	selected, err := selectFactories(factories(), *only, *except)
 	if err != nil {
 		return err
@@ -105,25 +102,21 @@ func runCmd(args []string) error {
 		stop()
 	}()
 
-	// The bus starts before the components and stops after them: deferred
-	// calls run in reverse, so connections close before the server shuts down.
-	srv, err := startBus(ctx, cfg, log)
+	// In a terminal, DOGGIE opens its chat there, and the logs go to a file.
+	if !*noChat && console.IsTerminal(os.Stdin, os.Stdout) && slices.ContainsFunc(selected, func(f factory) bool { return f.name == "brain" }) {
+		return runWithChat(ctx, cfg, selected, clientFlagsFor(*configPath))
+	}
+
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel()}))
+	if cfg.UsingDefaults {
+		log.Warn("no config file, using defaults", "expected", cfg.File)
+	}
+	c, err := startCore(ctx, cfg, log, selected)
 	if err != nil {
 		return err
 	}
-	defer srv.Shutdown()
-	go watchSatellites(ctx, srv, satellitesFile(cfg), log, satelliteWatchInterval)
-
-	comps, closeConns, err := buildComponents(selected, cfg, log, srv)
-	if err != nil {
-		return err
-	}
-	defer closeConns()
-
-	log.Info("doggie starting", "version", version, "components", names(selected))
-	err = supervisor.New(log).Run(ctx, comps...)
-	log.Info("doggie stopped")
-	return err
+	<-c.Done()
+	return c.err
 }
 
 func startBus(ctx context.Context, cfg config.Config, log *slog.Logger) (*bus.Server, error) {

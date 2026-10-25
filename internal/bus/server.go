@@ -224,6 +224,10 @@ func (s *Server) Shutdown() {
 	s.ns.WaitForShutdown()
 }
 
+// ErrNoServer means nothing answered at the bus URL: DOGGIE isn't running
+// there.
+var ErrNoServer = nats.ErrNoServers
+
 // DialOptions configures a TCP connection to the bus.
 type DialOptions struct {
 	// Name identifies the client. Its events carry it as their source.

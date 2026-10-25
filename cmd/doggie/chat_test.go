@@ -126,16 +126,16 @@ func TestChatTalks(t *testing.T) {
 
 // Notices arrive whenever they happen, between the user's sentences.
 func TestChatShowsLaterNotices(t *testing.T) {
-	var brain *bus.Conn
+	brains := make(chan *bus.Conn, 1)
 	client := sayEnv(t, func(ctx context.Context, c *bus.Conn, u bus.Event[events.UtteranceData]) {
-		brain = c
 		streamReply(ctx, c, "terminal", u.ID, "En eso.")
+		brains <- c
 	})
 	ui := newFakeUI(true)
 	runChat(t, client, ui, make(chan connState), testChatOptions())
 	ui.lines <- "abre netflix"
 	ui.waitPrinted(t, "doggie> En eso.\n")
-	streamReply(context.Background(), brain, "terminal", "", "Listo, Netflix abierto.")
+	streamReply(context.Background(), <-brains, "terminal", "", "Listo, Netflix abierto.")
 	ui.waitPrinted(t, "doggie> Listo, Netflix abierto.\n")
 }
 

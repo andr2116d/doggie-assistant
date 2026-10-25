@@ -19,6 +19,9 @@ type clientFlags struct {
 	config, server, ca, as *string
 }
 
+// errNoToken means DOGGIE never ran with this data dir: it made no token.
+var errNoToken = errors.New("no token")
+
 // userEnv names the satellite a client connects as, like -as.
 const userEnv = "DOGGIE_BUS_USER"
 
@@ -60,7 +63,7 @@ func (f clientFlags) dial(name string, set ...func(*bus.DialOptions)) (*bus.Conn
 		if user != "" {
 			return nil, "", fmt.Errorf("no token for satellite %s at %s: add it with doggie satellite add, or set %s", user, path, bus.TokenEnv)
 		}
-		return nil, "", fmt.Errorf("no bus token at %s: start doggie once or set %s", path, bus.TokenEnv)
+		return nil, "", fmt.Errorf("no bus token at %s: start doggie once or set %s: %w", path, bus.TokenEnv, errNoToken)
 	}
 	if err != nil {
 		return nil, "", err
@@ -108,4 +111,11 @@ func localBusURL(listen string) (string, error) {
 		host = "127.0.0.1"
 	}
 	return "nats://" + net.JoinHostPort(host, port), nil
+}
+
+// clientFlagsFor is what a client of the local DOGGIE uses, with the given
+// config file.
+func clientFlagsFor(configPath string) clientFlags {
+	empty := ""
+	return clientFlags{config: &configPath, server: &empty, ca: &empty, as: &empty}
 }

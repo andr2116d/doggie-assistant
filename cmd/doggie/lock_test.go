@@ -1,0 +1,47 @@
+//go:build unix
+
+package main
+
+import (
+	"errors"
+	"log/slog"
+	"testing"
+
+	"github.com/andr2116d/doggie-assistant/internal/config"
+)
+
+func TestOneDoggiePerDataDir(t *testing.T) {
+	dir := t.TempDir()
+	unlock, err := lockDataDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockDataDir(dir); !errors.Is(err, errRunning) {
+		t.Fatalf("second lock: %v", err)
+	}
+	unlock()
+	again, err := lockDataDir(dir)
+	if err != nil {
+		t.Fatalf("lock after unlock: %v", err)
+	}
+	again()
+}
+
+func TestStartCoreRefusesASecondDoggie(t *testing.T) {
+	client := localDoggie(t)
+	ui := newFakeUI(false)
+	own, conn, _, err := startHere(t.Context(), ui, client, make(chan connState, 1), noBrain(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer own.Stop()
+	defer conn.Close()
+	cfg, err := config.Load(*client.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Bus.Listen = "127.0.0.1:-1" // not even the port is shared
+	if _, err := startCore(t.Context(), cfg, slog.New(slog.DiscardHandler), noBrain(t)); !errors.Is(err, errRunning) {
+		t.Errorf("second core on the same data dir: %v", err)
+	}
+}

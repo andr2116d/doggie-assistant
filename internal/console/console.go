@@ -55,7 +55,7 @@ type Console struct {
 // Open starts a console on in and out: interactive when both are terminals,
 // which it keeps in raw mode until Close, and plain otherwise.
 func Open(in, out *os.File, opts Options) (*Console, error) {
-	if !term.IsTerminal(int(in.Fd())) || !term.IsTerminal(int(out.Fd())) {
+	if !IsTerminal(in, out) {
 		return Plain(in, out), nil
 	}
 	t, err := openTerminal(in, out)
@@ -329,4 +329,10 @@ func (c *Console) runPlain(in io.Reader, out io.Writer) {
 			return
 		}
 	}
+}
+
+// IsTerminal reports whether in and out are both terminals, so Open would
+// edit lines on them.
+func IsTerminal(in, out *os.File) bool {
+	return term.IsTerminal(int(in.Fd())) && term.IsTerminal(int(out.Fd()))
 }

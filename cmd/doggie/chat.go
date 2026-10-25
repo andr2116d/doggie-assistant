@@ -17,6 +17,7 @@ import (
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
+	"github.com/andr2116d/doggie-assistant/internal/config"
 	"github.com/andr2116d/doggie-assistant/internal/console"
 )
 
@@ -27,6 +28,11 @@ Talks with DOGGIE: type a sentence and press Enter, and keep typing while
 DOGGIE answers or works. Replies show as they are written, and notices
 about tasks arrive when they happen. Ctrl+C or Ctrl+D on an empty line
 quits.
+
+If DOGGIE isn't running on this machine, the chat starts it in this
+process, logging to $XDG_DATA_HOME/doggie/doggie.log, and stops it on quit.
+"doggie run" in a terminal does the same the other way around: it runs
+DOGGIE and opens this chat.
 
 Without a terminal (e.g. sentences piped in), it sends each line, then
 keeps listening for -wait after the last reply.
@@ -49,11 +55,16 @@ type chatOptions struct {
 	publish func(context.Context, *bus.Conn, bus.Subject[events.UtteranceData], events.UtteranceData) (bus.Meta, error)
 }
 
+func defaultChatOptions() chatOptions {
+	return chatOptions{channel: "terminal", thread: "terminal", wait: 20 * time.Second,
+		replyTimeout: 3 * time.Minute, slowReply: 20 * time.Second, sendTimeout: 5 * time.Second}
+}
+
 func chatCmd(args []string) error {
 	flags := flag.NewFlagSet("chat", flag.ContinueOnError)
 	flags.Usage = func() { fmt.Fprint(flags.Output(), chatUsage) }
 	client := addClientFlags(flags)
-	o := chatOptions{replyTimeout: 3 * time.Minute, slowReply: 20 * time.Second, sendTimeout: 5 * time.Second}
+	o := defaultChatOptions()
 	flags.StringVar(&o.channel, "channel", "terminal", "channel to speak on")
 	flags.StringVar(&o.thread, "thread", "", "conversation thread (default: the channel's)")
 	flags.DurationVar(&o.wait, "wait", 20*time.Second, "without a terminal, keep listening this long after the last reply")
@@ -67,13 +78,42 @@ func chatCmd(args []string) error {
 		o.thread = o.channel
 	}
 
-	ui, err := console.Open(os.Stdin, os.Stdout, console.Options{Prompt: "you> ", MaxRunes: events.MaxUtteranceRunes})
+	ui, err := openChatUI()
 	if err != nil {
 		return err
 	}
 	defer ui.Close()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	states := make(chan connState, 64)
-	conn, url, err := client.dial("chat", func(d *bus.DialOptions) {
+	conn, url, err := dialChat(client, ui, states)
+	var own *core
+	// DOGGIE isn't running on this machine, or never ran: start it here.
+	if (errors.Is(err, bus.ErrNoServer) || errors.Is(err, errNoToken)) && *client.server == "" {
+		own, conn, url, err = startHere(ctx, ui, client, states, factories())
+	}
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if own != nil {
+		defer stopHere(ui, own)
+	}
+	if ui.IsInteractive() {
+		fmt.Fprintf(ui, "· talking with DOGGIE at %s on %s; Ctrl+D quits\n", url, o.channel)
+	}
+	return chatSession(ctx, conn, ui, states, own, o)
+}
+
+func openChatUI() (*console.Console, error) {
+	return console.Open(os.Stdin, os.Stdout, console.Options{Prompt: "you> ", MaxRunes: events.MaxUtteranceRunes})
+}
+
+// dialChat connects the chat to the bus, reporting what happens to the
+// connection on states.
+func dialChat(client clientFlags, ui chatUI, states chan<- connState) (*bus.Conn, string, error) {
+	return client.dial("chat", func(d *bus.DialOptions) {
 		d.OnDisconnect = func(err error) { sendState(states, connState{kind: connDown, err: err}) }
 		d.OnReconnect = func() { sendState(states, connState{kind: connUp}) }
 		d.OnClosed = func(err error) { sendState(states, connState{kind: connClosed, err: err}) }
@@ -83,14 +123,123 @@ func chatCmd(args []string) error {
 			d.Log = slog.New(slog.DiscardHandler)
 		}
 	})
+}
+
+// startHere starts DOGGIE in this process, logging to a file, and connects
+// the chat to it. If another process started DOGGIE at the same time, it
+// connects to that one instead.
+func startHere(ctx context.Context, ui chatUI, client clientFlags, states chan<- connState, selected []factory) (*core, *bus.Conn, string, error) {
+	cfg, err := config.Load(*client.config)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	logFile, logPath, err := openLog(cfg)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	log := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: cfg.LogLevel()}))
+	own, startErr := startCore(ctx, cfg, log, selected)
+	if startErr != nil {
+		logFile.Close()
+		// Lost a race with another start: use that DOGGIE once it listens.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			conn, url, err := dialChat(client, ui, states)
+			if err == nil || time.Now().After(deadline) {
+				if err != nil {
+					err = startErr
+				}
+				return nil, conn, url, err
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	own.logFile = logFile
+	conn, url, err := dialChat(client, ui, states)
+	if err != nil {
+		own.Stop()
+		logFile.Close()
+		return nil, nil, "", err
+	}
+	// Piped, stdout carries only the replies.
+	var w io.Writer = ui
+	if !ui.IsInteractive() {
+		w = os.Stderr
+	}
+	fmt.Fprintf(w, "· DOGGIE wasn't running: started it here, logging to %s; it stops when you quit\n", logPath)
+	return own, conn, url, nil
+}
+
+// stopHere stops the DOGGIE this chat started.
+func stopHere(ui chatUI, own *core) {
+	if ui.IsInteractive() {
+		fmt.Fprintln(ui, "· stopping DOGGIE...")
+	}
+	own.Stop()
+	if own.logFile != nil {
+		own.logFile.Close()
+	}
+}
+
+// runWithChat runs DOGGIE with its chat in this terminal: logs go to a file,
+// and quitting the chat stops DOGGIE.
+func runWithChat(ctx context.Context, cfg config.Config, selected []factory, client clientFlags) error {
+	ui, err := openChatUI()
+	if err != nil {
+		return err
+	}
+	defer ui.Close()
+	logFile, logPath, err := openLog(cfg)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	log := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: cfg.LogLevel()}))
+	if cfg.UsingDefaults {
+		log.Warn("no config file, using defaults", "expected", cfg.File)
+	}
+	own, err := startCore(ctx, cfg, log, selected)
+	if err != nil {
+		return err
+	}
+	defer stopHere(ui, own)
+
+	states := make(chan connState, 64)
+	var conn *bus.Conn
+	if cfg.Bus.Listen == "" {
+		// Only in-process connections: the chat is part of this process.
+		conn, err = own.srv.Connect("chat")
+	} else {
+		conn, _, err = dialChat(client, ui, states)
+	}
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if ui.IsInteractive() {
-		fmt.Fprintf(ui, "· talking with DOGGIE at %s on %s; Ctrl+D quits\n", url, o.channel)
+	if cfg.UsingDefaults {
+		fmt.Fprintf(ui, "· no config file at %s, using defaults\n", cfg.File)
+	}
+	fmt.Fprintf(ui, "· DOGGIE is running, logging to %s; Ctrl+D stops it\n", logPath)
+	return chatSession(ctx, conn, ui, states, own, defaultChatOptions())
+}
+
+// chatSession runs the chat. own, if set, is the DOGGIE this process runs:
+// the chat ends if it stops.
+func chatSession(ctx context.Context, conn *bus.Conn, ui chatUI, states chan connState, own *core, o chatOptions) error {
+	if own != nil {
+		sctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			select {
+			case <-own.Done():
+				err := own.err
+				if err == nil {
+					err = errors.New("it stopped")
+				}
+				sendState(states, connState{kind: connClosed, err: err})
+			case <-sctx.Done():
+			}
+		}()
 	}
 	return chat(ctx, conn, ui, states, o)
 }

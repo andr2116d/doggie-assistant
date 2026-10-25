@@ -22,13 +22,20 @@ func startTestServer(t *testing.T, listen string) *Server {
 		StoreDir: t.TempDir(),
 		MaxAge:   time.Hour,
 		MaxBytes: 1 << 20,
-		Log:      discardLog(),
+		// Tests use satellites freely; trust_test.go checks the limits.
+		SatellitePermissions: openPermissions,
+		Log:                  discardLog(),
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(s.Shutdown)
 	return s
+}
+
+var openPermissions = Permissions{
+	Publish:   []string{"doggie.>", "doggiecmd.>", "doggiesig.>"},
+	Subscribe: []string{"doggie.>", "doggiecmd.>", "doggiesig.>"},
 }
 
 func connect(t *testing.T, s *Server, name string) *Conn {

@@ -1,8 +1,9 @@
 // Package bus is DOGGIE's event bus: an embedded NATS server whose events are
 // persisted in a JetStream log, plus typed helpers to publish and subscribe.
 //
-// Components inside the process connect without networking. Satellites in
-// other processes or machines connect over TCP with the bus token.
+// Components inside the process connect without networking, with full
+// access. Satellites in other processes or machines connect over TCP with the
+// bus token and restricted permissions (see trust.go).
 package bus
 
 import (
@@ -31,8 +32,12 @@ const (
 type Options struct {
 	// Listen is host:port for TCP clients. Empty means in-process only.
 	Listen string
-	// Token authenticates every client, in-process ones included. Required.
+	// Token authenticates satellites (TCP clients). Required. In-process
+	// components use a separate secret that never leaves memory.
 	Token string
+	// SatellitePermissions is what satellites may do beyond receiving replies
+	// and reading the event log.
+	SatellitePermissions Permissions
 	// StoreDir is where JetStream persists the event log.
 	StoreDir string
 	// MaxAge and MaxBytes bound the event log.
@@ -46,9 +51,9 @@ type Options struct {
 
 // Server is the embedded NATS server.
 type Server struct {
-	ns    *server.Server
-	token string
-	log   *slog.Logger
+	ns         *server.Server
+	coreSecret string
+	log        *slog.Logger
 }
 
 // Start runs the embedded server and makes sure the event log stream exists.
@@ -56,10 +61,18 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	if opts.Token == "" {
 		return nil, errors.New("bus: token is required")
 	}
+	coreSecret, err := randomSecret()
+	if err != nil {
+		return nil, fmt.Errorf("bus: generate core secret: %w", err)
+	}
+	natsUsers, err := users(coreSecret, opts.Token, opts.SatellitePermissions)
+	if err != nil {
+		return nil, err
+	}
 	sopts := &server.Options{
 		ServerName:             "doggie",
 		DontListen:             opts.Listen == "",
-		Authorization:          opts.Token,
+		Users:                  natsUsers,
 		JetStream:              true,
 		StoreDir:               opts.StoreDir,
 		NoSigs:                 true,
@@ -93,7 +106,7 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		return nil, err
 	}
 
-	s := &Server{ns: ns, token: opts.Token, log: opts.Log}
+	s := &Server{ns: ns, coreSecret: coreSecret, log: opts.Log}
 	if err := s.ensureEventLog(ctx, opts.MaxAge, opts.MaxBytes); err != nil {
 		s.Shutdown()
 		return nil, err
@@ -155,7 +168,7 @@ func (s *Server) Connect(name string) (*Conn, error) {
 func (s *Server) dial(name string) (*nats.Conn, error) {
 	nc, err := nats.Connect("",
 		nats.InProcessServer(s.ns),
-		nats.Token(s.token),
+		nats.UserInfo(coreUser, s.coreSecret),
 		nats.Name(name),
 		errorHandler(s.log, name),
 	)
@@ -194,7 +207,7 @@ type DialOptions struct {
 // another process.
 func Dial(url string, opts DialOptions) (*Conn, error) {
 	natsOpts := []nats.Option{
-		nats.Token(opts.Token),
+		nats.UserInfo(satelliteUser, opts.Token),
 		nats.Name(opts.Name),
 		nats.MaxReconnects(-1),
 		errorHandler(opts.Log, opts.Name),

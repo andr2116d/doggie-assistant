@@ -71,6 +71,9 @@ func (s Subject[T]) Type() string { return s.typ }
 
 func (s Subject[T]) subject() string { return subjectPrefix + s.typ }
 
+// Wire returns the NATS subject of the event type.
+func (s Subject[T]) Wire() string { return s.subject() }
+
 // PublishOption customizes a published event.
 type PublishOption func(*Meta)
 

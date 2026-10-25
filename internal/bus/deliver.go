@@ -2,6 +2,9 @@ package bus
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +70,13 @@ func subscribeChan[E any](ctx context.Context, c *Conn, subject, queue string, d
 	// Wait for the server to register the subscription, so every message
 	// sent after we return is delivered, even from another connection.
 	if err := c.nc.FlushTimeout(5 * time.Second); err != nil {
+		sub.Unsubscribe()
+		return nil, err
+	}
+	// The server refuses forbidden subscriptions asynchronously, before
+	// answering the flush: surface it instead of returning a subscription
+	// that will never receive anything.
+	if err := c.nc.LastError(); errors.Is(err, nats.ErrPermissionViolation) && strings.Contains(err.Error(), fmt.Sprintf("Subscription to %q", subject)) {
 		sub.Unsubscribe()
 		return nil, err
 	}

@@ -59,6 +59,9 @@ func (c Command[Req, Resp]) With(tokens ...string) Command[Req, Resp] {
 
 func (c Command[Req, Resp]) subject() string { return commandPrefix + c.name }
 
+// Wire returns the NATS subject of the command.
+func (c Command[Req, Resp]) Wire() string { return c.subject() }
+
 type replyMsg struct {
 	Data  json.RawMessage `json:"data,omitempty"`
 	Error string          `json:"error,omitempty"`

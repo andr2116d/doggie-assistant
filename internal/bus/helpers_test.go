@@ -54,6 +54,7 @@ func opts(storeDir, listen string, log *slog.Logger) Options {
 	return Options{
 		Listen: listen, Token: "test-token", StoreDir: storeDir,
 		MaxAge: time.Hour, MaxBytes: 64 << 20, Log: log,
+		SatellitePermissions: openPermissions,
 	}
 }
 

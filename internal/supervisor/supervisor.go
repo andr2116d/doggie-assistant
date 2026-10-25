@@ -17,8 +17,10 @@ import (
 //
 // Run must block until ctx is cancelled. Returning earlier, with or without an
 // error, or panicking counts as a crash, and the component is restarted.
-// Dependencies (bus connection, config, ...) are passed to the component's
-// constructor, not to Run.
+// Each run gets its own ctx, cancelled when that run ends, so subscriptions
+// and goroutines tied to it are released before the restart. Dependencies
+// (bus connection, config, ...) are passed to the component's constructor,
+// not to Run, so a restarted component must reset any state it keeps.
 type Component interface {
 	Name() string
 	Run(ctx context.Context) error
@@ -103,7 +105,9 @@ func (s *Supervisor) supervise(ctx context.Context, c Component) {
 	for {
 		log.Debug("starting")
 		started := time.Now()
-		err, stack := runSafely(ctx, c)
+		runCtx, cancelRun := context.WithCancel(ctx)
+		err, stack := runSafely(runCtx, c)
+		cancelRun()
 
 		if ctx.Err() != nil {
 			if err != nil && !errors.Is(err, context.Canceled) {

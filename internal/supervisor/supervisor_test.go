@@ -123,3 +123,41 @@ func TestShutdownTimeoutNamesStuckComponents(t *testing.T) {
 		t.Fatalf("err = %v, want it to name only the stuck component", err)
 	}
 }
+
+// ctxRecorder panics on its first run and records the ctx of every run.
+type ctxRecorder struct {
+	n    atomic.Int32
+	runs chan context.Context
+}
+
+func (r *ctxRecorder) Name() string { return "recorder" }
+
+func (r *ctxRecorder) Run(ctx context.Context) error {
+	r.runs <- ctx
+	if r.n.Add(1) == 1 {
+		panic("boom")
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestCrashedRunContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &ctxRecorder{runs: make(chan context.Context, 2)}
+	errc := runInBackground(testSupervisor(), ctx, r)
+
+	waitFor(t, func() bool { return len(r.runs) == 2 })
+	first, second := <-r.runs, <-r.runs
+	select {
+	case <-first.Done():
+	default:
+		t.Fatal("the crashed run's ctx is still alive: its subscriptions and goroutines would leak into the restart")
+	}
+	if second.Err() != nil {
+		t.Fatal("the restarted run's ctx is already cancelled")
+	}
+	cancel()
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+}

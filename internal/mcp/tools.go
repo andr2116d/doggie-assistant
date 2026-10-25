@@ -104,7 +104,7 @@ func addTool[In, Out any](s *Server, t *sdk.Tool, risk events.Risk, h func(ctx c
 
 type startTaskIn struct {
 	Kind        string         `json:"kind" jsonschema:"the task kind, one of those listed in this tool's description"`
-	Description string         `json:"description" jsonschema:"what the task does, in a few words in the user's language, e.g. Open Netflix on the TV"`
+	Description string         `json:"description" jsonschema:"what the task does, in a few words in the user's language, e.g. Wait 30 seconds"`
 	Input       map[string]any `json:"input,omitempty" jsonschema:"the task's input, matching the kind's input schema"`
 }
 

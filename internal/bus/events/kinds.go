@@ -32,8 +32,8 @@ type TaskKind struct {
 var (
 	KindDemoSleep = TaskKind{
 		Name: "demo.sleep",
-		Description: "Pretend to perform a real-world action, such as opening an app on the TV, " +
-			"until real device tools exist. It takes the given number of seconds and reports progress every second.",
+		Description: "Wait the given number of seconds, reporting progress every second. " +
+			"Until real tools exist, it also stands in for any action that takes time.",
 		Risk: RiskAct,
 		InputSchema: json.RawMessage(`{
 			"type": "object",

@@ -13,6 +13,7 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -78,9 +79,10 @@ type Manager struct {
 	timers    map[string]*time.Timer
 	timeouts  chan string
 	results   chan func()
-	seen      map[string]bool      // event IDs applied during recovery
-	answering map[string]bool      // tasks with an answer being delivered
-	lastBeat  map[string]time.Time // last sign of life of each active task
+	seen      map[string]bool            // event IDs applied during recovery
+	answering map[string]bool            // tasks with an answer being delivered
+	lastBeat  map[string]time.Time       // last sign of life of each active task
+	secrets   map[string]json.RawMessage // results of sensitive tasks, reported before their redacted task.done
 }
 
 // withDefaults fills zero fields with the defaults and keeps MaxTimeout
@@ -130,6 +132,7 @@ func (m *Manager) reset() {
 	m.seen = make(map[string]bool)
 	m.answering = make(map[string]bool)
 	m.lastBeat = make(map[string]time.Time)
+	m.secrets = make(map[string]json.RawMessage)
 }
 
 // Name implements supervisor.Component.
@@ -166,6 +169,10 @@ func (m *Manager) Run(ctx context.Context) error {
 		return err
 	}
 	gets, err := bus.Serve(ctx, m.conn, events.GetTask)
+	if err != nil {
+		return err
+	}
+	reports, err := bus.Serve(ctx, m.conn, events.ReportResult)
 	if err != nil {
 		return err
 	}
@@ -216,6 +223,11 @@ func (m *Manager) Run(ctx context.Context) error {
 			} else {
 				in.Reply(t.Info())
 			}
+		case in, ok := <-reports:
+			if !ok {
+				return ctx.Err()
+			}
+			m.report(in)
 		case beat, ok := <-beats:
 			if !ok {
 				return ctx.Err()
@@ -324,6 +336,12 @@ func (m *Manager) apply(env bus.Envelope) *task.Task {
 		m.log.Debug("ignoring task event", "type", env.Type, "task", id, "err", err)
 		return nil
 	}
+	if env.Type == events.TaskDone.Type() {
+		if result, ok := m.secrets[id]; ok {
+			t.SetResult(result)
+			delete(m.secrets, id)
+		}
+	}
 	if wasTerminal {
 		return nil
 	}
@@ -364,7 +382,11 @@ func (m *Manager) start(ctx context.Context, in bus.Incoming[events.TaskSpec, ev
 	now := time.Now().UTC()
 	t := task.New(id, spec, now, now.Add(timeout))
 	m.tasks[id] = t
-	publish(ctx, m, events.TaskCreated, t.Info())
+	logged := t.Info()
+	if logged.Sensitive {
+		logged.Input = nil // the worker gets it in the run request, never logged
+	}
+	publish(ctx, m, events.TaskCreated, logged)
 	m.armTimer(ctx, id, timeout)
 
 	info := t.Info()
@@ -524,6 +546,24 @@ func (m *Manager) checkLiveness(ctx context.Context) {
 	}
 }
 
+// report stores the result of a sensitive task until its redacted
+// task.done arrives.
+func (m *Manager) report(in bus.Incoming[events.TaskDoneData, events.Ack]) {
+	t, err := m.lookup(in.Req.TaskID)
+	switch {
+	case err != nil:
+		in.Fail(err)
+	case !t.Info().Sensitive:
+		in.Fail(fmt.Errorf("task %s is not sensitive: publish its result in task.done", t.ID()))
+	case t.Status().Terminal():
+		in.Fail(fmt.Errorf("task %s is already %s", t.ID(), t.Status()))
+	default:
+		m.secrets[t.ID()] = in.Req.Result
+		m.alive(t.ID())
+		in.Reply(events.Ack{})
+	}
+}
+
 func (m *Manager) timeout(ctx context.Context, id string) {
 	t, ok := m.tasks[id]
 	if !ok || t.Status().Terminal() {
@@ -550,6 +590,7 @@ func (m *Manager) finished(ctx context.Context, t *task.Task) {
 		delete(m.timers, t.ID())
 	}
 	delete(m.lastBeat, t.ID())
+	delete(m.secrets, t.ID())
 	if t.Status() == events.StatusDone {
 		return
 	}

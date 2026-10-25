@@ -211,7 +211,17 @@ func run(ctx context.Context, conn *bus.Conn, log *slog.Logger, in bus.Incoming[
 			publishFailed(pubCtx, conn, log, info.ID, fmt.Sprintf("encode result: %v", err))
 			return
 		}
-		if _, err := bus.Publish(pubCtx, conn, events.TaskDone, events.TaskDoneData{TaskID: info.ID, Result: raw}); err != nil {
+		done := events.TaskDoneData{TaskID: info.ID, Result: raw}
+		if info.Sensitive {
+			// The result goes to the manager in a command, outside the event
+			// log; the logged event only says the task is done.
+			if _, err := bus.Request(pubCtx, conn, events.ReportResult, done); err != nil {
+				publishFailed(pubCtx, conn, log, info.ID, fmt.Sprintf("deliver result: %v", err))
+				return
+			}
+			done = events.TaskDoneData{TaskID: info.ID, Redacted: true}
+		}
+		if _, err := bus.Publish(pubCtx, conn, events.TaskDone, done); err != nil {
 			// E.g. a result above the bus's max message size: fail the task
 			// instead of leaving it running until its timeout.
 			log.Warn("publish task done", "err", err)

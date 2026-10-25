@@ -127,6 +127,14 @@ func (t *Task) Cancel(reason string, now time.Time) error {
 	return nil
 }
 
+// SetResult restores the result of a done sensitive task, which its
+// task.done event leaves out (it only reaches the manager in memory).
+func (t *Task) SetResult(result json.RawMessage) {
+	if t.info.Status == events.StatusDone {
+		t.info.Result = result
+	}
+}
+
 // Apply applies a task event other than task.created, using the event's time.
 // EventTaskID tells which task an event is about.
 //

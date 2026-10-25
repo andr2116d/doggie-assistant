@@ -1,0 +1,546 @@
+package brain
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/andr2116d/doggie-assistant/internal/brain/llm"
+	"github.com/andr2116d/doggie-assistant/internal/bus"
+	"github.com/andr2116d/doggie-assistant/internal/bus/events"
+	"github.com/andr2116d/doggie-assistant/internal/mcp"
+)
+
+func TestSaysTheReplyAndRecordsTheTurn(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.fake.set(func(f *fake) {
+		f.reply = func(context.Context, llm.Request) []llm.Output {
+			return []llm.Output{
+				{Text: "Ya estoy en eso."},
+				{Tool: &llm.ToolCall{Name: "list_tasks", Input: json.RawMessage(`{}`)}},
+				{Text: "¿Sabes por qué…?"},
+				{Done: &llm.Done{Model: "m1", FirstText: 900 * time.Millisecond, Usage: &llm.Usage{FiveHour: 0.2, SevenDay: 0.4}}},
+			}
+		}
+	})
+	id := h.say("", "terminal", "  ábreme netflix y cuéntame un chiste  ")
+
+	for _, want := range []string{"Ya estoy en eso.", "¿Sabes por qué…?"} {
+		s := h.nextSpeak()
+		if s.Data.Text != want || s.Data.ThreadID != "terminal" || s.Data.Channel != "terminal" || s.CausedBy != id {
+			t.Errorf("out.speak = %+v (caused by %s), want %q caused by %s", s.Data, s.CausedBy, want, id)
+		}
+	}
+	turn := h.nextTurn()
+	d := turn.Data
+	if d.ThreadID != "terminal" || d.Channel != "terminal" || d.Provider != "fake" || d.Model != "m1" || d.FirstTextMS != 900 || d.Error != "" || turn.CausedBy != id {
+		t.Errorf("turn = %+v", d)
+	}
+	if len(d.Inputs) != 1 || d.Inputs[0].Said != "ábreme netflix y cuéntame un chiste" || d.Inputs[0].EventID != id {
+		t.Errorf("inputs = %+v", d.Inputs)
+	}
+	if len(d.Replies) != 2 || len(d.Actions) != 1 || d.Actions[0].Tool != "list_tasks" || d.FiveHourUsage != 0.2 || d.SevenDayUsage != 0.4 {
+		t.Errorf("turn = %+v", d)
+	}
+	// The provider got the thread to act for and the built context.
+	reqs := h.fake.requests()
+	if len(reqs) != 1 || reqs[0].Turn != (mcp.Turn{ThreadID: "terminal", Channel: "terminal"}) {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	mustContain(t, reqs[0].Input, "<world>", "Active tasks: none", `<said channel="terminal"`, "ábreme netflix y cuéntame un chiste</said>")
+}
+
+func TestInputsArrivingMidTurnWaitForTheNextTurn(t *testing.T) {
+	h := newHarness(t, Options{})
+	gate := make(chan struct{})
+	h.fake.set(func(f *fake) { f.gate = gate })
+	h.say("th", "terminal", "uno")
+	waitFor(t, "the first turn to start", func() bool { return len(h.fake.requests()) == 1 })
+	h.say("th", "terminal", "dos")
+	h.say("th", "terminal", "tres")
+	time.Sleep(100 * time.Millisecond)
+	if n := len(h.fake.requests()); n != 1 {
+		t.Fatalf("%d turns ran at once in one thread", n)
+	}
+	close(gate)
+	first, second := h.nextTurn(), h.nextTurn()
+	if len(first.Data.Inputs) != 1 || len(second.Data.Inputs) != 2 {
+		t.Errorf("inputs per turn: %d then %d, want 1 then 2", len(first.Data.Inputs), len(second.Data.Inputs))
+	}
+	in := h.fake.requests()[1].Input
+	mustContain(t, in, ">dos</said>", ">tres</said>")
+	if strings.Index(in, ">dos<") > strings.Index(in, ">tres<") {
+		t.Error("queued inputs out of order")
+	}
+	// The second prompt has the first turn as history.
+	mustContain(t, in, "<conversation>", ">uno</said>", "<reply>respuesta 1</reply>")
+	h.noTurn(200 * time.Millisecond)
+}
+
+// The demo of step 4: an order and a joke, then the task's end is told in
+// the same thread.
+func TestTaskEndIsAnnouncedInItsThread(t *testing.T) {
+	h := newHarness(t, Options{})
+	var taskID string
+	h.fake.set(func(f *fake) {
+		f.reply = func(ctx context.Context, req llm.Request) []llm.Output {
+			if strings.Contains(req.Input, "ábreme netflix") && !strings.Contains(req.Input, "<event") {
+				var tool llm.Output
+				taskID, tool = h.startTask(ctx, req.Turn.ThreadID, "demo.sleep", "Abrir Netflix")
+				return []llm.Output{{Text: "Ya estoy en eso."}, tool, {Text: "Un chiste…"}}
+			}
+			return []llm.Output{{Text: "Listo, Netflix abierto."}}
+		}
+	})
+	h.say("terminal", "terminal", "ábreme netflix y cuéntame un chiste")
+	if turn := h.nextTurn(); len(turn.Data.Actions) != 1 || len(turn.Data.Replies) != 2 {
+		t.Fatalf("first turn = %+v", turn.Data)
+	}
+	h.release <- struct{}{}
+	turn := h.nextTurn()
+	if len(turn.Data.Inputs) != 1 || turn.Data.Inputs[0].Task == nil {
+		t.Fatalf("second turn inputs = %+v", turn.Data.Inputs)
+	}
+	task := turn.Data.Inputs[0].Task
+	if task.Type != "task.done" || task.TaskID != taskID || task.Kind != "demo.sleep" || task.Description != "Abrir Netflix" || string(task.Result) != `{"ok":true}` {
+		t.Errorf("task input = %+v", task)
+	}
+	in := h.fake.requests()[1].Input
+	mustContain(t, in, `<event type="task.done" task="`+taskID+`"`, `finished. Result: <data>{"ok":true}</data>`)
+}
+
+func TestTaskEndingDuringTheTurnIsAnnouncedAfterIt(t *testing.T) {
+	h := newHarness(t, Options{})
+	close(h.release) // tasks end at once
+	finishedMidTurn := make(chan struct{})
+	h.fake.set(func(f *fake) {
+		f.reply = func(ctx context.Context, req llm.Request) []llm.Output {
+			if strings.Contains(req.Input, "<event") {
+				return []llm.Output{{Text: "Listo."}}
+			}
+			id, tool := h.startTask(ctx, req.Turn.ThreadID, "demo.sleep", "Rápida")
+			h.waitStatus(id, events.StatusDone) // the task is over before the turn
+			close(finishedMidTurn)
+			return []llm.Output{tool, {Text: "Voy."}}
+		}
+	})
+	h.say("th", "terminal", "haz algo rápido")
+	<-finishedMidTurn
+	first, second := h.nextTurn(), h.nextTurn()
+	if first.Data.Inputs[0].Said == "" || second.Data.Inputs[0].Task == nil || second.Data.Inputs[0].Task.Type != "task.done" {
+		t.Errorf("turns: %+v then %+v", first.Data.Inputs, second.Data.Inputs)
+	}
+}
+
+func TestEventsOfThreadsNobodyTalksInAreIgnored(t *testing.T) {
+	h := newHarness(t, Options{})
+	close(h.release)
+	for _, thread := range []string{"", "cli", "unknown-thread"} {
+		ref, err := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: thread})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.waitStatus(ref.TaskID, events.StatusDone)
+	}
+	h.noTurn(300 * time.Millisecond)
+}
+
+func TestProgressAndRunningAreNotAnnounced(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	ref, err := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.waitStatus(ref.TaskID, events.StatusRunning)
+	bus.Publish(context.Background(), h.client, events.TaskProgress, events.TaskProgressData{TaskID: ref.TaskID, Message: "1/5"})
+	h.noTurn(300 * time.Millisecond)
+	close(h.release)
+	if turn := h.nextTurn(); turn.Data.Inputs[0].Task.Type != "task.done" {
+		t.Errorf("turn = %+v", turn.Data.Inputs)
+	}
+}
+
+func TestQuestionsAndFailuresAreAnnounced(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	ask, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.ask", ThreadID: "th"})
+	turn := h.nextTurn()
+	if task := turn.Data.Inputs[0].Task; task == nil || task.Type != "task.needs_input" || task.Question != "¿Qué perfil?" || len(task.Options) != 2 {
+		t.Fatalf("question turn = %+v", turn.Data.Inputs)
+	}
+	mustContain(t, h.fake.requests()[1].Input, "needs an answer: <data>¿Qué perfil?</data> Options: <data>Ana | Luis</data>")
+
+	// A failure (here the task kind has no worker) is told too.
+	if _, err := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "nobody.serves", ThreadID: "th"}); err == nil {
+		t.Fatal("started a task nobody serves")
+	}
+	turn = h.nextTurn()
+	if task := turn.Data.Inputs[0].Task; task == nil || task.Type != "task.failed" || !strings.Contains(task.Reason, "no worker") {
+		t.Fatalf("failure turn = %+v", turn.Data.Inputs)
+	}
+	bus.Request(context.Background(), h.client, events.CancelTask, events.TaskCancelRequest{TaskID: ask.TaskID, Reason: "ya no"})
+	turn = h.nextTurn()
+	if task := turn.Data.Inputs[0].Task; task == nil || task.Type != "task.cancelled" || task.Reason != "ya no" {
+		t.Errorf("cancel turn = %+v", turn.Data.Inputs)
+	}
+}
+
+// When the LLM cancels a task itself, the cancellation is not told again.
+func TestCancellationByTheLLMIsNotAnnounced(t *testing.T) {
+	h := newHarness(t, Options{})
+	var id string
+	h.fake.set(func(f *fake) {
+		f.reply = func(ctx context.Context, req llm.Request) []llm.Output {
+			switch in := inputOf(req.Input); {
+			case strings.Contains(in, "empieza"):
+				var tool llm.Output
+				id, tool = h.startTask(ctx, req.Turn.ThreadID, "demo.sleep", "Larga")
+				return []llm.Output{tool, {Text: "Empezada."}}
+			case strings.Contains(in, "cancela"):
+				bus.Request(ctx, h.client, events.CancelTask, events.TaskCancelRequest{TaskID: id})
+				in, _ := json.Marshal(map[string]string{"task_id": id})
+				return []llm.Output{{Tool: &llm.ToolCall{Name: "cancel_task", Input: in}}, {Text: "Cancelada."}}
+			}
+			return []llm.Output{{Text: "otra cosa"}}
+		}
+	})
+	h.say("th", "terminal", "empieza")
+	h.nextTurn()
+	h.say("th", "terminal", "cancela")
+	h.nextTurn()
+	h.waitStatus(id, events.StatusCancelled)
+	h.noTurn(300 * time.Millisecond)
+
+	// A cancellation by someone else is told.
+	other, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
+	bus.Request(context.Background(), h.client, events.CancelTask, events.TaskCancelRequest{TaskID: other.TaskID})
+	if turn := h.nextTurn(); turn.Data.Inputs[0].Task == nil || turn.Data.Inputs[0].Task.TaskID != other.TaskID {
+		t.Errorf("turn = %+v", turn.Data.Inputs)
+	}
+}
+
+// A task ends once: a second end in the log (e.g. done racing a timeout) and
+// a question after the end are not told.
+func TestSecondEndsAndStaleQuestionsAreIgnored(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	ctx := context.Background()
+	info := events.TaskInfo{ID: "t900", TaskSpec: events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"}, Status: events.StatusPending}
+	bus.Publish(ctx, h.client, events.TaskCreated, info)
+	bus.Publish(ctx, h.client, events.TaskDone, events.TaskDoneData{TaskID: "t900"})
+	bus.Publish(ctx, h.client, events.TaskFailed, events.TaskFailedData{TaskID: "t900", Error: "timed out"})
+	bus.Publish(ctx, h.client, events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: "t900", Question: "¿tarde?"})
+	turn := h.nextTurn()
+	if len(turn.Data.Inputs) != 1 || turn.Data.Inputs[0].Task.Type != "task.done" {
+		t.Errorf("inputs = %+v", turn.Data.Inputs)
+	}
+	h.noTurn(300 * time.Millisecond)
+}
+
+// Events of a task the brain didn't see being created (e.g. it restarted)
+// are looked up in the task manager, in order.
+func TestUnknownTasksAreLookedUpInOrder(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	h.stop()
+	// Created while the brain is down.
+	ask, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.ask", ThreadID: "th"})
+	h.waitStatus(ask.TaskID, events.StatusWaitingInput)
+	h.startBrain(Options{})
+	// The question was asked while the brain was down: only the answer and
+	// the end are new.
+	bus.Request(context.Background(), h.client, events.AnswerTask, events.TaskAnswer{TaskID: ask.TaskID, Answer: "Luis"})
+	turn := h.nextTurn()
+	if task := turn.Data.Inputs[0].Task; task == nil || task.Type != "task.done" || task.Kind != "demo.ask" || string(task.Result) != `{"answer":"Luis"}` {
+		t.Errorf("inputs = %+v", turn.Data.Inputs)
+	}
+
+	// Two events of the same unknown task keep their order through the lookup.
+	ctx := context.Background()
+	bus.Publish(ctx, h.client, events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: ask.TaskID + "x", Question: "q"})
+	h.noTurn(200 * time.Millisecond) // unknown to the manager: dropped
+}
+
+func TestTurnsRunInParallelUpToTheLimit(t *testing.T) {
+	h := newHarness(t, Options{MaxTurns: 2})
+	gate := make(chan struct{})
+	h.fake.set(func(f *fake) { f.gate = gate })
+	for i := range 5 {
+		h.say(fmt.Sprintf("th%d", i), "terminal", "hola")
+	}
+	waitFor(t, "two turns", func() bool { return len(h.fake.requests()) == 2 })
+	time.Sleep(100 * time.Millisecond)
+	if n := len(h.fake.requests()); n != 2 {
+		t.Errorf("%d turns started with a limit of 2", n)
+	}
+	close(gate)
+	threads := map[string]bool{}
+	for range 5 {
+		threads[h.nextTurn().Data.ThreadID] = true
+	}
+	if len(threads) != 5 {
+		t.Errorf("answered threads: %v", threads)
+	}
+	h.fake.mu.Lock()
+	defer h.fake.mu.Unlock()
+	if h.fake.maxRunning > 2 {
+		t.Errorf("%d turns ran at once", h.fake.maxRunning)
+	}
+}
+
+func TestProviderFailures(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.fake.set(func(f *fake) { f.fail = errBoom })
+	h.say("th", "terminal", "uno")
+	turn := h.nextTurn()
+	if turn.Data.Error != "boom" || len(turn.Data.Replies) != 0 {
+		t.Errorf("turn = %+v", turn.Data)
+	}
+	// A turn that fails after saying something keeps what it said.
+	h.fake.set(func(f *fake) {
+		f.fail = nil
+		f.reply = func(context.Context, llm.Request) []llm.Output {
+			return []llm.Output{{Text: "Voy"}, {Done: &llm.Done{Err: llm.ErrTurnTimeout}}}
+		}
+	})
+	h.say("th", "terminal", "dos")
+	if s := h.nextSpeak(); s.Data.Text != "Voy" {
+		t.Errorf("said %q", s.Data.Text)
+	}
+	turn = h.nextTurn()
+	if turn.Data.Error != llm.ErrTurnTimeout.Error() || len(turn.Data.Replies) != 1 {
+		t.Errorf("turn = %+v", turn.Data)
+	}
+	// The thread goes on: the failed turn without output left no history,
+	// the one with output did.
+	h.fake.set(func(f *fake) { f.reply = nil })
+	h.say("th", "terminal", "tres")
+	h.nextTurn()
+	in := h.fake.requests()[2].Input
+	mustContain(t, in, ">dos</said>", "<reply>Voy</reply>")
+	mustNotContain(t, in, ">uno</said>")
+}
+
+func TestHistoryIsBoundedAndSurvivesARestart(t *testing.T) {
+	h := newHarness(t, Options{HistoryTurns: 3})
+	for i := range 5 {
+		h.say("th", "terminal", fmt.Sprintf("frase %d", i))
+		h.nextTurn()
+	}
+	in := h.fake.requests()[4].Input
+	mustContain(t, in, ">frase 1</said>", ">frase 3</said>", ">frase 4</said>")
+	mustNotContain(t, in, ">frase 0</said>")
+
+	h.stop()
+	h.startBrain(Options{HistoryTurns: 3})
+	h.say("th", "terminal", "después del reinicio")
+	h.nextTurn()
+	in = h.fake.requests()[0].Input
+	mustContain(t, in, ">frase 2</said>", ">frase 4</said>", "<reply>respuesta 5</reply>", ">después del reinicio</said>")
+	mustNotContain(t, in, ">frase 1</said>", "probe")
+}
+
+func TestInvalidUtterancesAreIgnored(t *testing.T) {
+	h := newHarness(t, Options{})
+	for name, u := range map[string]events.UtteranceData{
+		"no channel":       {Text: "hola"},
+		"empty text":       {Channel: "terminal", Text: ""},
+		"blank text":       {Channel: "terminal", Text: " \n\t "},
+		"long thread":      {Channel: "terminal", ThreadID: strings.Repeat("t", maxIDBytes+1), Text: "hola"},
+		"long channel":     {Channel: strings.Repeat("c", maxIDBytes+1), Text: "hola"},
+		"thread space":     {Channel: "terminal", ThreadID: "a b", Text: "hola"},
+		"channel newline":  {Channel: "term\ninal", Text: "hola"},
+		"too long":         {Channel: "terminal", Text: strings.Repeat("ñ", maxUtteranceRunes+1)},
+		"control in id":    {Channel: "term\x00", Text: "hola"},
+		"thread is spaces": {Channel: "terminal", ThreadID: "   ", Text: "hola"},
+	} {
+		if _, err := bus.Publish(context.Background(), h.client, events.UserUtterance, u); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	h.noTurn(300 * time.Millisecond)
+	// The longest valid ones still work.
+	h.say(strings.Repeat("t", maxIDBytes), "voice:living_room", strings.Repeat("ñ", maxUtteranceRunes))
+	if turn := h.nextTurn(); turn.Data.Channel != "voice:living_room" {
+		t.Errorf("turn = %+v", turn.Data.Channel)
+	}
+}
+
+func TestRepliesGoToTheChannelLastUsed(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("owner", "voice:living_room", "hola")
+	if s := h.nextSpeak(); s.Data.Channel != "voice:living_room" {
+		t.Errorf("channel = %s", s.Data.Channel)
+	}
+	h.nextTurn()
+	h.say("owner", "whatsapp", "sigo por aquí")
+	if s := h.nextSpeak(); s.Data.Channel != "whatsapp" || s.Data.ThreadID != "owner" {
+		t.Errorf("speak = %+v", s.Data)
+	}
+	h.nextTurn()
+	// A task event goes to where the user is now.
+	ref, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "owner"})
+	h.waitStatus(ref.TaskID, events.StatusRunning)
+	close(h.release)
+	if s := h.nextSpeak(); s.Data.Channel != "whatsapp" {
+		t.Errorf("event reply on %s", s.Data.Channel)
+	}
+}
+
+func TestPromptListsTheActiveTasks(t *testing.T) {
+	h := newHarness(t, Options{})
+	mine, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", Description: "Mía", ThreadID: "th"})
+	theirs, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", Description: "Ajena", ThreadID: "otro"})
+	h.waitStatus(theirs.TaskID, events.StatusRunning)
+	h.say("th", "terminal", "¿cómo va?")
+	h.nextTurn()
+	in := h.fake.requests()[0].Input
+	mustContain(t, in, "- "+mine.TaskID+" demo.sleep <data>Mía</data>: running, asked in this conversation", "- "+theirs.TaskID+" demo.sleep <data>Ajena</data>: running\n")
+	close(h.release)
+}
+
+func TestQueueAndThreadsAreBounded(t *testing.T) {
+	h := newHarness(t, Options{})
+	gate := make(chan struct{})
+	h.fake.set(func(f *fake) { f.gate = gate })
+	h.say("th", "terminal", "primera")
+	waitFor(t, "the first turn", func() bool { return len(h.fake.requests()) == 1 })
+	for i := range maxPending + 10 {
+		h.say("th", "terminal", fmt.Sprintf("cola %d", i))
+	}
+	for i := range maxThreads + 20 {
+		h.say(fmt.Sprintf("hilo%d", i), "terminal", "hola")
+	}
+	time.Sleep(300 * time.Millisecond) // let the brain take them all in
+	close(gate)
+	// Find th's second turn: the one with its queue.
+	var queued events.BrainTurnData
+	for len(queued.Inputs) < 2 {
+		if ev := h.nextTurn(); ev.Data.ThreadID == "th" {
+			queued = ev.Data
+		}
+	}
+	if n := len(queued.Inputs); n != maxPending || queued.Inputs[n-1].Said != fmt.Sprintf("cola %d", maxPending+9) {
+		t.Errorf("queued turn has %d inputs ending with %q, want the newest %d", n, queued.Inputs[n-1].Said, maxPending)
+	}
+	h.stop()
+	if n := len(h.brain.threads); n > maxThreads {
+		t.Errorf("%d threads kept, max %d", n, maxThreads)
+	}
+}
+
+func TestStopsPromptlyMidTurn(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.fake.set(func(f *fake) { f.gate = make(chan struct{}) })
+	h.say("th", "terminal", "hola")
+	waitFor(t, "the turn", func() bool { return len(h.fake.requests()) == 1 })
+	start := time.Now()
+	if err := h.stop(); err != context.Canceled {
+		t.Errorf("Run returned %v", err)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("stopping took %s", took)
+	}
+	// The interrupted turn is still recorded.
+	if turn := h.nextTurn(); turn.Data.Error != context.Canceled.Error() {
+		t.Errorf("turn = %+v", turn.Data)
+	}
+}
+
+func TestRunFailsWithoutAProvider(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.stop()
+	b := New(connect(t, h.srv, "brain-x"), discardLog(), Options{NewProvider: func(*mcp.Server) (llm.Brain, func(), error) { return nil, nil, errBoom }})
+	if err := b.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("Run = %v", err)
+	}
+	if err := New(connect(t, h.srv, "brain-y"), discardLog(), Options{}).Run(context.Background()); err == nil {
+		t.Error("Run without a provider succeeded")
+	}
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// After a restart the brain doesn't remember which tasks ended: a late
+// question for a task the manager says is over is still not asked.
+func TestLateQuestionAfterARestartIsIgnored(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	h.stop()
+	ref, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
+	h.waitStatus(ref.TaskID, events.StatusRunning)
+	h.release <- struct{}{}
+	h.waitStatus(ref.TaskID, events.StatusDone)
+	h.startBrain(Options{})
+	bus.Publish(context.Background(), h.client, events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: ref.TaskID, Question: "¿tarde?"})
+	h.noTurn(400 * time.Millisecond)
+}
+
+// Events of a task the brain must look up all arrive, in order, even when
+// they come back to back.
+func TestLookedUpEventsKeepTheirOrder(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	gate := make(chan struct{})
+	h.fake.set(func(f *fake) { f.gate = gate })
+	h.say("th", "terminal", "ocupado") // hold the thread so the events queue up
+	waitFor(t, "the busy turn", func() bool { return len(h.fake.requests()) == 1 })
+	h.stop()
+	ask, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.ask", ThreadID: "th"})
+	h.waitStatus(ask.TaskID, events.StatusWaitingInput)
+	h.startBrain(Options{})
+	h.fake.set(func(f *fake) { f.gate = gate })
+	h.say("th", "terminal", "ocupado otra vez")
+	waitFor(t, "the busy turn", func() bool { return len(h.fake.requests()) == 1 })
+	ctx := context.Background()
+	bus.Publish(ctx, h.client, events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: ask.TaskID, Question: "primera"})
+	bus.Publish(ctx, h.client, events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: ask.TaskID, Question: "segunda"})
+	time.Sleep(300 * time.Millisecond)
+	close(gate)
+	var questions []string
+	for len(questions) < 2 {
+		for _, in := range h.nextTurn().Data.Inputs {
+			if in.Task != nil {
+				questions = append(questions, in.Task.Question)
+			}
+		}
+	}
+	if questions[0] != "primera" || questions[1] != "segunda" {
+		t.Errorf("questions = %q", questions)
+	}
+}
+
+// The result of a sensitive task never reaches the LLM or the turn record,
+// even if an event carried it.
+func TestSensitiveResultsStayHidden(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	ctx := context.Background()
+	bus.Publish(ctx, h.client, events.TaskCreated, events.TaskInfo{ID: "t777", TaskSpec: events.TaskSpec{Kind: "demo.sleep", ThreadID: "th", Sensitive: true}})
+	bus.Publish(ctx, h.client, events.TaskDone, events.TaskDoneData{TaskID: "t777", Result: json.RawMessage(`{"pin":"4821"}`)})
+	turn := h.nextTurn()
+	b, _ := json.Marshal(turn.Data)
+	mustNotContain(t, string(b), "4821")
+	mustNotContain(t, h.fake.requests()[1].Input, "4821")
+	mustContain(t, h.fake.requests()[1].Input, "hidden: it is a sensitive task")
+}

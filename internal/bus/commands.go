@@ -109,7 +109,14 @@ func Request[Req, Resp any](ctx context.Context, c *Conn, cmd Command[Req, Resp]
 type Incoming[Req, Resp any] struct {
 	Req Req
 	msg *nats.Msg
+	// under is the token after the command's name, for ServeUnder.
+	under string
 }
+
+// Under is the token the request came under, with ServeUnder: "kitchen"
+// for a request to cmd.With("kitchen"). The bus's permissions can make it
+// trusted, as they do for the channel of an utterance.
+func (in Incoming[Req, Resp]) Under() string { return in.under }
 
 // Reply answers the command successfully.
 func (in Incoming[Req, Resp]) Reply(resp Resp) error {
@@ -149,12 +156,25 @@ func Queue(name string) ServeOption {
 // is cancelled. Requests that cannot be decoded are failed without being
 // delivered. The command is served when Serve returns.
 func Serve[Req, Resp any](ctx context.Context, c *Conn, cmd Command[Req, Resp], opts ...ServeOption) (<-chan Incoming[Req, Resp], error) {
+	return serve(ctx, c, cmd, cmd.subject(), opts)
+}
+
+// ServeUnder is Serve for the requests to cmd.With(token), for any one
+// token, which Incoming.Under tells.
+func ServeUnder[Req, Resp any](ctx context.Context, c *Conn, cmd Command[Req, Resp], opts ...ServeOption) (<-chan Incoming[Req, Resp], error) {
+	return serve(ctx, c, cmd, cmd.subject()+".*", opts)
+}
+
+func serve[Req, Resp any](ctx context.Context, c *Conn, cmd Command[Req, Resp], subject string, opts []ServeOption) (<-chan Incoming[Req, Resp], error) {
 	var o serveOptions
 	for _, opt := range opts {
 		opt(&o)
 	}
-	out, err := subscribeChan(ctx, c, cmd.subject(), o.queue, func(m *nats.Msg) (Incoming[Req, Resp], bool) {
+	out, err := subscribeChan(ctx, c, subject, o.queue, func(m *nats.Msg) (Incoming[Req, Resp], bool) {
 		in := Incoming[Req, Resp]{msg: m}
+		if under, ok := strings.CutPrefix(m.Subject, cmd.subject()+"."); ok {
+			in.under = under
+		}
 		if err := json.Unmarshal(m.Data, &in.Req); err != nil {
 			in.Fail(fmt.Errorf("bad request: %w", err))
 			return in, false

@@ -252,3 +252,34 @@ func TestRequestToAStoppingHandlerFailsFast(t *testing.T) {
 		}
 	}
 }
+
+// ServeUnder serves a command under any one token and tells which; the
+// command itself and deeper names are not served.
+func TestServeUnder(t *testing.T) {
+	s := startTestServer(t, "")
+	server, client := connect(t, s, "server"), connect(t, s, "client")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	in, err := ServeUnder(ctx, server, testEcho)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for req := range in {
+			req.Reply(echoResp{Text: req.Req.Text, By: req.Under()})
+		}
+	}()
+	for _, token := range []string{"kitchen", "voice:living_room"} {
+		resp, err := Request(ctx, client, testEcho.With(token), echoReq{Text: "hola"})
+		if err != nil || resp.By != token || resp.Text != "hola" {
+			t.Errorf("under %s: %+v, %v", token, resp, err)
+		}
+	}
+	short, scancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer scancel()
+	for _, cmd := range []Command[echoReq, echoResp]{testEcho, testEcho.With("a", "b")} {
+		if _, err := Request(short, client, cmd, echoReq{}); !errors.Is(err, ErrNoHandler) {
+			t.Errorf("%s: err = %v, want no handler", cmd.Name(), err)
+		}
+	}
+}

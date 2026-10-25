@@ -29,6 +29,9 @@ DOGGIE answers or works. Replies show as they are written, and notices
 about tasks arrive when they happen. Ctrl+C or Ctrl+D on an empty line
 quits.
 
+Commands start with "/" and are run by the chat, not by DOGGIE's brain:
+/tasks, /answer <id> <text>, /cancel <id> and /help.
+
 If DOGGIE isn't running on this machine, the chat starts it in this
 process, logging to $XDG_DATA_HOME/doggie/doggie.log, and stops it on quit.
 "doggie run" in a terminal does the same the other way around: it runs
@@ -110,7 +113,7 @@ func chatCmd(args []string) error {
 	}
 	defer conn.Close()
 	if ui.IsInteractive() {
-		fmt.Fprintf(ui, "· talking with DOGGIE at %s on %s; Ctrl+D quits\n", url, o.channel)
+		fmt.Fprintf(ui, "· talking with DOGGIE at %s on %s; /help lists the commands, Ctrl+D quits\n", url, o.channel)
 	}
 	return chat(ctx, conn, ui, states, o)
 }
@@ -215,7 +218,7 @@ func runWithChat(ctx context.Context, cfg config.Config, selected []factory, cli
 	if cfg.UsingDefaults {
 		fmt.Fprintf(ui, "· no config file at %s, using defaults\n", cfg.File)
 	}
-	fmt.Fprintf(ui, "· DOGGIE is running, logging to %s; Ctrl+D stops it\n", logPath)
+	fmt.Fprintf(ui, "· DOGGIE is running, logging to %s; /help lists the commands, Ctrl+D stops it\n", logPath)
 	return chatSession(ctx, conn, ui, states, own, defaultChatOptions())
 }
 
@@ -356,9 +359,13 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 
 	lines := ui.Lines()
 	inputDone := false
-	// inFlight are sentences handed to the sender and not confirmed yet;
-	// failed tells a piped chat to end with an error.
-	inFlight, failed := 0, false
+	// inFlight are sentences handed to the sender and not confirmed yet, and
+	// running the commands not done yet; failed tells a piped chat to end
+	// with an error.
+	inFlight, running, failed := 0, 0, false
+	commands := make(chan *command, 64)
+	commandsDone := make(chan commandResult, 64)
+	go commander(sctx, conn, o.thread, commands, commandsDone)
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	// idleSince is the last activity, for a piped chat to know when to stop.
@@ -376,10 +383,28 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 				close(toSend)
 				continue
 			}
-			if c.accept(line) {
-				inFlight++
-				toSend <- line
+			if !c.accept(line) {
+				continue
 			}
+			sentence, cmd := parseLine(line)
+			switch {
+			case cmd == nil:
+				inFlight++
+				toSend <- sentence
+			case cmd.check() != "":
+				c.view.note(cmd.check())
+				failed = true
+			case cmd.name == "/help":
+				c.view.note(chatHelp)
+			default:
+				running++
+				commands <- cmd
+			}
+		case r := <-commandsDone:
+			running--
+			failed = failed || !r.ok
+			c.view.note(r.out)
+			idleSince = time.Now()
 		case r := <-results:
 			inFlight--
 			if r.err != nil {
@@ -447,10 +472,10 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 			}
 		case now := <-tick.C:
 			c.checkSlow(now)
-			if inputDone && inFlight == 0 {
+			if inputDone && inFlight == 0 && running == 0 {
 				if len(c.unanswered) == 0 && now.Sub(idleSince) >= o.wait {
 					if failed {
-						return fmt.Errorf("%w: some sentences were not sent", errShown)
+						return fmt.Errorf("%w: some sentences or commands failed", errShown)
 					}
 					return nil
 				}

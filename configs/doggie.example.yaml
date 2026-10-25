@@ -13,3 +13,14 @@ language: "en"
 log:
   # debug | info | warn | error
   level: "info"
+
+bus:
+  # Where satellites connect (they need the bus token). "" = in-process only.
+  # Use "0.0.0.0:4222" to accept connections from your LAN.
+  # The token comes from $DOGGIE_BUS_TOKEN, or is generated on first run in
+  # $XDG_DATA_HOME/doggie/bus.token.
+  listen: "127.0.0.1:4222"
+  # Persistent log of every event (JetStream). Oldest events are dropped first.
+  event_log:
+    max_age: "168h"
+    max_size_mb: 512

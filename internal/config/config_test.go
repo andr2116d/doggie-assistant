@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, dir, content string) string {
@@ -86,7 +87,27 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "bus settings",
+			content: "bus:\n  listen: \"0.0.0.0:4222\"\n  event_log:\n    max_age: 24h\n    max_size_mb: 64\n",
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Bus.Listen != "0.0.0.0:4222" || cfg.Bus.EventLog.MaxAge != 24*time.Hour || cfg.Bus.EventLog.MaxSizeMB != 64 {
+					t.Errorf("unexpected bus config: %+v", cfg.Bus)
+				}
+			},
+		},
+		{
+			name:    "bus in-process only",
+			content: "bus:\n  listen: \"\"\n",
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Bus.Listen != "" || cfg.Bus.EventLog.MaxSizeMB != 512 {
+					t.Errorf("unexpected bus config: %+v", cfg.Bus)
+				}
+			},
+		},
 		{name: "unknown key", content: "langauge: es\n", wantErr: "langauge"},
+		{name: "bad listen", content: "bus:\n  listen: \"4222\"\n", wantErr: "bus.listen"},
+		{name: "bad event log", content: "bus:\n  event_log:\n    max_size_mb: 0\n", wantErr: "event_log"},
 		{name: "invalid level", content: "log:\n  level: loud\n", wantErr: "log.level"},
 		{name: "empty language", content: "language: \"\"\n", wantErr: "language"},
 	}

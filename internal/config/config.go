@@ -13,8 +13,10 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -25,6 +27,7 @@ type Config struct {
 	// Language is the language DOGGIE speaks and understands (BCP 47, e.g. "en", "es").
 	Language string `yaml:"language"`
 	Log      Log    `yaml:"log"`
+	Bus      Bus    `yaml:"bus"`
 
 	// File is the resolved config file path.
 	File string `yaml:"-"`
@@ -45,11 +48,33 @@ type Log struct {
 	Level string `yaml:"level"`
 }
 
+// Bus configures the embedded event bus.
+type Bus struct {
+	// Listen is the host:port where satellites connect, with a token.
+	// Empty means in-process connections only.
+	Listen   string   `yaml:"listen"`
+	EventLog EventLog `yaml:"event_log"`
+}
+
+// EventLog bounds the persistent log of bus events. Older events are
+// discarded first.
+type EventLog struct {
+	MaxAge    time.Duration `yaml:"max_age"`
+	MaxSizeMB int64         `yaml:"max_size_mb"`
+}
+
 // Default returns the configuration used when no file exists.
 func Default() Config {
 	return Config{
 		Language: "en",
 		Log:      Log{Level: "info"},
+		Bus: Bus{
+			Listen: "127.0.0.1:4222",
+			EventLog: EventLog{
+				MaxAge:    7 * 24 * time.Hour,
+				MaxSizeMB: 512,
+			},
+		},
 	}
 }
 
@@ -107,6 +132,14 @@ func (c Config) Validate() error {
 	}
 	if _, err := parseLevel(c.Log.Level); err != nil {
 		return err
+	}
+	if c.Bus.Listen != "" {
+		if _, _, err := net.SplitHostPort(c.Bus.Listen); err != nil {
+			return fmt.Errorf("config: bus.listen %q must be host:port: %w", c.Bus.Listen, err)
+		}
+	}
+	if c.Bus.EventLog.MaxAge <= 0 || c.Bus.EventLog.MaxSizeMB <= 0 {
+		return errors.New("config: bus.event_log.max_age and max_size_mb must be positive")
 	}
 	return nil
 }

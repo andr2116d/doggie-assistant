@@ -183,8 +183,12 @@ func run(ctx context.Context, conn *bus.Conn, log *slog.Logger, in bus.Incoming[
 		return
 	}
 	log.Debug("task accepted")
+	if info.HeartbeatMS > 0 {
+		go heartbeat(taskCtx, conn, info.ID, time.Duration(info.HeartbeatMS)*time.Millisecond)
+	}
 
 	result, err := safeCall(taskCtx, t, fn)
+	cancel() // stops the heartbeat before the outcome is published
 
 	pubCtx, cancelPub := context.WithTimeout(context.Background(), publishTimeout)
 	defer cancelPub()
@@ -212,6 +216,21 @@ func run(ctx context.Context, conn *bus.Conn, log *slog.Logger, in bus.Incoming[
 			// instead of leaving it running until its timeout.
 			log.Warn("publish task done", "err", err)
 			publishFailed(pubCtx, conn, log, info.ID, fmt.Sprintf("publish result (%d bytes): %v", len(raw), err))
+		}
+	}
+}
+
+// heartbeat tells the manager the task is still being worked on, until ctx
+// is cancelled.
+func heartbeat(ctx context.Context, conn *bus.Conn, id string, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			bus.Emit(conn, events.TaskAlive, events.TaskAliveData{TaskID: id})
 		}
 	}
 }

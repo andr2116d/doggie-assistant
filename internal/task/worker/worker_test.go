@@ -182,3 +182,44 @@ func TestOversizedResultFailsTheTask(t *testing.T) {
 		t.Fatal("task with an oversized result was left running")
 	}
 }
+
+func TestWorkerBeatsWhileTheTaskRuns(t *testing.T) {
+	w, client := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	beats, err := bus.SubscribeSignal(ctx, client, events.TaskAlive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	if _, err := Start(ctx, w, discardLog(), map[string]Func{
+		"test.wait": func(ctx context.Context, _ *Task) (any, error) {
+			<-release
+			return "ok", nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sendRun(t, client, "test.wait", events.TaskInfo{ID: "t1", HeartbeatMS: 20})
+	for range 3 {
+		select {
+		case b := <-beats:
+			if b.TaskID != "t1" {
+				t.Errorf("beat for %q", b.TaskID)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("no heartbeat while the task runs")
+		}
+	}
+	close(release)
+	time.Sleep(100 * time.Millisecond)
+	for len(beats) > 0 {
+		<-beats
+	}
+	select {
+	case b := <-beats:
+		t.Errorf("heartbeat after the task finished: %+v", b)
+	case <-time.After(100 * time.Millisecond):
+	}
+}

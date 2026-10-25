@@ -47,15 +47,23 @@ type Options struct {
 	// Retention is how long finished tasks are kept, and how far back the
 	// event log is read on start.
 	Retention time.Duration
+	// HeartbeatInterval is how often workers report each running task. A
+	// task silent for heartbeatTolerance intervals fails: its worker died.
+	HeartbeatInterval time.Duration
 }
+
+// heartbeatTolerance is how many heartbeat intervals a task may miss before
+// its worker is considered dead.
+const heartbeatTolerance = 3
 
 // DefaultOptions returns production settings.
 func DefaultOptions() Options {
 	return Options{
-		DefaultTimeout:  10 * time.Minute,
-		MaxTimeout:      24 * time.Hour,
-		DispatchTimeout: 10 * time.Second,
-		Retention:       24 * time.Hour,
+		DefaultTimeout:    10 * time.Minute,
+		MaxTimeout:        24 * time.Hour,
+		DispatchTimeout:   10 * time.Second,
+		Retention:         24 * time.Hour,
+		HeartbeatInterval: 5 * time.Second,
 	}
 }
 
@@ -70,8 +78,9 @@ type Manager struct {
 	timers    map[string]*time.Timer
 	timeouts  chan string
 	results   chan func()
-	seen      map[string]bool // event IDs applied during recovery
-	answering map[string]bool // tasks with an answer being delivered
+	seen      map[string]bool      // event IDs applied during recovery
+	answering map[string]bool      // tasks with an answer being delivered
+	lastBeat  map[string]time.Time // last sign of life of each active task
 }
 
 // withDefaults fills zero fields with the defaults and keeps MaxTimeout
@@ -89,6 +98,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Retention <= 0 {
 		o.Retention = d.Retention
+	}
+	if o.HeartbeatInterval <= 0 {
+		o.HeartbeatInterval = d.HeartbeatInterval
 	}
 	o.MaxTimeout = min(o.MaxTimeout, o.Retention)
 	o.DefaultTimeout = min(o.DefaultTimeout, o.MaxTimeout)
@@ -117,6 +129,7 @@ func (m *Manager) reset() {
 	m.timers = make(map[string]*time.Timer)
 	m.seen = make(map[string]bool)
 	m.answering = make(map[string]bool)
+	m.lastBeat = make(map[string]time.Time)
 }
 
 // Name implements supervisor.Component.
@@ -156,8 +169,14 @@ func (m *Manager) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	beats, err := bus.SubscribeSignal(ctx, m.conn, events.TaskAlive)
+	if err != nil {
+		return err
+	}
 	prune := time.NewTicker(time.Hour)
 	defer prune.Stop()
+	liveness := time.NewTicker(m.opts.HeartbeatInterval)
+	defer liveness.Stop()
 
 	for {
 		select {
@@ -197,6 +216,13 @@ func (m *Manager) Run(ctx context.Context) error {
 			} else {
 				in.Reply(t.Info())
 			}
+		case beat, ok := <-beats:
+			if !ok {
+				return ctx.Err()
+			}
+			m.alive(beat.TaskID)
+		case <-liveness.C:
+			m.checkLiveness(ctx)
 		case id := <-m.timeouts:
 			m.timeout(ctx, id)
 		case fn := <-m.results:
@@ -253,7 +279,11 @@ func (m *Manager) onEvent(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	t := m.apply(env)
-	if t != nil && t.Status().Terminal() {
+	if t == nil {
+		return
+	}
+	m.alive(t.ID())
+	if t.Status().Terminal() {
 		m.finished(ctx, t)
 	}
 }
@@ -338,6 +368,7 @@ func (m *Manager) start(ctx context.Context, in bus.Incoming[events.TaskSpec, ev
 	m.armTimer(ctx, id, timeout)
 
 	info := t.Info()
+	info.HeartbeatMS = int(m.opts.HeartbeatInterval / time.Millisecond)
 	go func() {
 		rctx, cancel := context.WithTimeout(ctx, m.opts.DispatchTimeout)
 		defer cancel()
@@ -373,6 +404,7 @@ func (m *Manager) dispatched(ctx context.Context, in bus.Incoming[events.TaskSpe
 		if err := t.Start(time.Now().UTC()); err == nil {
 			publish(ctx, m, events.TaskRunning, events.TaskRef{TaskID: id})
 		}
+		m.alive(id)
 	case t.Status().Terminal():
 		// Cancelled or timed out while the worker was accepting it: make
 		// sure the worker stops.
@@ -471,6 +503,27 @@ func (m *Manager) answered(ctx context.Context, in bus.Incoming[events.TaskAnswe
 	}
 }
 
+// alive records a sign of life for an active task.
+func (m *Manager) alive(id string) {
+	if t, ok := m.tasks[id]; ok && !t.Status().Terminal() {
+		m.lastBeat[id] = time.Now()
+	}
+}
+
+// checkLiveness fails the active tasks whose worker stopped beating: it died
+// without being able to report (crash, power loss, network cut).
+func (m *Manager) checkLiveness(ctx context.Context) {
+	limit := heartbeatTolerance * m.opts.HeartbeatInterval
+	for _, t := range m.sorted() {
+		last, ok := m.lastBeat[t.ID()]
+		if !ok || t.Status().Terminal() || time.Since(last) <= limit {
+			continue
+		}
+		m.fail(ctx, t, fmt.Sprintf("worker stopped responding: no heartbeat for %s", time.Since(last).Round(time.Millisecond)))
+		m.controlWorker(ctx, t, events.TaskControl{Action: events.ControlCancel, Reason: "no heartbeat"})
+	}
+}
+
 func (m *Manager) timeout(ctx context.Context, id string) {
 	t, ok := m.tasks[id]
 	if !ok || t.Status().Terminal() {
@@ -496,6 +549,7 @@ func (m *Manager) finished(ctx context.Context, t *task.Task) {
 		timer.Stop()
 		delete(m.timers, t.ID())
 	}
+	delete(m.lastBeat, t.ID())
 	if t.Status() == events.StatusDone {
 		return
 	}

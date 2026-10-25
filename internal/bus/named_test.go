@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 var testUtterance = NewSubject[ping]("nametest.say")
@@ -147,5 +149,74 @@ func TestSubjectWithAndDecodeUnder(t *testing.T) {
 	}
 	if _, _, err := DecodeUnder(Envelope{Meta: Meta{Type: "a.b.c"}, Data: []byte(`{`)}, s); err == nil {
 		t.Error("bad JSON accepted")
+	}
+}
+
+// Satellites can be added, changed and removed while the bus runs.
+func TestSetSatellitesWhileRunning(t *testing.T) {
+	s, token := startNamed(t)
+	voice, err := dialAs(t, s, "voice-room", token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disconnected := make(chan struct{})
+	voice.nc.SetClosedHandler(func(*nats.Conn) { close(disconnected) })
+	voice.nc.SetDisconnectErrHandler(func(*nats.Conn, error) {})
+	shared, err := dialAs(t, s, "", "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a satellite: it connects at once, and others are untouched.
+	kitchenHash, _ := HashToken("kitchen-token")
+	roomHash, _ := HashToken(token)
+	room := Satellite{Name: "voice-room", TokenHash: roomHash, Permissions: Permissions{Publish: []string{testUtterance.With("voice:room").Wire()}}}
+	kitchen := Satellite{Name: "voice-kitchen", TokenHash: kitchenHash, Permissions: Permissions{Publish: []string{testUtterance.With("voice:kitchen").Wire()}}}
+	if err := s.SetSatellites([]Satellite{room, kitchen}); err != nil {
+		t.Fatal(err)
+	}
+	k, err := dialAs(t, s, "voice-kitchen", "kitchen-token")
+	if err != nil {
+		t.Fatalf("added satellite refused: %v", err)
+	}
+	if !publishes(t, k, testUtterance.With("voice:kitchen")) || !publishes(t, voice, testUtterance.With("voice:room")) || !publishes(t, shared, testUtterance.With("terminal")) {
+		t.Error("a reload broke a satellite")
+	}
+
+	// Change its permissions: they apply to the live connection.
+	room.Permissions = Permissions{Publish: []string{testUtterance.With("voice:hall").Wire()}}
+	if err := s.SetSatellites([]Satellite{room, kitchen}); err != nil {
+		t.Fatal(err)
+	}
+	if publishes(t, voice, testUtterance.With("voice:room")) || !publishes(t, voice, testUtterance.With("voice:hall")) {
+		t.Error("changed permissions did not apply to the connected satellite")
+	}
+
+	// An invalid list changes nothing.
+	if err := s.SetSatellites([]Satellite{{Name: "core", TokenHash: kitchenHash}}); err == nil {
+		t.Error("invalid list accepted")
+	}
+	if !publishes(t, k, testUtterance.With("voice:kitchen")) {
+		t.Error("an invalid list changed the satellites")
+	}
+
+	// Remove one: it is disconnected and can't come back.
+	if err := s.SetSatellites([]Satellite{kitchen}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-disconnected:
+	case <-time.After(5 * time.Second):
+		// The client may be reconnecting in a loop; it must not be able to
+		// publish anymore either way.
+		if publishes(t, voice, testUtterance.With("voice:hall")) {
+			t.Error("removed satellite can still publish")
+		}
+	}
+	if _, err := dialAs(t, s, "voice-room", token); err == nil {
+		t.Error("removed satellite could connect again")
+	}
+	if !publishes(t, shared, testUtterance.With("terminal")) {
+		t.Error("removing a satellite broke the shared token")
 	}
 }

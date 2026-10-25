@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -57,6 +58,12 @@ type Server struct {
 	ns         *server.Server
 	coreSecret string
 	log        *slog.Logger
+
+	// What SetSatellites needs to rebuild the users.
+	reloadMu    sync.Mutex
+	sopts       server.Options
+	token       string
+	permissions Permissions
 }
 
 // Start runs the embedded server and makes sure the event log stream exists.
@@ -109,7 +116,7 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		return nil, err
 	}
 
-	s := &Server{ns: ns, coreSecret: coreSecret, log: opts.Log}
+	s := &Server{ns: ns, coreSecret: coreSecret, log: opts.Log, sopts: *sopts, token: opts.Token, permissions: opts.SatellitePermissions}
 	if err := s.ensureEventLog(ctx, opts.MaxAge, opts.MaxBytes); err != nil {
 		s.Shutdown()
 		return nil, err
@@ -188,6 +195,29 @@ func (s *Server) ClientURL() string {
 		return ""
 	}
 	return s.ns.ClientURL()
+}
+
+// SetSatellites replaces the named satellites while the bus runs. Connected
+// satellites are checked again: one that was removed, or whose token changed,
+// is disconnected, and permissions apply at once. An invalid list changes
+// nothing.
+func (s *Server) SetSatellites(named []Satellite) error {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	users, err := users(s.coreSecret, s.token, s.permissions, named)
+	if err != nil {
+		return err
+	}
+	opts := s.sopts
+	opts.Users = users
+	if addr, ok := s.ns.Addr().(*net.TCPAddr); ok {
+		opts.Port = addr.Port // a random port (-1) was resolved at start
+	}
+	if err := s.ns.ReloadOptions(&opts); err != nil {
+		return fmt.Errorf("bus: reload satellites: %w", err)
+	}
+	s.sopts = opts
+	return nil
 }
 
 // Shutdown stops the server and waits until the event log is flushed.

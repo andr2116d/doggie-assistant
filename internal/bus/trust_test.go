@@ -2,7 +2,11 @@ package bus
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"github.com/nats-io/nats-server/v2/server"
+	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -154,5 +158,118 @@ func TestRefusedPublishDoesNotBreakAllowedSubscribe(t *testing.T) {
 	defer cancel()
 	if _, err := Subscribe(ctx, sat, testManagerEvent); err != nil { // allowed by AllEvents
 		t.Fatalf("allowed subscription refused: %v", err)
+	}
+}
+
+// fakeClient is a connecting client, as the server shows it to Check.
+type fakeClient struct {
+	user, pass string
+	addr       net.Addr
+	kind       int
+	registered *server.User
+}
+
+func (f *fakeClient) GetOpts() *server.ClientOpts {
+	return &server.ClientOpts{Username: f.user, Password: f.pass}
+}
+func (f *fakeClient) GetTLSConnectionState() *tls.ConnectionState { return nil }
+func (f *fakeClient) RegisterUser(u *server.User)                 { f.registered = u }
+func (f *fakeClient) RemoteAddress() net.Addr                     { return f.addr }
+func (f *fakeClient) GetNonce() []byte                            { return nil }
+func (f *fakeClient) Kind() int                                   { return f.kind }
+func (f *fakeClient) GetID() uint64                               { return 1 }
+
+type pipeAddr struct{}
+
+func (pipeAddr) Network() string { return "pipe" }
+func (pipeAddr) String() string  { return "pipe" }
+
+func TestAuthenticatorCheck(t *testing.T) {
+	roomHash, _ := HashToken("room-token")
+	a, err := newAuthenticator("core-secret", "shared-token", Permissions{Publish: []string{"doggie.shared"}},
+		[]Satellite{{Name: "room", TokenHash: roomHash, Permissions: Permissions{Publish: []string{"doggie.room"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcp := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}
+	for _, tc := range []struct {
+		name       string
+		user, pass string
+		addr       net.Addr
+		kind       int
+		ok         bool
+		publish    string // a subject the user may publish, if accepted
+	}{
+		{"core in process", coreUser, "core-secret", pipeAddr{}, server.CLIENT, true, ""},
+		{"core over the network", coreUser, "core-secret", tcp, server.CLIENT, false, ""},
+		{"core, wrong secret", coreUser, "nope", pipeAddr{}, server.CLIENT, false, ""},
+		{"core, no address", coreUser, "core-secret", nil, server.CLIENT, false, ""},
+		{"shared token", satelliteUser, "shared-token", tcp, server.CLIENT, true, "doggie.shared"},
+		{"shared token in process", satelliteUser, "shared-token", pipeAddr{}, server.CLIENT, false, ""},
+		{"shared, wrong token", satelliteUser, "room-token", tcp, server.CLIENT, false, ""},
+		{"named satellite", "room", "room-token", tcp, server.CLIENT, true, "doggie.room"},
+		{"named, wrong token", "room", "shared-token", tcp, server.CLIENT, false, ""},
+		{"named, empty token", "room", "", tcp, server.CLIENT, false, ""},
+		{"named in process", "room", "room-token", pipeAddr{}, server.CLIENT, false, ""},
+		{"unknown satellite", "kitchen", "room-token", tcp, server.CLIENT, false, ""},
+		{"no user", "", "shared-token", tcp, server.CLIENT, false, ""},
+		{"not a client", satelliteUser, "shared-token", tcp, server.LEAF, false, ""},
+	} {
+		c := &fakeClient{user: tc.user, pass: tc.pass, addr: tc.addr, kind: tc.kind}
+		if got := a.Check(c); got != tc.ok {
+			t.Errorf("%s: Check = %v, want %v", tc.name, got, tc.ok)
+			continue
+		}
+		if !tc.ok {
+			if c.registered != nil {
+				t.Errorf("%s: refused but registered", tc.name)
+			}
+			continue
+		}
+		if c.registered == nil || c.registered.Username != tc.user {
+			t.Errorf("%s: registered %+v", tc.name, c.registered)
+			continue
+		}
+		perms := c.registered.Permissions
+		if tc.publish == "" {
+			if perms != nil {
+				t.Errorf("%s: the core got restricted permissions", tc.name)
+			}
+		} else if perms == nil || !slices.Contains(perms.Publish.Allow, tc.publish) {
+			t.Errorf("%s: permissions %+v", tc.name, perms)
+		}
+	}
+}
+
+// set reports exactly the satellites whose connections must go.
+func TestAuthenticatorSetReportsChanges(t *testing.T) {
+	h1, _ := HashToken("one")
+	h2, _ := HashToken("two")
+	sat := func(name, hash, pub string) Satellite {
+		return Satellite{Name: name, TokenHash: hash, Permissions: Permissions{Publish: []string{pub}}}
+	}
+	a, err := newAuthenticator("c", "s", Permissions{}, []Satellite{sat("same", h1, "a"), sat("token", h1, "a"), sat("perms", h1, "a"), sat("gone", h1, "a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := a.set([]Satellite{sat("same", h1, "a"), sat("token", h2, "a"), sat("perms", h1, "b"), sat("new", h1, "a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(changed)
+	if !slices.Equal(changed, []string{"gone", "perms", "token"}) {
+		t.Errorf("changed %q", changed)
+	}
+	if _, err := a.set([]Satellite{sat("x", h1, "a"), sat("x", h1, "a")}); err == nil {
+		t.Error("repeated name accepted")
+	}
+	if _, err := a.set([]Satellite{sat(coreUser, h1, "a")}); err == nil {
+		t.Error("the core's name accepted")
+	}
+	if _, err := a.set([]Satellite{sat("plain", "not-a-hash", "a")}); err == nil {
+		t.Error("a plain token accepted")
+	}
+	if !a.Check(&fakeClient{user: "new", pass: "one", addr: &net.TCPAddr{}, kind: server.CLIENT}) {
+		t.Error("an invalid list changed the satellites")
 	}
 }

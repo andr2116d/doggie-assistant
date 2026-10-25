@@ -2,7 +2,9 @@ package bus
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,72 +154,82 @@ func TestSubjectWithAndDecodeUnder(t *testing.T) {
 	}
 }
 
-// Satellites can be added, changed and removed while the bus runs.
+// Satellites can be added, changed and removed while the bus runs. Only
+// the connections of a satellite that changed are closed; one that may
+// still connect comes back with its new permissions.
 func TestSetSatellitesWhileRunning(t *testing.T) {
 	s, token := startNamed(t)
-	voice, err := dialAs(t, s, "voice-room", token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	disconnected := make(chan struct{})
-	voice.nc.SetClosedHandler(func(*nats.Conn) { close(disconnected) })
-	voice.nc.SetDisconnectErrHandler(func(*nats.Conn, error) {})
+	states := newConnStates()
+	voice := states.dialAs(t, s.ClientURL(), "voice-room", token)
+	defer voice.Close()
 	shared, err := dialAs(t, s, "", "test-token")
 	if err != nil {
 		t.Fatal(err)
 	}
+	room := s.auth.named["voice-room"]
 
-	// Add a satellite: it connects at once, and others are untouched.
+	// Add a satellite: it connects at once, and the others are untouched.
 	kitchenHash, _ := HashToken("kitchen-token")
-	roomHash, _ := HashToken(token)
-	room := Satellite{Name: "voice-room", TokenHash: roomHash, Permissions: Permissions{Publish: []string{testUtterance.With("voice:room").Wire()}}}
 	kitchen := Satellite{Name: "voice-kitchen", TokenHash: kitchenHash, Permissions: Permissions{Publish: []string{testUtterance.With("voice:kitchen").Wire()}}}
 	if err := s.SetSatellites([]Satellite{room, kitchen}); err != nil {
 		t.Fatal(err)
 	}
-	k, err := dialAs(t, s, "voice-kitchen", "kitchen-token")
-	if err != nil {
-		t.Fatalf("added satellite refused: %v", err)
-	}
+	kStates := newConnStates()
+	k := kStates.dialAs(t, s.ClientURL(), "voice-kitchen", "kitchen-token")
+	defer k.Close()
+	states.quiet(t)
 	if !publishes(t, k, testUtterance.With("voice:kitchen")) || !publishes(t, voice, testUtterance.With("voice:room")) || !publishes(t, shared, testUtterance.With("terminal")) {
-		t.Error("a reload broke a satellite")
+		t.Error("adding a satellite broke another")
 	}
 
-	// Change its permissions: they apply to the live connection.
+	// Change its permissions: it is reconnected, with the new ones.
 	room.Permissions = Permissions{Publish: []string{testUtterance.With("voice:hall").Wire()}}
 	if err := s.SetSatellites([]Satellite{room, kitchen}); err != nil {
 		t.Fatal(err)
 	}
+	waitState(t, states.down, "the changed satellite to be disconnected")
+	waitState(t, states.up, "the changed satellite to come back")
 	if publishes(t, voice, testUtterance.With("voice:room")) || !publishes(t, voice, testUtterance.With("voice:hall")) {
-		t.Error("changed permissions did not apply to the connected satellite")
+		t.Error("changed permissions did not apply to the satellite")
 	}
+	kStates.quiet(t)
 
 	// An invalid list changes nothing.
 	if err := s.SetSatellites([]Satellite{{Name: "core", TokenHash: kitchenHash}}); err == nil {
 		t.Error("invalid list accepted")
 	}
-	if !publishes(t, k, testUtterance.With("voice:kitchen")) {
+	if !publishes(t, k, testUtterance.With("voice:kitchen")) || !publishes(t, voice, testUtterance.With("voice:hall")) {
 		t.Error("an invalid list changed the satellites")
 	}
 
-	// Remove one: it is disconnected and can't come back.
+	// Remove one: it is disconnected for good and can't come back.
 	if err := s.SetSatellites([]Satellite{kitchen}); err != nil {
 		t.Fatal(err)
 	}
+	waitState(t, states.down, "the removed satellite to be disconnected")
 	select {
-	case <-disconnected:
-	case <-time.After(5 * time.Second):
-		// The client may be reconnecting in a loop; it must not be able to
-		// publish anymore either way.
-		if publishes(t, voice, testUtterance.With("voice:hall")) {
-			t.Error("removed satellite can still publish")
+	case err := <-states.closed:
+		if !errors.Is(err, nats.ErrAuthorization) {
+			t.Errorf("closed with %v", err)
 		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the removed satellite kept trying to connect")
 	}
 	if _, err := dialAs(t, s, "voice-room", token); err == nil {
 		t.Error("removed satellite could connect again")
 	}
-	if !publishes(t, shared, testUtterance.With("terminal")) {
-		t.Error("removing a satellite broke the shared token")
+	kStates.quiet(t)
+	if !publishes(t, shared, testUtterance.With("terminal")) || !publishes(t, k, testUtterance.With("voice:kitchen")) {
+		t.Error("removing a satellite broke another")
+	}
+}
+
+func waitState[T any](t *testing.T, ch <-chan T, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
 	}
 }
 
@@ -247,4 +259,39 @@ func TestSetSatellitesRotatesTokens(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// Satellites connect while the list changes under them: no data race, and
+// each connection ends up with the rights of the list it was accepted by.
+func TestSetSatellitesWhileSatellitesConnect(t *testing.T) {
+	s, token := startNamed(t)
+	hash, _ := HashToken(token)
+	lists := [][]Satellite{
+		{{Name: "voice-room", TokenHash: hash, Permissions: Permissions{Publish: []string{testUtterance.With("voice:room").Wire()}}}},
+		{{Name: "voice-room", TokenHash: hash, Permissions: Permissions{Publish: []string{testUtterance.With("voice:hall").Wire()}}}},
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				c, err := Dial(s.ClientURL(), DialOptions{Name: "sat", User: "voice-room", Token: token, Log: discardLog()})
+				if err == nil {
+					c.Close()
+				}
+			}
+		})
+	}
+	for i := range 200 {
+		if err := s.SetSatellites(lists[i%2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	wg.Wait()
 }

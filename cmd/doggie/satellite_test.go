@@ -171,8 +171,8 @@ func (r reloads) wait(t *testing.T, ch chan struct{}, what string) {
 // doggie run applies registry changes without a restart, and keeps the
 // satellites as they were when the registry turns invalid.
 //
-// Clients connect only between reloads: the NATS server races with itself
-// when a client connects while it reloads its users.
+// The test waits for each reload, from the watcher's log, so it checks the
+// result of each change.
 func TestRegistryChangesApplyWhileRunning(t *testing.T) {
 	cfg := testConfig(t, "127.0.0.1:-1")
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))

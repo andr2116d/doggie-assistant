@@ -220,3 +220,31 @@ func TestSetSatellitesWhileRunning(t *testing.T) {
 		t.Error("removing a satellite broke the shared token")
 	}
 }
+
+// A satellite whose token changes loses the old one at once, even on a live
+// connection.
+func TestSetSatellitesRotatesTokens(t *testing.T) {
+	s, oldToken := startNamed(t)
+	live, err := dialAs(t, s, "voice-room", oldToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newHash, _ := HashToken("new-token")
+	perms := Permissions{Publish: []string{testUtterance.With("voice:room").Wire()}}
+	if err := s.SetSatellites([]Satellite{{Name: "voice-room", TokenHash: newHash, Permissions: perms}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dialAs(t, s, "voice-room", oldToken); err == nil {
+		t.Error("the old token still connects")
+	}
+	if _, err := dialAs(t, s, "voice-room", "new-token"); err != nil {
+		t.Errorf("the new token is refused: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for publishes(t, live, testUtterance.With("voice:room")) {
+		if time.Now().After(deadline) {
+			t.Fatal("the connection on the old token can still publish")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -42,7 +43,23 @@ type Event[T any] struct {
 type Subject[T any] struct{ typ string }
 
 // NewSubject declares an event type. typ is dot-separated, e.g. "task.done".
-func NewSubject[T any](typ string) Subject[T] { return Subject[T]{typ: typ} }
+// It panics on an invalid type (empty tokens, spaces or wildcards), since
+// event types are declared once in the catalog.
+func NewSubject[T any](typ string) Subject[T] {
+	if !validType(typ) {
+		panic(fmt.Sprintf("bus: invalid event type %q", typ))
+	}
+	return Subject[T]{typ: typ}
+}
+
+func validType(typ string) bool {
+	for _, tok := range strings.Split(typ, ".") {
+		if tok == "" || strings.ContainsAny(tok, " \t\r\n*>") {
+			return false
+		}
+	}
+	return true
+}
 
 // Type returns the event type name.
 func (s Subject[T]) Type() string { return s.typ }

@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/nats-io/nats-server/v2 v2.15.1
 	github.com/nats-io/nats.go v1.55.0
+	github.com/oklog/ulid/v2 v2.1.2
 	go.yaml.in/yaml/v3 v3.0.5
 )
 

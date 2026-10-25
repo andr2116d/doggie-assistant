@@ -25,6 +25,7 @@ const usage = `doggie: a self-hosted, Jarvis-style personal assistant.
 
 Usage:
   doggie run [flags]      run DOGGIE (see "doggie run -h")
+  doggie events [flags]   watch bus events live (see "doggie events -h")
   doggie version          print the version
 `
 
@@ -45,6 +46,8 @@ func run(args []string, stdout io.Writer) error {
 	switch args[0] {
 	case "run":
 		return runCmd(args[1:])
+	case "events":
+		return eventsCmd(args[1:], stdout)
 	case "version":
 		fmt.Fprintln(stdout, version)
 		return nil

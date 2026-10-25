@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
+	"github.com/andr2116d/doggie-assistant/internal/bus/events"
 	"github.com/andr2116d/doggie-assistant/internal/task/worker"
 )
 
@@ -42,8 +43,8 @@ func (d *Demo) Run(ctx context.Context) error {
 
 func (d *Demo) funcs() map[string]worker.Func {
 	return map[string]worker.Func{
-		"demo.sleep": d.sleep,
-		"demo.ask":   ask,
+		events.KindDemoSleep.Name: d.sleep,
+		events.KindDemoAsk.Name:   ask,
 	}
 }
 

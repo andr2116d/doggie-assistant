@@ -33,6 +33,9 @@ func newConn(nc *nats.Conn, source string, log *slog.Logger) (*Conn, error) {
 	return c, nil
 }
 
+// Name returns the connection name, which is the source of its events.
+func (c *Conn) Name() string { return c.source }
+
 // Close flushes pending publishes, waits until they reach the server and
 // closes the connection. Calling it again is a no-op.
 func (c *Conn) Close() error {

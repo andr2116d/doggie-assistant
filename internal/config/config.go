@@ -53,7 +53,18 @@ type Bus struct {
 	// Listen is the host:port where satellites connect, with a token.
 	// Empty means in-process connections only.
 	Listen   string   `yaml:"listen"`
+	TLS      TLS      `yaml:"tls"`
 	EventLog EventLog `yaml:"event_log"`
+}
+
+// TLS configures encryption for TCP connections to the bus. DOGGIE issues
+// the certificates itself from its own CA.
+type TLS struct {
+	Enabled bool `yaml:"enabled"`
+	// ExtraHosts are names or IPs the server certificate must cover beyond
+	// the detected ones (localhost, hostname, interface IPs), e.g. a
+	// Tailscale MagicDNS name.
+	ExtraHosts []string `yaml:"extra_hosts"`
 }
 
 // EventLog bounds the persistent log of bus events. Older events are
@@ -70,6 +81,7 @@ func Default() Config {
 		Log:      Log{Level: "info"},
 		Bus: Bus{
 			Listen: "127.0.0.1:4222",
+			TLS:    TLS{Enabled: true},
 			EventLog: EventLog{
 				MaxAge:    7 * 24 * time.Hour,
 				MaxSizeMB: 512,

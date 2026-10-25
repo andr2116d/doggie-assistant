@@ -105,6 +105,24 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "tls extra hosts keep tls enabled",
+			content: "bus:\n  tls:\n    extra_hosts: [\"doggie.tailnet.ts.net\"]\n",
+			check: func(t *testing.T, cfg Config) {
+				if !cfg.Bus.TLS.Enabled || len(cfg.Bus.TLS.ExtraHosts) != 1 {
+					t.Errorf("unexpected tls config: %+v", cfg.Bus.TLS)
+				}
+			},
+		},
+		{
+			name:    "tls disabled",
+			content: "bus:\n  tls:\n    enabled: false\n",
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Bus.TLS.Enabled {
+					t.Error("TLS still enabled")
+				}
+			},
+		},
 		{name: "unknown key", content: "langauge: es\n", wantErr: "langauge"},
 		{name: "bad listen", content: "bus:\n  listen: \"4222\"\n", wantErr: "bus.listen"},
 		{name: "bad event log", content: "bus:\n  event_log:\n    max_size_mb: 0\n", wantErr: "event_log"},

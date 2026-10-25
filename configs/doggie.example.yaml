@@ -20,6 +20,14 @@ bus:
   # The token comes from $DOGGIE_BUS_TOKEN, or is generated on first run in
   # $XDG_DATA_HOME/doggie/bus.token.
   listen: "127.0.0.1:4222"
+  # TLS for TCP clients, with certificates from DOGGIE's own CA in
+  # $XDG_DATA_HOME/doggie/tls. Satellites on other machines need ca.pem
+  # (or $DOGGIE_BUS_CA pointing to it) plus the token.
+  tls:
+    enabled: true
+    # Names/IPs to add to the server certificate beyond the detected ones
+    # (localhost, hostname, interface IPs), e.g. a Tailscale MagicDNS name.
+    extra_hosts: []
   # Persistent log of every event (JetStream). Oldest events are dropped first.
   event_log:
     max_age: "168h"

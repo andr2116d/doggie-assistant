@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"syscall"
@@ -23,8 +24,9 @@ import (
 	"github.com/andr2116d/doggie-assistant/internal/console"
 )
 
-// version is set at build time with -ldflags "-X main.version=...".
-var version = "dev"
+// version is set at build time with -ldflags "-X main.version=..."; without
+// it, it comes from the build info, e.g. with go install.
+var version = ""
 
 const usage = `doggie: a self-hosted, Jarvis-style personal assistant.
 
@@ -67,7 +69,7 @@ func run(args []string, stdout io.Writer) error {
 	case "satellite":
 		return satelliteCmd(args[1:], stdout)
 	case "version":
-		fmt.Fprintln(stdout, version)
+		fmt.Fprintln(stdout, versionString())
 		return nil
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(stdout, usage)
@@ -195,4 +197,41 @@ func tlsDir(cfg config.Config) string {
 
 func isHelp(arg string) bool {
 	return arg == "-h" || arg == "-help" || arg == "--help"
+}
+
+// versionString is the version set at build time, or else the module's
+// version, or the commit it was built from.
+func versionString() string {
+	if version != "" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	return buildVersion(info)
+}
+
+func buildVersion(info *debug.BuildInfo) string {
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	var rev string
+	var dirty bool
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if rev == "" {
+		return "dev"
+	}
+	rev = rev[:min(len(rev), 7)]
+	if dirty {
+		rev += "-dirty"
+	}
+	return rev
 }

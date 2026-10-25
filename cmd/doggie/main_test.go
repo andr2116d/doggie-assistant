@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -227,5 +228,29 @@ func TestFlagsAloneAreTheChats(t *testing.T) {
 	}
 	if err := run([]string{"-h"}, io.Discard); err != nil {
 		t.Errorf("-h: %v", err)
+	}
+}
+
+func TestBuildVersion(t *testing.T) {
+	setting := func(kv ...string) []debug.BuildSetting {
+		var s []debug.BuildSetting
+		for i := 0; i < len(kv); i += 2 {
+			s = append(s, debug.BuildSetting{Key: kv[i], Value: kv[i+1]})
+		}
+		return s
+	}
+	for _, tt := range []struct {
+		info debug.BuildInfo
+		want string
+	}{
+		{debug.BuildInfo{Main: debug.Module{Version: "v0.3.0"}}, "v0.3.0"},
+		{debug.BuildInfo{Main: debug.Module{Version: "(devel)"}, Settings: setting("vcs.revision", "fcf37c6a1b2c", "vcs.modified", "false")}, "fcf37c6"},
+		{debug.BuildInfo{Main: debug.Module{Version: "(devel)"}, Settings: setting("vcs.revision", "fcf37c6a1b2c", "vcs.modified", "true")}, "fcf37c6-dirty"},
+		{debug.BuildInfo{Settings: setting("vcs.revision", "abc")}, "abc"},
+		{debug.BuildInfo{}, "dev"},
+	} {
+		if got := buildVersion(&tt.info); got != tt.want {
+			t.Errorf("buildVersion(%+v) = %q, want %q", tt.info, got, tt.want)
+		}
 	}
 }

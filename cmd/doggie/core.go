@@ -62,7 +62,7 @@ func startCore(ctx context.Context, cfg config.Config, log *slog.Logger, selecte
 	cctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	c := &core{dataDir: cfg.DataDir, srv: srv, announce: announce, cancel: cancel, done: make(chan struct{})}
 	go watchSatellites(cctx, srv, satellitesFile(cfg), log, satelliteWatchInterval)
-	log.Info("doggie starting", "version", version, "components", names(selected), "as", role)
+	log.Info("doggie starting", "version", versionString(), "components", names(selected), "as", role)
 	go func() {
 		defer close(c.done)
 		c.err = supervisor.New(log).Run(cctx, comps...)

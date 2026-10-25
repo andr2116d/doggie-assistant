@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/config"
@@ -115,14 +117,28 @@ func startBus(ctx context.Context, cfg config.Config, log *slog.Logger) (*bus.Se
 	if err != nil {
 		return nil, err
 	}
-	srv, err := bus.Start(ctx, bus.Options{
+	opts := bus.Options{
 		Listen:   cfg.Bus.Listen,
 		Token:    token,
 		StoreDir: filepath.Join(cfg.DataDir, "nats"),
 		MaxAge:   cfg.Bus.EventLog.MaxAge,
 		MaxBytes: cfg.Bus.EventLog.MaxSizeMB << 20,
 		Log:      log,
-	})
+	}
+	tlsOn := cfg.Bus.Listen != "" && cfg.Bus.TLS.Enabled
+	if tlsOn {
+		files, err := bus.EnsureTLS(tlsDir(cfg), bus.TLSHosts(cfg.Bus.Listen, cfg.Bus.TLS.ExtraHosts), time.Now())
+		if err != nil {
+			return nil, err
+		}
+		if opts.TLS, err = bus.ServerTLSConfig(files); err != nil {
+			return nil, err
+		}
+	} else if cfg.Bus.Listen != "" && !isLoopback(cfg.Bus.Listen) {
+		log.Warn("bus accepts network connections without TLS: the token travels in clear text", "listen", cfg.Bus.Listen)
+	}
+
+	srv, err := bus.Start(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -130,10 +146,30 @@ func startBus(ctx context.Context, cfg config.Config, log *slog.Logger) (*bus.Se
 	if listen == "" {
 		listen = "in-process only"
 	}
-	log.Info("bus ready", "listen", listen, "token_file", tokenPath(cfg))
+	attrs := []any{"listen", listen, "tls", tlsOn, "token_file", tokenPath(cfg)}
+	if tlsOn {
+		attrs = append(attrs, "ca_file", bus.TLSFilesIn(tlsDir(cfg)).CA)
+	}
+	log.Info("bus ready", attrs...)
 	return srv, nil
+}
+
+func isLoopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func tokenPath(cfg config.Config) string {
 	return filepath.Join(cfg.DataDir, "bus.token")
+}
+
+func tlsDir(cfg config.Config) string {
+	return filepath.Join(cfg.DataDir, "tls")
 }

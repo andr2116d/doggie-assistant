@@ -22,6 +22,7 @@ func eventsCmd(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("events", flag.ContinueOnError)
 	configPath := flags.String("config", "", "config file (default $XDG_CONFIG_HOME/doggie/config.yaml)")
 	server := flags.String("server", "", "bus URL (default derived from bus.listen)")
+	ca := flags.String("ca", "", "bus CA certificate (default $DOGGIE_BUS_CA, or the local one when bus.tls is enabled)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -45,7 +46,12 @@ func eventsCmd(args []string, stdout io.Writer) error {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	conn, err := bus.Dial(url, bus.DialOptions{Name: "events-viewer", Token: token, Log: log})
+	conn, err := bus.Dial(url, bus.DialOptions{
+		Name:   "events-viewer",
+		Token:  token,
+		CAFile: caFile(*ca, cfg),
+		Log:    log,
+	})
 	if err != nil {
 		return err
 	}
@@ -62,6 +68,21 @@ func eventsCmd(args []string, stdout io.Writer) error {
 		printEnvelope(stdout, env)
 	}
 	return nil
+}
+
+// caFile picks the CA a client trusts: the flag, then $DOGGIE_BUS_CA, then the
+// local CA when this machine runs the bus with TLS. Empty means plain TCP.
+func caFile(flag string, cfg config.Config) string {
+	if flag != "" {
+		return flag
+	}
+	if env := os.Getenv(bus.CAEnv); env != "" {
+		return env
+	}
+	if cfg.Bus.TLS.Enabled {
+		return bus.TLSFilesIn(tlsDir(cfg)).CA
+	}
+	return ""
 }
 
 // localBusURL turns bus.listen into a URL reachable from this machine.

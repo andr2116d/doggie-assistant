@@ -729,6 +729,31 @@ func TestSentencesATurnActedOnAreNotResumed(t *testing.T) {
 	h.noTurn(300 * time.Millisecond)
 }
 
+// A sentence said while the brain gets ready, e.g. by a chat that has just
+// started DOGGIE, is new: no earlier brain could have acted on it.
+func TestSentencesSaidWhileStartingAreNotResumed(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.stop()
+	h.say("th", "terminal", "de antes")
+	var said string
+	h.startBrain(Options{NewProvider: func(*mcp.Server) (llm.Brain, func(), error) {
+		said = h.say("th", "terminal", "recién dicho") // before the brain subscribes
+		return h.fake, func() {}, nil
+	}})
+	resumed := map[string]bool{}
+	for len(resumed) < 2 {
+		for _, in := range h.nextTurn().Data.Inputs {
+			resumed[in.Said] = in.Resumed
+			if in.Said == "recién dicho" && in.EventID != said {
+				t.Errorf("answered %s, want %s", in.EventID, said)
+			}
+		}
+	}
+	if !resumed["de antes"] || resumed["recién dicho"] {
+		t.Errorf("resumed = %v, want only the sentence said while the brain was down", resumed)
+	}
+}
+
 // Sentences older than the catch-up window are not resumed.
 func TestOldSentencesAreNotResumed(t *testing.T) {
 	h := newHarness(t, Options{})

@@ -84,8 +84,11 @@ type Brain struct {
 	lookups  map[string][]bus.Envelope  // task events waiting for a lookup, by task
 	seen     map[string]bool            // task events read from the log on start
 	results  chan func()                // outcomes of turns and lookups
-	turns    sync.WaitGroup
-	tick     uint64 // logical clock for thread recency
+	// started is when this run began: a sentence logged later can't have
+	// been seen by an earlier one.
+	started time.Time
+	turns   sync.WaitGroup
+	tick    uint64 // logical clock for thread recency
 }
 
 type thread struct {
@@ -128,6 +131,7 @@ func (b *Brain) Run(ctx context.Context) error {
 	b.lookups = make(map[string][]bus.Envelope)
 	b.seen = make(map[string]bool)
 	b.results = make(chan func())
+	b.started = time.Now()
 
 	tools, err := mcp.Listen(b.conn, b.log)
 	if err != nil {
@@ -289,7 +293,8 @@ func (b *Brain) recover(ctx context.Context) error {
 // the brain was down or was stopped before answering them, so DOGGIE never
 // goes silent on someone. The turn that died may have acted on a sentence
 // already, so those are marked resumed: the LLM checks the tasks before
-// acting again.
+// acting again. A sentence logged after this run started, while it was
+// getting ready, is new; the log and the brain share the core's clock.
 func (b *Brain) catchUp(ctx context.Context, answered map[string]bool) error {
 	since := time.Now().Add(-catchUpWindow)
 	tasks, err := bus.History(ctx, b.conn, since, "task.>")
@@ -307,7 +312,7 @@ func (b *Brain) catchUp(ctx context.Context, answered map[string]bool) error {
 		switch {
 		case answered[env.ID]:
 		case strings.HasPrefix(env.Type, events.UserUtterance.Type()+"."):
-			b.onUtterance(env, true)
+			b.onUtterance(env, env.Logged.IsZero() || env.Logged.Before(b.started))
 		default:
 			b.onTaskEvent(ctx, env)
 		}

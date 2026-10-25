@@ -4,7 +4,7 @@ A self-hosted, Jarvis-style personal assistant written in Go.
 
 DOGGIE talks with you, runs many tasks in parallel without blocking the conversation, controls your home and learns how to do new things.
 
-> **Status:** early. DOGGIE already talks over the terminal, starts tasks while it keeps talking and tells you when they end. Voice, home devices and WhatsApp come next.
+> **Status:** early. DOGGIE already chats in a terminal, starts tasks while it keeps talking and tells you when they end. Voice, home devices and WhatsApp come next.
 
 ## Goals
 
@@ -18,6 +18,7 @@ DOGGIE talks with you, runs many tasks in parallel without blocking the conversa
 
 - **Conversation.** The brain runs on the official [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI with your own subscription. DOGGIE builds the whole context of every turn (persona, active tasks, recent turns), so the CLI process is disposable. A warm process waits ahead, and replies are streamed: the first words arrive in about a second.
 - **Tasks that don't block.** Ask for something and DOGGIE starts a task, keeps talking, and tells you when it ends, fails or needs an answer. Tasks report progress, can be cancelled and time out. For now, demo tasks (`demo.sleep`, `demo.ask`) stand in for real devices.
+- **Terminal chat.** Replies stream in above the line you type, which never breaks, with live task status and commands to see, answer and cancel tasks without the LLM.
 - **Locked-down LLM.** The LLM has no shell, files or web. It can only use DOGGIE's tools, and each one declares a risk level that the code enforces, not the prompt.
 - **Event bus.** An embedded NATS server with a persistent event log (7 days by default), TLS from DOGGIE's own CA and token auth. Every component talks only over the bus.
 - **Restarts lose nothing.** Interrupted tasks are reported as failed, and sentences a restart left unanswered are answered after it.
@@ -43,28 +44,59 @@ cp configs/doggie.example.yaml ~/.config/doggie/config.yaml
 
 Edit `~/.config/doggie/config.yaml`: your name and profile, the assistant's persona, the language it speaks (`en`, `es`, ...). Without the file, DOGGIE starts with defaults.
 
-Run DOGGIE and leave it running:
+Run DOGGIE:
 
 ```sh
 ./bin/doggie run
 ```
 
+In a terminal, `doggie run` opens a chat with DOGGIE right there, and its logs go to `~/.local/share/doggie/doggie.log`. Ctrl+D quits the chat and stops DOGGIE. To print the logs instead, e.g. under a service manager, use `doggie run --no-chat`.
+
 ### Talk to it
 
-From another terminal:
+Type a sentence and press Enter. Keep typing while DOGGIE answers or works: replies show as they are written, notices about tasks arrive when they happen, and the tasks in progress show on a line just above the one you type:
+
+```
+you> Remind me in 10 seconds to stretch, and tell me a short joke meanwhile.
+doggie> On it.
+doggie> Timer's running. Meanwhile: I told my computer I needed a break, and it sent me a vacation of cookies I couldn't refuse. I'll let you know when it's time to stretch.
+· t1 Remind to stretch in 10 secon…: 5/10 s (50%)
+you> _
+```
+
+A moment later the status line is gone and the notice is in. Then a sensitive task, started here with `doggie task start -thread terminal -sensitive demo.ask ...`, asks for a confirmation only you may give:
+
+```
+doggie> Time to stretch, Alex. Your ten seconds are up, and the joke was better than the cookies deserved.
+· t2 asks: "Pay 40 EUR now?" [yes | no]. Only you may answer it: /answer t2 <answer>
+doggie> The electricity bill task is asking whether to pay 40 EUR now. Only you can answer that, so please reply to it yourself, directly, with yes or no. I can't answer it for you.
+you> /answer t2 yes
+· answered t2
+```
+
+On opening, the chat shows the last 5 turns of the conversation (`-history`, `0` for none).
+
+Commands start with `/` and are run by the chat itself, without the LLM:
+
+| Command | What it does |
+|---|---|
+| `/tasks` | The tasks in progress; `/tasks all` adds the last ones that ended |
+| `/answer <id> <text>` | Answer a task's question yourself. The only way for the questions DOGGIE may not answer for you, e.g. a confirmation a sensitive task asks for |
+| `/cancel <id> [why]` | Cancel a task |
+| `/help` | The list of commands |
+| `//text` | Say text that starts with `/` |
+
+More ways to talk to it:
 
 ```sh
-./bin/doggie say "Hi! What can you do?"
-./bin/doggie say "Open Netflix on the TV, it takes 5 seconds, and tell me a joke meanwhile"
+./bin/doggie chat                                  # another chat, e.g. from another terminal
+./bin/doggie say "What time is it in Tokyo?"       # one sentence to a running DOGGIE, then its replies
+echo "Tell me a short joke" | ./bin/doggie chat    # piped: each line, then the replies
 ```
 
-`say` prints the replies as they are written, then keeps listening for 20 s (`-wait`) for notices about the tasks they started:
+Chats on the same channel share the conversation: each one shows what the others say.
 
-```
-doggie> On it.
-doggie> Netflix is on its way. Meanwhile: I told the TV a joke about a sci-fi movie, but it was too far ahead of its time. It hasn't gotten the punchline yet.
-doggie> Netflix is open on the TV, Alex. Enjoy the show, and I hope it's something with spaceships.
-```
+**One DOGGIE per data dir.** If none runs on this machine, `doggie chat` starts one in its own process, and stops it when you quit. If DOGGIE goes away without being stopped on purpose (it crashed, or the chat running it closed), a chat still open takes it over. `doggie run` takes DOGGIE over from a chat that runs it, and the chat stays open.
 
 ### Tasks
 
@@ -75,8 +107,8 @@ Start, follow and stop tasks yourself, without the brain. `task start` prints th
 ./bin/doggie task list -active
 ./bin/doggie task get <id>
 ./bin/doggie task cancel <id>
-./bin/doggie task start demo.ask '{"question": "Which profile?", "options": ["Alex", "Kids"]}'
-./bin/doggie task answer <id> Alex
+./bin/doggie task start demo.ask '{"question": "Which color?", "options": ["red", "blue"]}'
+./bin/doggie task answer <id> blue
 ```
 
 Watch everything that happens on the bus, from 10 minutes ago and then live:
@@ -103,7 +135,7 @@ A running DOGGIE applies the changes within seconds, without a restart. The shar
 | What | Where |
 |---|---|
 | Config | `~/.config/doggie/config.yaml` (`$XDG_CONFIG_HOME`) |
-| Data: event log, bus token, TLS CA, satellites | `~/.local/share/doggie/` (`$XDG_DATA_HOME`) |
+| Data: event log, bus token, TLS CA, satellites, `doggie.log` | `~/.local/share/doggie/` (`$XDG_DATA_HOME`) |
 
 To connect from another machine, set `bus.listen` to `0.0.0.0:4222` in the config, copy `tls/ca.pem` from the data dir, and pass the token and CA through the environment:
 

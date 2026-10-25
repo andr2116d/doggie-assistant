@@ -32,8 +32,20 @@ func TestSensitiveTaskStaysOutOfTheLog(t *testing.T) {
 			t.Errorf("sensitive data in the event log: %s %s", env.Type, env.Data)
 		}
 	}
-	if !strings.Contains(string(logged[len(logged)-1].Data), `"redacted":true`) {
-		t.Errorf("last logged event %s is not a redacted task.done", logged[len(logged)-1].Data)
+	// Look the task.done up by type: it is not always the last event, since
+	// the worker can finish before the manager logs task.running (ADR-0008,
+	// implicit start).
+	var dones int
+	for _, env := range logged {
+		if env.Type == events.TaskDone.Type() {
+			dones++
+			if !strings.Contains(string(env.Data), `"redacted":true`) {
+				t.Errorf("task.done is not redacted: %s", env.Data)
+			}
+		}
+	}
+	if dones != 1 {
+		t.Errorf("%d task.done events in the log, want 1", dones)
 	}
 
 	// After a restart nothing sensitive survives: it only lived in memory.

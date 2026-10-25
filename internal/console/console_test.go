@@ -377,3 +377,33 @@ func TestConsoleWithoutAWidth(t *testing.T) {
 	f.typeKeys(t, strings.Repeat("a", 100))
 	f.waitScreen(t, "> "+strings.Repeat("a", 76))
 }
+
+func TestConsoleStatus(t *testing.T) {
+	c, f := openFake(t, 40, Options{Prompt: "you> "})
+	f.typeKeys(t, "abc")
+	c.SetStatus("· t3 12/30 s")
+	f.waitScreen(t, "· t3 12/30 s", "you> abc")
+	fmt.Fprint(c, "doggie> Voy")
+	f.waitScreen(t, "doggie> Voy", "· t3 12/30 s", "you> abc")
+	fmt.Fprint(c, ".\n")
+	c.SetStatus("· t3 13/30 s")
+	f.waitScreen(t, "doggie> Voy.", "· t3 13/30 s", "you> abc")
+	c.SetStatus("")
+	f.waitScreen(t, "doggie> Voy.", "you> abc")
+	c.SetStatus("· t4 asks a question")
+	c.Close()
+	if got := f.lines(); !slices.Equal(got, []string{"doggie> Voy."}) {
+		t.Errorf("after Close the screen is %q", got)
+	}
+	c.SetStatus("after close") // must not block
+}
+
+func TestPlainConsoleIgnoresStatus(t *testing.T) {
+	var out syncBuffer
+	c := Plain(strings.NewReader(""), &out)
+	c.SetStatus("· t3 12/30 s")
+	c.Close()
+	if s := out.String(); s != "" {
+		t.Errorf("printed %q", s)
+	}
+}

@@ -145,6 +145,7 @@ type rig struct {
 	// model is what the screen should show above the live region.
 	model   []string
 	partial string
+	status  string // the status row as it should show
 }
 
 func newRig(t *testing.T, cols int, prompt string) *rig {
@@ -167,6 +168,12 @@ func (g *rig) update(f func()) {
 func (g *rig) print(text string) {
 	g.modelPrint(text)
 	g.update(func() { g.s.print(&g.b, text) })
+}
+
+// setStatus sets the status row; want is how it should show.
+func (g *rig) setStatus(text, want string) {
+	g.status = want
+	g.update(func() { g.s.setStatus(text) })
 }
 
 func (g *rig) key(k key) {
@@ -218,6 +225,9 @@ func (g *rig) check() {
 	want := slices.Clone(g.model)
 	if g.partial != "" {
 		want = append(want, g.partial)
+	}
+	if g.status != "" {
+		want = append(want, g.status)
 	}
 	input := g.inputRow()
 	want = append(want, input)
@@ -415,5 +425,27 @@ func TestScreenKeepsCombiningMarksAtTheEdge(t *testing.T) {
 	g.print("123456789éx\n")
 	if got := g.v.lines(); got[0] != "123456789é" || got[1] != "x" {
 		t.Errorf("screen %q", got)
+	}
+}
+
+func TestStatusRow(t *testing.T) {
+	g := newRig(t, 20, "you> ")
+	g.typeText("hola")
+	g.setStatus("· t3 12/30 s", "· t3 12/30 s")
+	g.print("doggie> Voy")
+	g.print(", ya.\n")
+	g.setStatus(" a\tb\x1b[2J\nc ", "a b[2J c")
+	g.setStatus("· t3 Esperar un rato largo: 12/30 s", "· t3 Esperar un rat…")
+	g.setStatus("日本語日本語日本語日本語", "日本語日本語日本語…")
+	g.print("doggie> una respuesta que no cabe en una fila")
+	g.setStatus("", "")
+	g.key(k(keyEnter))
+	g.setStatus("x", "x")
+	var b bytes.Buffer
+	g.s.finish(&b)
+	g.v.Write(b.Bytes())
+	got := g.v.lines()
+	if last := strings.TrimRight(got[len(got)-1], " "); last == "x" {
+		t.Errorf("the status row stays after finishing: %q", got)
 	}
 }

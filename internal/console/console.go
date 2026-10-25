@@ -43,11 +43,12 @@ type Terminal interface {
 // Console reads lines from the user and prints text above them. Its methods
 // may be called from any goroutine.
 type Console struct {
-	lines  chan string
-	writes chan []byte
-	stop   chan struct{}
-	done   chan struct{}
-	once   sync.Once
+	lines    chan string
+	writes   chan []byte
+	statuses chan string
+	stop     chan struct{}
+	done     chan struct{}
+	once     sync.Once
 
 	interactive bool
 }
@@ -85,6 +86,19 @@ func (c *Console) Write(p []byte) (int, error) {
 	}
 }
 
+// SetStatus shows text on a line of its own between the output and the line
+// being typed, replacing what it showed before; empty text removes it. Text
+// too long for the terminal is cut. Without a terminal it does nothing.
+func (c *Console) SetStatus(text string) {
+	if !c.interactive {
+		return
+	}
+	select {
+	case c.statuses <- text:
+	case <-c.done:
+	}
+}
+
 // Close ends the console and restores the terminal. Everything written
 // before is on screen when it returns.
 func (c *Console) Close() error {
@@ -97,6 +111,7 @@ func newConsole(interactive bool) *Console {
 	return &Console{
 		lines:       make(chan string),
 		writes:      make(chan []byte),
+		statuses:    make(chan string),
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 		interactive: interactive,
@@ -217,6 +232,8 @@ func (c *Console) runInteractive(t Terminal, opts Options) {
 			c.keys(dec.feed(p), e, s, &q, &b, update)
 		case p := <-c.writes:
 			update(func() { s.print(&b, string(p)) })
+		case text := <-c.statuses:
+			update(func() { s.setStatus(text) })
 		case <-t.Resized():
 			update(nil)
 		case q.send() <- q.next():

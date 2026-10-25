@@ -65,10 +65,31 @@ func FuzzScreen(f *testing.F) {
 			typed = typed[n:]
 			m := min(len(printed), 11)
 			g.print(string(printed[:m]))
+			if m > 0 && printed[0]%3 == 0 {
+				text := string(printed[:m])
+				g.status = string(statusModel(text, g.s.cols))
+				g.update(func() { g.s.setStatus(text) })
+			}
 			printed = printed[m:]
 		}
 		var b bytes.Buffer
 		g.s.finish(&b)
 		g.v.Write(b.Bytes())
 	})
+}
+
+// statusModel is how a status row should show, cut the simplest way.
+func statusModel(text string, cols int) []rune {
+	rs := []rune(strings.TrimSpace(oneLine(text)))
+	if widthOf(rs) <= cols {
+		return rs
+	}
+	w := 0
+	for i, r := range rs {
+		if w+width(r) > cols-1 {
+			return append(rs[:i:i], '…')
+		}
+		w += width(r)
+	}
+	return rs
 }

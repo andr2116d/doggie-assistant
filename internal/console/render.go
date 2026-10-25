@@ -3,6 +3,8 @@ package console
 import (
 	"bytes"
 	"fmt"
+	"slices"
+	"strings"
 )
 
 // minCols is the narrowest terminal drawn as such; narrower ones are drawn
@@ -11,18 +13,19 @@ const minCols = 8
 
 // screen draws the console on a terminal in raw mode. Below what was printed
 // it keeps a live region it redraws on every change: the output line still
-// being written, if any, and the input line. Neither ever wraps, so the
-// region is at most two rows and can always be found again: a partial output
-// line is broken into rows as it overflows them, and the input line scrolls
-// sideways.
+// being written, if any, the status line, if any, and the input line. None
+// ever wraps, so the region is at most three rows and can always be found
+// again: a partial output line is broken into rows as it overflows them, the
+// status line is cut, and the input line scrolls sideways.
 type screen struct {
 	cols    int
 	prompt  []rune
 	partial []rune // output line being written, at most cols wide
+	status  []rune // shown between the output and the input line, if set
 	scroll  int    // first rune of the input line shown
 
-	drawn       bool // the live region is on screen
-	partialRows int  // rows of the live region above the input line
+	drawn     bool // the live region is on screen
+	rowsAbove int  // rows of the live region above the input line
 }
 
 // clear erases the live region, leaving the cursor where it started.
@@ -31,8 +34,8 @@ func (s *screen) clear(b *bytes.Buffer) {
 		return
 	}
 	b.WriteString("\r")
-	if s.partialRows > 0 {
-		fmt.Fprintf(b, "\x1b[%dA", s.partialRows)
+	if s.rowsAbove > 0 {
+		fmt.Fprintf(b, "\x1b[%dA", s.rowsAbove)
 	}
 	b.WriteString("\x1b[J")
 	s.drawn = false
@@ -80,11 +83,16 @@ func (s *screen) commit(b *bytes.Buffer) {
 // draw writes the live region for e. The cursor ends on the input line, at
 // e's cursor.
 func (s *screen) draw(b *bytes.Buffer, e *editor) {
-	s.partialRows = 0
+	s.rowsAbove = 0
 	if len(s.partial) > 0 {
 		b.WriteString(string(s.partial))
 		b.WriteString("\r\n")
-		s.partialRows = 1
+		s.rowsAbove++
+	}
+	if len(s.status) > 0 {
+		b.WriteString(string(s.statusRow()))
+		b.WriteString("\r\n")
+		s.rowsAbove++
 	}
 	prompt := s.prompt
 	// Room for the prompt, at least one rune and the cursor after it.
@@ -156,4 +164,18 @@ func (s *screen) refit(b *bytes.Buffer) {
 	p := s.partial
 	s.partial = nil
 	s.print(b, string(p))
+}
+
+// setStatus sets the status line, or removes it if text is empty.
+func (s *screen) setStatus(text string) {
+	s.status = []rune(strings.TrimSpace(oneLine(text)))
+}
+
+// statusRow is the status line cut to fit the terminal, ending in "…" when
+// cut.
+func (s *screen) statusRow() []rune {
+	if widthOf(s.status) <= s.cols {
+		return s.status
+	}
+	return append(slices.Clone(fitting(s.status, s.cols-1)), '…')
 }

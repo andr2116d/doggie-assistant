@@ -22,7 +22,7 @@ import (
 )
 
 const chatUsage = `Usage:
-  doggie chat [-channel terminal] [-thread id] [-as satellite] [-wait 20s]
+  doggie chat [-channel terminal] [-thread id] [-history 5] [-as satellite] [-wait 20s]
 
 Talks with DOGGIE: type a sentence and press Enter, and keep typing while
 DOGGIE answers or works. Replies show as they are written, and notices
@@ -54,6 +54,8 @@ type chatOptions struct {
 	slowReply time.Duration
 	// sendTimeout bounds publishing one sentence.
 	sendTimeout time.Duration
+	// history is how many past turns an interactive chat shows on opening.
+	history int
 	// host, if set, lets the chat run DOGGIE in its own process when none
 	// runs on this machine.
 	host *hosting
@@ -63,7 +65,7 @@ type chatOptions struct {
 
 func defaultChatOptions() chatOptions {
 	return chatOptions{channel: "terminal", thread: "terminal", wait: 20 * time.Second,
-		replyTimeout: 3 * time.Minute, slowReply: 20 * time.Second, sendTimeout: 5 * time.Second}
+		replyTimeout: 3 * time.Minute, slowReply: 20 * time.Second, sendTimeout: 5 * time.Second, history: defaultHistory}
 }
 
 func chatCmd(args []string) error {
@@ -74,6 +76,7 @@ func chatCmd(args []string) error {
 	flags.StringVar(&o.channel, "channel", "terminal", "channel to speak on")
 	flags.StringVar(&o.thread, "thread", "", "conversation thread (default: the channel's)")
 	flags.DurationVar(&o.wait, "wait", 20*time.Second, "without a terminal, keep listening this long after the last reply")
+	flags.IntVar(&o.history, "history", defaultHistory, "turns of the conversation so far to show on opening")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -366,6 +369,9 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 	commands := make(chan *command, 64)
 	commandsDone := make(chan commandResult, 64)
 	go commander(sctx, conn, o.thread, commands, commandsDone)
+	if ui.IsInteractive() && o.history > 0 {
+		c.showHistory(sctx, conn)
+	}
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	// idleSince is the last activity, for a piped chat to know when to stop.

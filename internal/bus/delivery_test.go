@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -307,5 +308,92 @@ func TestRemovedSatelliteIsToldItIsClosed(t *testing.T) {
 	case <-states.up:
 		t.Error("a removed satellite reconnected")
 	default:
+	}
+}
+
+// Across many restarts of the bus, each loss is reported once and followed
+// by one return, in order.
+func TestSatelliteIsToldAboutEveryRestart(t *testing.T) {
+	dir := t.TempDir()
+	s := mustStart(t, opts(dir, "127.0.0.1:-1", discardLog()))
+	addr := strings.TrimPrefix(s.ClientURL(), "nats://")
+	var mu sync.Mutex
+	var log []string
+	sat, err := Dial(s.ClientURL(), DialOptions{
+		Name: "satellite", Token: "test-token", Log: discardLog(),
+		OnDisconnect: func(error) { mu.Lock(); log = append(log, "down"); mu.Unlock() },
+		OnReconnect:  func() { mu.Lock(); log = append(log, "up"); mu.Unlock() },
+		OnClosed:     func(err error) { mu.Lock(); log = append(log, fmt.Sprint("closed ", err)); mu.Unlock() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pings, err := Subscribe(ctx, sat, testPing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const restarts = 5
+	for i := range restarts {
+		s.Shutdown()
+		s = mustStart(t, opts(dir, addr, discardLog()))
+		core := connect(t, s, "core")
+		// Back for real: the subscription works again.
+		deadline := time.After(10 * time.Second)
+	wait:
+		for {
+			Publish(context.Background(), core, testPing, ping{N: i})
+			select {
+			case <-pings:
+				break wait
+			case <-deadline:
+				t.Fatalf("restart %d: no events after reconnecting", i)
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}
+	sat.Close()
+	s.Shutdown()
+	mu.Lock()
+	defer mu.Unlock()
+	want := slices.Repeat([]string{"down", "up"}, restarts)
+	if !slices.Equal(log, want) {
+		t.Errorf("callbacks %q, want %q", log, want)
+	}
+}
+
+// Two Closes at once both return, and what was published before reaches
+// the bus.
+func TestConcurrentCloses(t *testing.T) {
+	s := startTestServer(t, "127.0.0.1:-1")
+	core := connect(t, s, "core")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got, err := Subscribe(ctx, core, testPing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := range 20 {
+		sat, err := Dial(s.ClientURL(), DialOptions{Name: "satellite", Token: "test-token", Log: discardLog()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Publish(context.Background(), sat, testPing, ping{N: round}); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		for range 3 {
+			wg.Go(func() { sat.Close() })
+		}
+		wg.Wait()
+		select {
+		case ev := <-got:
+			if ev.Data.N != round {
+				t.Fatalf("round %d got ping %d", round, ev.Data.N)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("round %d: ping lost", round)
+		}
 	}
 }

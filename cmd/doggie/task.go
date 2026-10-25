@@ -17,7 +17,7 @@ import (
 )
 
 const taskUsage = `Usage:
-  doggie task start [-desc text] [-timeout 30s] [-thread id] <kind> [input-json]
+  doggie task start [-desc text] [-timeout 30s] [-thread id] [-sensitive] <kind> [input-json]
   doggie task list [-active] [-limit n]
   doggie task get <id>
   doggie task cancel [-reason text] <id>
@@ -30,7 +30,7 @@ All subcommands also take -config, -server and -ca (see "doggie events -h").
 type taskOptions struct {
 	desc, thread, reason string
 	timeout              time.Duration
-	active               bool
+	active, sensitive    bool
 	limit                int
 }
 
@@ -70,6 +70,7 @@ func parseTask(sub string, args []string) ([]string, taskOptions, clientFlags, e
 		flags.StringVar(&o.desc, "desc", "", "human-readable description")
 		flags.DurationVar(&o.timeout, "timeout", 0, "task timeout (default: the manager's)")
 		flags.StringVar(&o.thread, "thread", "cli", "conversation thread that asks")
+		flags.BoolVar(&o.sensitive, "sensitive", false, "keep the input and result out of the event log")
 	case "list":
 		flags.BoolVar(&o.active, "active", false, "only tasks still in progress")
 		flags.IntVar(&o.limit, "limit", 0, "show at most this many recent tasks (default: the manager's)")
@@ -100,7 +101,7 @@ func taskSub(ctx context.Context, conn *bus.Conn, w io.Writer, sub string, args 
 		if len(args) < 1 || len(args) > 2 {
 			return errors.New("usage: doggie task start [flags] <kind> [input-json]")
 		}
-		spec := events.TaskSpec{Kind: args[0], Description: o.desc, ThreadID: o.thread}
+		spec := events.TaskSpec{Kind: args[0], Description: o.desc, ThreadID: o.thread, Sensitive: o.sensitive}
 		if len(args) == 2 {
 			if !json.Valid([]byte(args[1])) {
 				return fmt.Errorf("input must be valid JSON, got %s", args[1])

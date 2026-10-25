@@ -13,12 +13,12 @@ const minCols = 8
 // it keeps a live region it redraws on every change: the output line still
 // being written, if any, and the input line. Neither ever wraps, so the
 // region is at most two rows and can always be found again: a partial output
-// line is broken into rows as it fills them, and the input line scrolls
+// line is broken into rows as it overflows them, and the input line scrolls
 // sideways.
 type screen struct {
 	cols    int
 	prompt  []rune
-	partial []rune // output line being written, narrower than cols
+	partial []rune // output line being written, at most cols wide
 	scroll  int    // first rune of the input line shown
 
 	drawn       bool // the live region is on screen
@@ -67,9 +67,6 @@ func (s *screen) print(b *bytes.Buffer, text string) {
 			s.commit(b)
 		}
 		s.partial = append(s.partial, r)
-		if widthOf(s.partial) == s.cols {
-			s.commit(b)
-		}
 	}
 }
 
@@ -151,9 +148,9 @@ func (s *screen) finish(b *bytes.Buffer) {
 }
 
 // refit breaks the partial line again after the terminal narrowed, so it
-// stays narrower than cols.
+// still fits.
 func (s *screen) refit(b *bytes.Buffer) {
-	if widthOf(s.partial) < s.cols {
+	if widthOf(s.partial) <= s.cols {
 		return
 	}
 	p := s.partial

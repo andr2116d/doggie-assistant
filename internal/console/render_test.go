@@ -34,8 +34,12 @@ func (v *vt) ensureRow() {
 func (v *vt) put(r rune) {
 	w := width(r)
 	if w == 0 {
-		if row := v.rows[v.row]; v.col > 0 && v.col <= len(row) {
-			row[v.col-1] += string(r)
+		at := v.col - 1
+		if v.pendingWrap {
+			at = v.col // the cursor stays on the last rune
+		}
+		if row := v.rows[v.row]; at >= 0 && at < len(row) {
+			row[at] += string(r)
 		}
 		return
 	}
@@ -202,10 +206,6 @@ func (g *rig) modelPrint(text string) {
 			g.partial = ""
 		}
 		g.partial += string(c)
-		if runewidthOf(g.partial) == g.s.cols {
-			g.model = append(g.model, g.partial)
-			g.partial = ""
-		}
 	}
 }
 
@@ -406,5 +406,14 @@ func TestScreenNarrowsWithAPartialLine(t *testing.T) {
 	g.update(func() { g.s.refit(&g.b) })
 	if w := widthOf(g.s.partial); w >= 10 {
 		t.Errorf("partial line %d columns wide on 10", w)
+	}
+}
+
+// A combining mark after a rune in the last column stays with it.
+func TestScreenKeepsCombiningMarksAtTheEdge(t *testing.T) {
+	g := newRig(t, 10, "> ")
+	g.print("123456789éx\n")
+	if got := g.v.lines(); got[0] != "123456789é" || got[1] != "x" {
+		t.Errorf("screen %q", got)
 	}
 }

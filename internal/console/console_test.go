@@ -293,3 +293,87 @@ func TestConsoleNarrowsWithAReplyBeingWritten(t *testing.T) {
 	f.typeKeys(t, "a")
 	f.waitScreen(t, "doggie> xx", "xxxxxxxxxx", "xxx", "> a")
 }
+
+// Many writers, typing and two Closes at once: no panic, no deadlock, and a
+// write that loses the race with Close fails with ErrClosed.
+func TestConsoleUnderLoad(t *testing.T) {
+	for round := range 20 {
+		c, f := openFake(t, 20+round, Options{Prompt: "> "})
+		var wg sync.WaitGroup
+		for w := range 8 {
+			wg.Go(func() {
+				for i := range 50 {
+					if _, err := fmt.Fprintf(c, "w%d-%d 日本 ", w, i); err != nil {
+						if !errors.Is(err, ErrClosed) {
+							t.Errorf("write: %v", err)
+						}
+						return
+					}
+				}
+			})
+		}
+		wg.Go(func() {
+			for i := range 30 {
+				if _, err := f.keys.Write([]byte(fmt.Sprintf("línea %d\r\x1b[A", i))); err != nil {
+					return
+				}
+			}
+		})
+		wg.Go(func() {
+			for range c.Lines() {
+			}
+		})
+		time.Sleep(time.Duration(round) * time.Millisecond)
+		closed := make(chan struct{})
+		go func() { c.Close(); close(closed) }()
+		c.Close()
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Close deadlocked")
+		}
+		f.keys.Close()
+		wg.Wait()
+	}
+}
+
+// brokenTerm fails in every way a terminal can.
+type brokenTerm struct{ readErr chan struct{} }
+
+func (b brokenTerm) Read([]byte) (int, error) {
+	<-b.readErr
+	return 0, errors.New("input/output error")
+}
+func (brokenTerm) Write([]byte) (int, error) { return 0, errors.New("terminal gone") }
+func (brokenTerm) Width() (int, error)       { return 0, errors.New("no size") }
+func (brokenTerm) Resized() <-chan struct{}  { return nil }
+func (brokenTerm) Restore() error            { return errors.New("can't restore") }
+
+func TestConsoleOnABrokenTerminal(t *testing.T) {
+	b := brokenTerm{readErr: make(chan struct{})}
+	c := Interactive(b, Options{Prompt: "> "})
+	if _, err := c.Write([]byte("text\n")); err != nil {
+		t.Errorf("Write: %v", err)
+	}
+	close(b.readErr)
+	if _, ok := next(t, c.Lines()); ok {
+		t.Error("lines open after the input failed")
+	}
+	done := make(chan struct{})
+	go func() { c.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung on a broken terminal")
+	}
+}
+
+// A zero width falls back to a usable one.
+func TestConsoleWithoutAWidth(t *testing.T) {
+	f := newFakeTerm(t, 80) // drawn on 80 columns
+	f.width = 0             // but the terminal can't tell its width
+	c := Interactive(f, Options{Prompt: "> "})
+	t.Cleanup(func() { c.Close() })
+	f.typeKeys(t, strings.Repeat("a", 100))
+	f.waitScreen(t, "> "+strings.Repeat("a", 76))
+}

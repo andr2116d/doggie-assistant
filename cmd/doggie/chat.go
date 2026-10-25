@@ -278,6 +278,8 @@ type chatUI interface {
 	io.Writer
 	Lines() <-chan string
 	IsInteractive() bool
+	// SetStatus shows the status line; empty removes it.
+	SetStatus(text string)
 }
 
 // sent is the outcome of publishing a sentence.
@@ -317,6 +319,16 @@ type chatState struct {
 	takeover <-chan time.Time
 	// handedOver fires once a DOGGIE run here is handed over.
 	handedOver chan struct{}
+
+	board *taskBoard
+	// lists and lookups deliver what the board asked for.
+	lists   chan boardList
+	lookups chan boardLookup
+	// statusShown is the status line on screen since statusAt; statusDue
+	// fires when a newer one may be shown.
+	statusShown string
+	statusAt    time.Time
+	statusDue   <-chan time.Time
 }
 
 // chat runs until the user quits, the input ends and replies are in, or
@@ -345,6 +357,10 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 	if err != nil {
 		return err
 	}
+	taskEvents, err := bus.SubscribeEnvelopes(sctx, conn, "task.*")
+	if err != nil {
+		return err
+	}
 	subject, err := events.UtteranceOn(o.channel)
 	if err != nil {
 		return err
@@ -355,7 +371,12 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 		handedOver: make(chan struct{}, 1),
 		unanswered: map[string]time.Time{},
 		started:    time.Now(),
+		board:      newTaskBoard(o.thread),
+		lists:      make(chan boardList, 4),
+		lookups:    make(chan boardLookup, maxBoardTasks),
 	}
+	defer ui.SetStatus("")
+	listActive(sctx, conn, c.lists)
 	toSend := make(chan string, 64)
 	results := make(chan sent, 64)
 	go sender(sctx, conn, subject, o, toSend, results)
@@ -455,6 +476,32 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 			if err := c.connection(ctx, conn, s); err != nil {
 				return err
 			}
+		case env, ok := <-taskEvents:
+			if !ok {
+				return ended(ctx)
+			}
+			if c.taskEvent(sctx, conn, env) {
+				idleSince = time.Now()
+			}
+		case l := <-c.lists:
+			for _, q := range c.board.merge(l) {
+				c.view.note(q)
+				idleSince = time.Now()
+			}
+			c.showStatus()
+		case l := <-c.lookups:
+			questions, again := c.board.looked(l)
+			for _, q := range questions {
+				c.view.note(q)
+				idleSince = time.Now()
+			}
+			if again != "" {
+				c.lookup(sctx, conn, again, recheckDelay)
+			}
+			c.showStatus()
+		case <-c.statusDue:
+			c.statusDue = nil
+			c.showStatus()
 		case ev, ok := <-stops:
 			if !ok {
 				return ended(ctx)
@@ -675,6 +722,8 @@ func (c *chatState) connection(ctx context.Context, conn *bus.Conn, s connState)
 	case connDown:
 		if !c.down {
 			c.down, c.downAt = true, time.Now()
+			c.board.clear()
+			c.showStatus()
 			if c.host != nil && c.stopReason == "" {
 				// On this machine, the reason is sure to be in the file.
 				c.stopping(c.host.lastStop())
@@ -690,6 +739,7 @@ func (c *chatState) connection(ctx context.Context, conn *bus.Conn, s connState)
 		c.down, c.stopReason, c.takeover = false, "", nil
 		c.view.note("· connected again")
 		c.catchUp(ctx, conn)
+		listActive(ctx, conn, c.lists)
 	case connClosed:
 		reason := "closed"
 		if s.err != nil {

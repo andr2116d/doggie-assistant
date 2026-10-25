@@ -19,6 +19,7 @@ type fakeUI struct {
 	interactive bool
 	mu          sync.Mutex
 	out         strings.Builder
+	statuses    []string
 }
 
 func newFakeUI(interactive bool) *fakeUI {
@@ -32,6 +33,36 @@ func (u *fakeUI) Write(p []byte) (int, error) {
 }
 func (u *fakeUI) Lines() <-chan string { return u.lines }
 func (u *fakeUI) IsInteractive() bool  { return u.interactive }
+
+func (u *fakeUI) SetStatus(text string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.interactive {
+		u.statuses = append(u.statuses, text)
+	}
+}
+
+// status is the status line shown last.
+func (u *fakeUI) status() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if len(u.statuses) == 0 {
+		return ""
+	}
+	return u.statuses[len(u.statuses)-1]
+}
+
+// waitStatus waits until the status line is want.
+func (u *fakeUI) waitStatus(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for u.status() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("status %q, want %q", u.status(), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
 
 func (u *fakeUI) printed() string {
 	u.mu.Lock()

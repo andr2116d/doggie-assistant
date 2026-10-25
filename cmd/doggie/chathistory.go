@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,45 +15,105 @@ import (
 // opens.
 const defaultHistory = 5
 
+// historyWindows are how far back a chat looks in the log for its
+// conversation, widening while it finds too few turns; zero is the whole
+// log.
+var historyWindows = []time.Duration{time.Hour, 24 * time.Hour, 0}
+
 // showHistory shows the last turns of the chat's conversation logged before
-// it opened, oldest first. Later ones arrive live.
+// it opened, oldest first. Later ones arrive live. It asks the brain, which
+// keeps them in memory, and reads the log if the brain can't tell.
 func (c *chatState) showHistory(ctx context.Context, conn *bus.Conn) {
-	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	envs, err := bus.History(hctx, conn, time.Time{}, events.BrainTurn.Type())
+	turns, err := c.historyFromBrain(ctx, conn)
+	if err != nil {
+		turns, err = c.historyFromLog(ctx, conn)
+	}
 	if err != nil {
 		c.view.note("· could not read the conversation so far: " + err.Error())
 		return
 	}
 	type shown struct {
-		meta  bus.Meta
+		at    time.Time
 		lines []string
 	}
-	var turns []shown
-	for _, env := range envs {
-		ev, err := bus.Decode(env, events.BrainTurn)
-		if err != nil || ev.Data.ThreadID != c.o.thread || !ev.Time.Before(c.started) {
+	var show []shown
+	for _, t := range turns {
+		if t.Turn.ThreadID != c.o.thread || !c.beforeOpening(t) {
 			continue
 		}
-		if lines := c.turnLines(ev.Data); len(lines) > 0 {
-			turns = append(turns, shown{ev.Meta, lines})
-		}
-		if len(turns) > c.o.history {
-			turns = turns[1:]
+		if lines := c.turnLines(t.Turn); len(lines) > 0 {
+			show = append(show, shown{t.At, lines})
 		}
 	}
-	if len(turns) == 0 {
+	if len(show) > c.o.history {
+		show = show[len(show)-c.o.history:]
+	}
+	if len(show) == 0 {
 		return
 	}
-	c.view.note(fmt.Sprintf("· earlier in this conversation, from %s ago:", ago(time.Since(turns[0].meta.Time))))
+	c.view.note(fmt.Sprintf("· earlier in this conversation, from %s ago:", ago(time.Since(show[0].at))))
 	// Not marked as seen: a catch-up reads the log from the last event seen,
 	// and skips what came before the chat opened anyway.
-	for _, t := range turns {
+	for _, t := range show {
 		for _, line := range t.lines {
 			c.view.note(line)
 		}
 	}
 	c.view.note("· ───")
+}
+
+// beforeOpening reports whether a turn was logged before the chat opened,
+// by its position in the log when both are known: clocks may differ.
+func (c *chatState) beforeOpening(t events.PastTurn) bool {
+	if t.Seq != 0 && c.openSeq != 0 {
+		return t.Seq <= c.openSeq
+	}
+	return t.At.Before(c.started)
+}
+
+// historyFromBrain asks the brain for the conversation's last turns. It
+// fails when the brain isn't there or doesn't know the conversation.
+func (c *chatState) historyFromBrain(ctx context.Context, conn *bus.Conn) ([]events.PastTurn, error) {
+	bctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	r, err := bus.Request(bctx, conn, events.BrainHistory, events.HistoryRequest{ThreadID: c.o.thread, Limit: c.o.history})
+	if err != nil {
+		return nil, err
+	}
+	if !r.Known {
+		return nil, errors.New("the brain doesn't know the conversation")
+	}
+	return r.Turns, nil
+}
+
+// historyFromLog reads the conversation's last turns from the log, looking
+// further back only while it finds too few.
+func (c *chatState) historyFromLog(ctx context.Context, conn *bus.Conn) ([]events.PastTurn, error) {
+	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var turns []events.PastTurn
+	for _, window := range historyWindows {
+		var since time.Time
+		if window > 0 {
+			since = time.Now().Add(-window)
+		}
+		envs, err := bus.History(hctx, conn, since, events.BrainTurn.Type())
+		if err != nil {
+			return nil, err
+		}
+		turns = turns[:0]
+		for _, env := range envs {
+			ev, err := bus.Decode(env, events.BrainTurn)
+			if err != nil || ev.Data.ThreadID != c.o.thread {
+				continue
+			}
+			turns = append(turns, events.PastTurn{ID: ev.ID, At: ev.Time, Seq: ev.Seq, Turn: ev.Data})
+		}
+		if len(turns) >= c.o.history {
+			break
+		}
+	}
+	return turns, nil
 }
 
 // turnLines is how a past turn looks: what came in, then the replies.

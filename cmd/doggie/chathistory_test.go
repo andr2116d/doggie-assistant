@@ -110,3 +110,63 @@ func TestChatHistoryLeavesCatchUpWhereItWas(t *testing.T) {
 		t.Errorf("lastSeen = %v, want it untouched", c.lastSeen)
 	}
 }
+
+// serveHistory answers brain.history as the brain would.
+func serveHistory(t *testing.T, c *bus.Conn, reply func(events.HistoryRequest) events.HistoryReply) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	in, err := bus.Serve(ctx, c, events.BrainHistory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for req := range in {
+			req.Reply(reply(req.Req))
+		}
+	}()
+}
+
+// The chat takes the history from the brain when it can, leaving out what
+// was logged after it opened.
+func TestChatTakesTheHistoryFromTheBrain(t *testing.T) {
+	client := sayEnv(t, nil)
+	logTurn(t, client, events.BrainTurnData{ThreadID: "terminal", Replies: []string{"solo en el log"}})
+	asked := make(chan events.HistoryRequest, 1)
+	serveHistory(t, client, func(r events.HistoryRequest) events.HistoryReply {
+		asked <- r
+		turn := func(seq uint64, reply string) events.PastTurn {
+			return events.PastTurn{ID: reply, At: time.Now(), Seq: seq, Turn: events.BrainTurnData{ThreadID: "terminal", Replies: []string{reply}}}
+		}
+		return events.HistoryReply{Known: true, Turns: []events.PastTurn{turn(1, "del cerebro"), turn(1<<40, "después de abrir")}}
+	})
+	ui := newFakeUI(true)
+	runChat(t, client, ui, make(chan connState), historyOptions(3))
+	ui.waitPrinted(t, "· ───\n")
+	out := ui.printed()
+	if !strings.Contains(out, "doggie> del cerebro\n") || strings.Contains(out, "solo en el log") || strings.Contains(out, "después de abrir") {
+		t.Errorf("printed:\n%s", out)
+	}
+	if r := <-asked; r.ThreadID != "terminal" || r.Limit != 3 {
+		t.Errorf("asked %+v", r)
+	}
+}
+
+// When the brain doesn't know the conversation, the chat reads the log,
+// looking further back while it finds too few turns.
+func TestChatReadsTheHistoryFromTheLog(t *testing.T) {
+	saved := historyWindows
+	historyWindows = []time.Duration{time.Nanosecond, 0}
+	t.Cleanup(func() { historyWindows = saved })
+	client := sayEnv(t, nil)
+	for _, s := range []string{"uno", "dos", "tres"} {
+		logTurn(t, client, events.BrainTurnData{ThreadID: "terminal", Replies: []string{s}})
+	}
+	serveHistory(t, client, func(events.HistoryRequest) events.HistoryReply { return events.HistoryReply{} })
+	ui := newFakeUI(true)
+	runChat(t, client, ui, make(chan connState), historyOptions(2))
+	ui.waitPrinted(t, "· ───\n")
+	if out := ui.printed(); !strings.Contains(out, "doggie> dos\ndoggie> tres\n") || strings.Contains(out, "uno") {
+		t.Errorf("printed:\n%s", out)
+	}
+}

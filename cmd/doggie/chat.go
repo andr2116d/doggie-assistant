@@ -306,7 +306,10 @@ type chatState struct {
 	// lastSeen is the log time of the newest event shown; started bounds
 	// what a catch-up may show.
 	lastSeen, started time.Time
-	down              bool
+	// openSeq is the newest event in the log when the chat opened, 0 if
+	// unknown: what came after arrives live.
+	openSeq uint64
+	down    bool
 	// self is the chat's connection name, the source of its sentences.
 	self string
 
@@ -391,6 +394,9 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 	commandsDone := make(chan commandResult, 64)
 	go commander(sctx, conn, o.thread, o.channel, commands, commandsDone)
 	if ui.IsInteractive() && o.history > 0 {
+		qctx, cancel := context.WithTimeout(sctx, 3*time.Second)
+		c.openSeq, _ = bus.LastSeq(qctx, conn)
+		cancel()
 		c.showHistory(sctx, conn)
 	}
 	tick := time.NewTicker(time.Second)

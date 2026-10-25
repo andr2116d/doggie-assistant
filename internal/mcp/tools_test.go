@@ -405,3 +405,92 @@ func TestCleanLineAndTruncate(t *testing.T) {
 		t.Errorf("truncate empty = %q", got)
 	}
 }
+
+// A resumed turn can't start again what the turn that died already started.
+func TestResumedTurnDoesNotRepeatAnAction(t *testing.T) {
+	h := newHarness(t)
+	c, cs := h.bound("th")
+	sentence := time.Now()
+	netflix := map[string]any{"kind": "demo.sleep", "description": "Abrir Netflix", "input": map[string]any{"seconds": 5}}
+
+	// The turn that died started it.
+	var first startTaskOut
+	callOK(t, cs, "start_task", netflix, &first)
+
+	// The resumed turn tries again: refused, whatever the description.
+	c.Bind(Turn{ThreadID: "th", Channel: "terminal", Resumed: sentence})
+	again := map[string]any{"kind": "demo.sleep", "description": "Abriendo Netflix otra vez", "input": map[string]any{"seconds": 5}}
+	msg := callErr(t, cs, "start_task", again)
+	mustContain(t, msg, "already started")
+	mustContain(t, msg, first.TaskID)
+	mustContain(t, callErr(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "x", "input": map[string]any{"seconds": 5.0}}), "already started")
+
+	// Something else is fine: another input, or another kind.
+	var other startTaskOut
+	callOK(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "YouTube", "input": map[string]any{"seconds": 6}}, &other)
+	callOK(t, cs, "start_task", map[string]any{"kind": "demo.ask", "description": "Perfil", "input": map[string]any{"question": "¿Cuál?"}}, &other)
+	// The same input for another kind is another action.
+	callOK(t, cs, "start_task", map[string]any{"kind": "test.big", "description": "Otra cosa", "input": map[string]any{"seconds": 5}}, &other)
+	if n := h.taskCount(); n != 4 {
+		t.Errorf("%d tasks, want 4", n)
+	}
+}
+
+func TestResumedGuardEdges(t *testing.T) {
+	h := newHarness(t)
+	defer close(h.gate)
+	c, cs := h.bound("th")
+	start := func(input map[string]any) startTaskOut {
+		var out startTaskOut
+		callOK(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "x", "input": input}, &out)
+		return out
+	}
+	// A task that ended well counts as done: not again.
+	done := start(map[string]any{"seconds": 1})
+	h.waitStatus(done.TaskID, events.StatusRunning)
+	h.gate <- struct{}{} // let it end
+	h.waitStatus(done.TaskID, events.StatusDone)
+	// One that failed or was cancelled may be tried again (the LLM still
+	// asks the user first, by the prompt).
+	cancelled := start(map[string]any{"seconds": 2})
+	bus.Request(context.Background(), h.direct, events.CancelTask, events.TaskCancelRequest{TaskID: cancelled.TaskID})
+	h.waitStatus(cancelled.TaskID, events.StatusCancelled)
+	// No input and an empty input are the same.
+	start(nil)
+
+	c.Bind(Turn{ThreadID: "th", Resumed: time.Now()})
+	mustContain(t, callErr(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "x", "input": map[string]any{"seconds": 1}}), done.TaskID)
+	mustContain(t, callErr(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "x", "input": map[string]any{}}), "already started")
+	start(map[string]any{"seconds": 2})
+
+	// Tasks of another thread, or from before the sentence (beyond the
+	// clock margin), don't count.
+	h.startDirect(events.TaskSpec{Kind: "demo.sleep", Input: json.RawMessage(`{"seconds":3}`), ThreadID: "otro"})
+	start(map[string]any{"seconds": 3})
+	c.Bind(Turn{ThreadID: "th", Resumed: time.Now().Add(resumedMargin + time.Minute)})
+	start(map[string]any{"seconds": 1})
+
+	// A turn that isn't resumed is not checked.
+	c.Bind(Turn{ThreadID: "th"})
+	start(map[string]any{"seconds": 1})
+}
+
+func TestSameJSON(t *testing.T) {
+	for _, tt := range []struct {
+		a, b string
+		want bool
+	}{
+		{`{"a":1,"b":2}`, `{"b":2,"a":1}`, true},
+		{`{"a":1}`, `{"a":1.0}`, true},
+		{``, `{}`, true},
+		{`null`, `{}`, true},
+		{`{"a":1}`, `{"a":2}`, false},
+		{`{"a":[1,2]}`, `{"a":[2,1]}`, false},
+		{`{"a":"1"}`, `{"a":1}`, false},
+		{`{`, `{}`, true}, // undecodable counts as empty
+	} {
+		if got := sameJSON(json.RawMessage(tt.a), json.RawMessage(tt.b)); got != tt.want {
+			t.Errorf("sameJSON(%s, %s) = %v", tt.a, tt.b, got)
+		}
+	}
+}

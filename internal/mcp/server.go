@@ -47,6 +47,10 @@ var ErrNoTurn = errors.New("no conversation turn is active for this client")
 type Turn struct {
 	ThreadID string
 	Channel  string
+	// Resumed is set when the turn answers sentences a restart left
+	// unanswered: the turn that died may have acted on them already. It is
+	// when the oldest of them was said.
+	Resumed time.Time
 }
 
 // Server is DOGGIE's MCP server.

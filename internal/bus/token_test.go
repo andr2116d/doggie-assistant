@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -49,5 +50,40 @@ func TestLoadTokenMissing(t *testing.T) {
 	_, err := LoadToken(filepath.Join(t.TempDir(), "nope"))
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("err = %v, want fs.ErrNotExist", err)
+	}
+}
+
+// Processes starting at once on a fresh data dir all end up with the one
+// token in the file, or their clients can't connect.
+func TestLoadOrCreateTokenConcurrently(t *testing.T) {
+	t.Setenv(TokenEnv, "")
+	for round := range 20 {
+		path := filepath.Join(t.TempDir(), "doggie", "bus.token")
+		tokens := make(chan string, 20)
+		var wg sync.WaitGroup
+		for range 20 {
+			wg.Go(func() {
+				tok, err := LoadOrCreateToken(path)
+				if err != nil {
+					t.Error(err)
+				}
+				tokens <- tok
+			})
+		}
+		wg.Wait()
+		close(tokens)
+		file, err := LoadToken(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for tok := range tokens {
+			if tok != file {
+				t.Fatalf("round %d: a process got %.8s…, the file holds %.8s…", round, tok, file)
+			}
+		}
+		entries, _ := os.ReadDir(filepath.Dir(path))
+		if len(entries) != 1 {
+			t.Errorf("round %d: %d files left in the dir", round, len(entries))
+		}
 	}
 }

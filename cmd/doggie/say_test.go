@@ -166,7 +166,10 @@ func TestReplyViewStreams(t *testing.T) {
 		"pieces then the block": {[]step{d("u", 0, "Ya "), d("u", 0, "voy."), e("u", 0, "Ya voy.")}, "doggie> Ya voy.\n"},
 		"no pieces":             {[]step{e("u", 0, "Hola")}, "doggie> Hola\n"},
 		"two blocks":            {[]step{d("u", 0, "Uno"), e("u", 0, "Uno"), d("u", 1, "Dos"), e("u", 1, "Dos")}, "doggie> Uno\ndoggie> Dos\n"},
-		"a lost piece":          {[]step{d("u", 0, "Ya "), e("u", 0, "Ya voy.")}, "doggie> Ya \ndoggie> Ya voy.\n"},
+		"a lost last piece":     {[]step{d("u", 0, "Ya "), e("u", 0, "Ya voy.")}, "doggie> Ya voy.\n"},
+		"a lost piece inside":   {[]step{d("u", 0, "Ya "), d("u", 0, "."), e("u", 0, "Ya voy.")}, "doggie> Ya .\ndoggie> Ya voy.\n"},
+		// The block overtakes its last pieces, which come late.
+		"block before its end": {[]step{d("u", 0, "Un "), d("u", 0, "chiste "), e("u", 0, "Un chiste corto."), d("u", 0, "corto.")}, "doggie> Un chiste corto.\n"},
 		// The next block's pieces overtake the end of the previous one.
 		"overtaken": {[]step{d("u", 0, "Uno, "), d("u", 1, "Dos"), d("u", 0, "más"), e("u", 0, "Uno, más"), e("u", 1, "Dos")},
 			"doggie> Uno, \ndoggie> Dos\ndoggie> Uno, más\n"},
@@ -175,7 +178,7 @@ func TestReplyViewStreams(t *testing.T) {
 		"another turn":       {[]step{d("u1", 0, "A"), d("u2", 0, "B"), e("u1", 0, "A"), e("u2", 0, "B")}, "doggie> A\ndoggie> B\n"},
 		// Pieces travel apart from the log: one may come after its block.
 		"late piece": {[]step{d("u", 0, "Un "), e("u", 0, "Un chiste."), d("u", 0, "chiste."), e("u", 1, "Otro.")},
-			"doggie> Un \ndoggie> Un chiste.\ndoggie> Otro.\n"},
+			"doggie> Un chiste.\ndoggie> Otro.\n"},
 		"late piece of a block shown whole": {[]step{e("u", 0, "Hola."), d("u", 0, "Hola.")}, "doggie> Hola.\n"},
 	} {
 		var out strings.Builder

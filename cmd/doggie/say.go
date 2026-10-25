@@ -218,6 +218,13 @@ func (v *replyView) block(k blockKey, text string) {
 	delete(v.printed, k)
 	delete(v.pending, k)
 	if v.open != nil && *v.open == k {
+		// The block came before its last pieces: finish the line with
+		// them, unless what is shown isn't how the block starts.
+		if rest, ok := strings.CutPrefix(strings.TrimLeft(text, " \t\r\n"), p); ok {
+			fmt.Fprint(v.w, strings.TrimRight(rest, " \t\r\n"))
+			v.close()
+			return
+		}
 		v.close()
 	}
 	if shown && strings.TrimSpace(p) == strings.TrimSpace(text) {

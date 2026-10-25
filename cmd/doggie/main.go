@@ -10,8 +10,10 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
+	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/config"
 	"github.com/andr2116d/doggie-assistant/internal/supervisor"
 )
@@ -22,8 +24,8 @@ var version = "dev"
 const usage = `doggie: a self-hosted, Jarvis-style personal assistant.
 
 Usage:
-  doggie run [flags]   run DOGGIE (see "doggie run -h")
-  doggie version       print the version
+  doggie run [flags]      run DOGGIE (see "doggie run -h")
+  doggie version          print the version
 `
 
 func main() {
@@ -71,7 +73,7 @@ func runCmd(args []string) error {
 		log.Warn("no config file, using defaults", "expected", cfg.File)
 	}
 
-	selected, err := selectComponents(components(cfg, log), *only, *except)
+	selected, err := selectFactories(factories(), *only, *except)
 	if err != nil {
 		return err
 	}
@@ -85,8 +87,50 @@ func runCmd(args []string) error {
 		stop()
 	}()
 
+	// The bus starts before the components and stops after them: deferred
+	// calls run in reverse, so connections close before the server shuts down.
+	srv, err := startBus(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer srv.Shutdown()
+
+	comps, closeConns, err := buildComponents(selected, cfg, log, srv)
+	if err != nil {
+		return err
+	}
+	defer closeConns()
+
 	log.Info("doggie starting", "version", version, "components", names(selected))
-	err = supervisor.New(log).Run(ctx, selected...)
+	err = supervisor.New(log).Run(ctx, comps...)
 	log.Info("doggie stopped")
 	return err
+}
+
+func startBus(ctx context.Context, cfg config.Config, log *slog.Logger) (*bus.Server, error) {
+	token, err := bus.LoadOrCreateToken(tokenPath(cfg))
+	if err != nil {
+		return nil, err
+	}
+	srv, err := bus.Start(ctx, bus.Options{
+		Listen:   cfg.Bus.Listen,
+		Token:    token,
+		StoreDir: filepath.Join(cfg.DataDir, "nats"),
+		MaxAge:   cfg.Bus.EventLog.MaxAge,
+		MaxBytes: cfg.Bus.EventLog.MaxSizeMB << 20,
+		Log:      log,
+	})
+	if err != nil {
+		return nil, err
+	}
+	listen := srv.ClientURL()
+	if listen == "" {
+		listen = "in-process only"
+	}
+	log.Info("bus ready", "listen", listen, "token_file", tokenPath(cfg))
+	return srv, nil
+}
+
+func tokenPath(cfg config.Config) string {
+	return filepath.Join(cfg.DataDir, "bus.token")
 }

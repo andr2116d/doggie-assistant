@@ -1,20 +1,12 @@
 package main
 
 import (
-	"context"
 	"slices"
 	"testing"
-
-	"github.com/andr2116d/doggie-assistant/internal/supervisor"
 )
 
-type stub string
-
-func (s stub) Name() string                  { return string(s) }
-func (s stub) Run(ctx context.Context) error { <-ctx.Done(); return nil }
-
-func TestSelectComponents(t *testing.T) {
-	all := []supervisor.Component{stub("a"), stub("b"), stub("c")}
+func TestSelectFactories(t *testing.T) {
+	all := []factory{{name: "a"}, {name: "b"}, {name: "c"}}
 	tests := []struct {
 		name         string
 		only, except string
@@ -31,7 +23,7 @@ func TestSelectComponents(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := selectComponents(all, tt.only, tt.except)
+			got, err := selectFactories(all, tt.only, tt.except)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected an error, got %v", names(got))

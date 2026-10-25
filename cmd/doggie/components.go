@@ -7,20 +7,58 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/config"
 	"github.com/andr2116d/doggie-assistant/internal/heartbeat"
 	"github.com/andr2116d/doggie-assistant/internal/supervisor"
 )
 
-// components returns every component DOGGIE knows how to run.
-func components(_ config.Config, log *slog.Logger) []supervisor.Component {
-	return []supervisor.Component{
-		heartbeat.New(log.With("component", "heartbeat"), time.Minute),
+// deps is what a component receives when it is built.
+type deps struct {
+	cfg  config.Config
+	log  *slog.Logger
+	conn *bus.Conn // the component's own bus connection
+}
+
+// factory builds one component. Its name must match the component's Name.
+type factory struct {
+	name  string
+	build func(d deps) supervisor.Component
+}
+
+// factories lists every component DOGGIE knows how to run.
+func factories() []factory {
+	return []factory{
+		{name: "heartbeat", build: func(d deps) supervisor.Component {
+			return heartbeat.New(d.conn, d.log, time.Minute)
+		}},
 	}
 }
 
-// selectComponents applies the --only and --except filters.
-func selectComponents(all []supervisor.Component, only, except string) ([]supervisor.Component, error) {
+// buildComponents builds the selected components, each with its own bus
+// connection. The returned func closes those connections.
+func buildComponents(fs []factory, cfg config.Config, log *slog.Logger, srv *bus.Server) ([]supervisor.Component, func(), error) {
+	var conns []*bus.Conn
+	closeAll := func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}
+	comps := make([]supervisor.Component, 0, len(fs))
+	for _, f := range fs {
+		conn, err := srv.Connect(f.name)
+		if err != nil {
+			closeAll()
+			return nil, nil, err
+		}
+		conns = append(conns, conn)
+		comps = append(comps, f.build(deps{cfg: cfg, log: log.With("component", f.name), conn: conn}))
+	}
+	return comps, closeAll, nil
+}
+
+// selectFactories applies the --only and --except filters.
+func selectFactories(all []factory, only, except string) ([]factory, error) {
 	switch {
 	case only != "" && except != "":
 		return nil, errors.New("--only and --except are mutually exclusive")
@@ -29,8 +67,8 @@ func selectComponents(all []supervisor.Component, only, except string) ([]superv
 	}
 
 	known := make(map[string]bool, len(all))
-	for _, c := range all {
-		known[c.Name()] = true
+	for _, f := range all {
+		known[f.name] = true
 	}
 	keep := only != "" // --only keeps listed components; --except drops them
 	list := except
@@ -42,10 +80,10 @@ func selectComponents(all []supervisor.Component, only, except string) ([]superv
 		return nil, err
 	}
 
-	var selected []supervisor.Component
-	for _, c := range all {
-		if filter[c.Name()] == keep {
-			selected = append(selected, c)
+	var selected []factory
+	for _, f := range all {
+		if filter[f.name] == keep {
+			selected = append(selected, f)
 		}
 	}
 	if len(selected) == 0 {
@@ -69,10 +107,10 @@ func parseList(list string, known map[string]bool) (map[string]bool, error) {
 	return set, nil
 }
 
-func names(cs []supervisor.Component) []string {
-	out := make([]string, len(cs))
-	for i, c := range cs {
-		out[i] = c.Name()
+func names(fs []factory) []string {
+	out := make([]string, len(fs))
+	for i, f := range fs {
+		out[i] = f.name
 	}
 	return out
 }

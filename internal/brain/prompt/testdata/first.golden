@@ -1,0 +1,8 @@
+<world>
+Now: Sunday, 25 October 2026, 15:40 UTC
+Active tasks: none
+</world>
+
+<input>
+<said channel="terminal" at="2026-10-25 15:40">hola</said>
+</input>

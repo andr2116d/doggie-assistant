@@ -12,15 +12,15 @@ import (
 
 func TestOneDoggiePerDataDir(t *testing.T) {
 	dir := t.TempDir()
-	unlock, err := lockDataDir(dir)
+	unlock, err := lockDataDir(dir, roleRun)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lockDataDir(dir); !errors.Is(err, errRunning) {
+	if _, err := lockDataDir(dir, roleRun); !errors.Is(err, errRunning) {
 		t.Fatalf("second lock: %v", err)
 	}
 	unlock()
-	again, err := lockDataDir(dir)
+	again, err := lockDataDir(dir, roleRun)
 	if err != nil {
 		t.Fatalf("lock after unlock: %v", err)
 	}
@@ -30,18 +30,19 @@ func TestOneDoggiePerDataDir(t *testing.T) {
 func TestStartCoreRefusesASecondDoggie(t *testing.T) {
 	client := localDoggie(t)
 	ui := newFakeUI(false)
-	own, conn, _, err := startHere(t.Context(), ui, client, make(chan connState, 1), noBrain(t))
+	host := newHosting(*client.config, noBrain(t))
+	conn, _, err := startHere(t.Context(), ui, client, make(chan connState, 1), host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer own.Stop()
+	defer host.close()
 	defer conn.Close()
 	cfg, err := config.Load(*client.config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg.Bus.Listen = "127.0.0.1:-1" // not even the port is shared
-	if _, err := startCore(t.Context(), cfg, slog.New(slog.DiscardHandler), noBrain(t)); !errors.Is(err, errRunning) {
+	if _, err := startCore(t.Context(), cfg, slog.New(slog.DiscardHandler), noBrain(t), roleChat); !errors.Is(err, errRunning) {
 		t.Errorf("second core on the same data dir: %v", err)
 	}
 }

@@ -111,12 +111,16 @@ func runCmd(args []string) error {
 	if cfg.UsingDefaults {
 		log.Warn("no config file, using defaults", "expected", cfg.File)
 	}
-	c, err := startCore(ctx, cfg, log, selected)
+	c, err := startCore(ctx, cfg, log, selected, roleRun)
 	if err != nil {
 		return err
 	}
-	<-c.Done()
-	return c.err
+	select {
+	case <-c.Done():
+		return c.err
+	case <-ctx.Done():
+		return c.Stop(events.StopOnPurpose)
+	}
 }
 
 func startBus(ctx context.Context, cfg config.Config, log *slog.Logger) (*bus.Server, error) {

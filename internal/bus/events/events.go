@@ -13,6 +13,25 @@ type HeartbeatData struct {
 // Heartbeat is published periodically by the core.
 var Heartbeat = bus.NewSubject[HeartbeatData]("system.heartbeat")
 
+// Why DOGGIE stops, in SystemStopping.
+const (
+	// StopOnPurpose: someone stopped it; clients leave it stopped.
+	StopOnPurpose = "stopped"
+	// StopHostClosed: the chat that ran it closed; another may take over.
+	StopHostClosed = "host-closed"
+	// StopHandover: it moves to another process, which starts it again.
+	StopHandover = "handover"
+)
+
+// StoppingData says why DOGGIE is about to stop. A DOGGIE that crashes or
+// is killed says nothing.
+type StoppingData struct {
+	Reason string `json:"reason"`
+}
+
+// SystemStopping is published by the core right before it stops.
+var SystemStopping = bus.NewSubject[StoppingData]("system.stopping")
+
 // SatellitePermissions is what a satellite or tool connecting over TCP may
 // do: watch events, pass on what people say on its own channels
 // (user.utterance.<channel>), use the task manager's commands, and run tasks

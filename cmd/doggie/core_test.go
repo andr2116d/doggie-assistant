@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/andr2116d/doggie-assistant/internal/config"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -53,7 +55,9 @@ func TestStartHereRunsDoggieUntilStopped(t *testing.T) {
 	if _, _, err := dialChat(client, ui, states); !errors.Is(err, errNoToken) {
 		t.Fatalf("dial before starting: %v", err)
 	}
-	own, conn, _, err := startHere(context.Background(), ui, client, states, noBrain(t))
+	host := newHosting(*client.config, noBrain(t))
+	conn, _, err := startHere(context.Background(), ui, client, states, host)
+	own := host.own
 	if err != nil || own == nil {
 		t.Fatalf("startHere: %v, own %v", err, own)
 	}
@@ -65,7 +69,7 @@ func TestStartHereRunsDoggieUntilStopped(t *testing.T) {
 		t.Errorf("printed %q", ui.printed())
 	}
 	conn.Close()
-	stopHere(ui, own)
+	host.close()
 	select {
 	case <-own.Done():
 	default:
@@ -85,7 +89,7 @@ func TestStartHereRace(t *testing.T) {
 	client := localDoggie(t)
 	selected := noBrain(t)
 	type res struct {
-		own  *core
+		host *hosting
 		conn *bus.Conn
 		err  error
 	}
@@ -93,8 +97,9 @@ func TestStartHereRace(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Go(func() {
-			own, conn, _, err := startHere(context.Background(), newFakeUI(false), client, make(chan connState, 10), selected)
-			results <- res{own, conn, err}
+			host := newHosting(*client.config, selected)
+			conn, _, err := startHere(context.Background(), newFakeUI(false), client, make(chan connState, 10), host)
+			results <- res{host, conn, err}
 		})
 	}
 	wg.Wait()
@@ -105,7 +110,7 @@ func TestStartHereRace(t *testing.T) {
 		if r.err != nil {
 			t.Fatalf("startHere: %v", r.err)
 		}
-		if r.own != nil {
+		if r.host.own != nil {
 			owners++
 		}
 		all = append(all, r)
@@ -120,18 +125,24 @@ func TestStartHereRace(t *testing.T) {
 		r.conn.Close()
 	}
 	for _, r := range all {
-		if r.own != nil {
-			r.own.Stop()
-		}
+		r.host.close()
 	}
 }
 
-// The chat of a process that runs DOGGIE ends when DOGGIE stops.
+// The chat of doggie run ends when its DOGGIE stops.
 func TestChatEndsWhenItsDoggieStops(t *testing.T) {
 	client := localDoggie(t)
 	ui := newFakeUI(true)
 	states := make(chan connState, 10)
-	own, conn, _, err := startHere(context.Background(), ui, client, states, noBrain(t))
+	cfg, err := config.Load(*client.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := startCore(context.Background(), cfg, slog.New(slog.DiscardHandler), noBrain(t), roleRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, _, err := dialChat(client, ui, states)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +150,7 @@ func TestChatEndsWhenItsDoggieStops(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- chatSession(context.Background(), conn, ui, states, own, testChatOptions()) }()
 	time.Sleep(200 * time.Millisecond)
-	own.Stop()
+	own.Stop(events.StopOnPurpose)
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(ui.printed(), "DOGGIE ended the connection") {

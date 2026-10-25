@@ -51,6 +51,9 @@ type chatOptions struct {
 	slowReply time.Duration
 	// sendTimeout bounds publishing one sentence.
 	sendTimeout time.Duration
+	// host, if set, lets the chat run DOGGIE in its own process when none
+	// runs on this machine.
+	host *hosting
 	// publish sends a sentence; nil means bus.Publish.
 	publish func(context.Context, *bus.Conn, bus.Subject[events.UtteranceData], events.UtteranceData) (bus.Meta, error)
 }
@@ -87,23 +90,29 @@ func chatCmd(args []string) error {
 	defer stop()
 
 	states := make(chan connState, 64)
+	// A DOGGIE on this machine can be run here; one elsewhere can't.
+	if *client.server == "" {
+		o.host = newHosting(*client.config, factories())
+		defer func() {
+			if o.host.own != nil && ui.IsInteractive() {
+				fmt.Fprintln(ui, "· stopping DOGGIE...")
+			}
+			o.host.close()
+		}()
+	}
 	conn, url, err := dialChat(client, ui, states)
-	var own *core
 	// DOGGIE isn't running on this machine, or never ran: start it here.
-	if (errors.Is(err, bus.ErrNoServer) || errors.Is(err, errNoToken)) && *client.server == "" {
-		own, conn, url, err = startHere(ctx, ui, client, states, factories())
+	if (errors.Is(err, bus.ErrNoServer) || errors.Is(err, errNoToken)) && o.host != nil {
+		conn, url, err = startHere(ctx, ui, client, states, o.host)
 	}
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	if own != nil {
-		defer stopHere(ui, own)
-	}
 	if ui.IsInteractive() {
 		fmt.Fprintf(ui, "· talking with DOGGIE at %s on %s; Ctrl+D quits\n", url, o.channel)
 	}
-	return chatSession(ctx, conn, ui, states, own, o)
+	return chat(ctx, conn, ui, states, o)
 }
 
 // chatName is this chat's connection name, the source of what it says. It
@@ -129,22 +138,10 @@ func dialChat(client clientFlags, ui chatUI, states chan<- connState) (*bus.Conn
 	})
 }
 
-// startHere starts DOGGIE in this process, logging to a file, and connects
-// the chat to it. If another process started DOGGIE at the same time, it
-// connects to that one instead.
-func startHere(ctx context.Context, ui chatUI, client clientFlags, states chan<- connState, selected []factory) (*core, *bus.Conn, string, error) {
-	cfg, err := config.Load(*client.config)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	logFile, logPath, err := openLog(cfg)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	log := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: cfg.LogLevel()}))
-	own, startErr := startCore(ctx, cfg, log, selected)
-	if startErr != nil {
-		logFile.Close()
+// startHere starts DOGGIE in this process and connects the chat to it. If
+// another process started DOGGIE at the same time, it connects to that one.
+func startHere(ctx context.Context, ui chatUI, client clientFlags, states chan<- connState, host *hosting) (*bus.Conn, string, error) {
+	if startErr := host.start(ctx); startErr != nil {
 		// Lost a race with another start: use that DOGGIE once it listens.
 		deadline := time.Now().Add(5 * time.Second)
 		for {
@@ -153,36 +150,31 @@ func startHere(ctx context.Context, ui chatUI, client clientFlags, states chan<-
 				if err != nil {
 					err = startErr
 				}
-				return nil, conn, url, err
+				return conn, url, err
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
-	own.logFile = logFile
 	conn, url, err := dialChat(client, ui, states)
 	if err != nil {
-		own.Stop()
-		logFile.Close()
-		return nil, nil, "", err
+		stopCore(host.release(), events.StopHostClosed)
+		return nil, "", err
 	}
 	// Piped, stdout carries only the replies.
 	var w io.Writer = ui
 	if !ui.IsInteractive() {
 		w = os.Stderr
 	}
-	fmt.Fprintf(w, "· DOGGIE wasn't running: started it here, logging to %s; it stops when you quit\n", logPath)
-	return own, conn, url, nil
+	fmt.Fprintf(w, "· DOGGIE wasn't running: started it here, logging to %s; it stops when you quit\n", host.logPath)
+	return conn, url, nil
 }
 
-// stopHere stops the DOGGIE this chat started.
+// stopHere stops the DOGGIE doggie run started, on purpose.
 func stopHere(ui chatUI, own *core) {
 	if ui.IsInteractive() {
 		fmt.Fprintln(ui, "· stopping DOGGIE...")
 	}
-	own.Stop()
-	if own.logFile != nil {
-		own.logFile.Close()
-	}
+	stopCore(own, events.StopOnPurpose)
 }
 
 // runWithChat runs DOGGIE with its chat in this terminal: logs go to a file,
@@ -202,7 +194,7 @@ func runWithChat(ctx context.Context, cfg config.Config, selected []factory, cli
 	if cfg.UsingDefaults {
 		log.Warn("no config file, using defaults", "expected", cfg.File)
 	}
-	own, err := startCore(ctx, cfg, log, selected)
+	own, err := startCore(ctx, cfg, log, selected, roleRun)
 	if err != nil {
 		return err
 	}
@@ -309,6 +301,16 @@ type chatState struct {
 	down              bool
 	// self is the chat's connection name, the source of its sentences.
 	self string
+
+	host *hosting
+	// stopReason is why DOGGIE said it stops (events.Stop*), until it is
+	// back; downAt is when the connection was lost.
+	stopReason string
+	downAt     time.Time
+	// takeover fires when the chat may run DOGGIE itself.
+	takeover <-chan time.Time
+	// handedOver fires once a DOGGIE run here is handed over.
+	handedOver chan struct{}
 }
 
 // chat runs until the user quits, the input ends and replies are in, or
@@ -333,13 +335,18 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 	if err != nil {
 		return err
 	}
+	stops, err := bus.Subscribe(sctx, conn, events.SystemStopping)
+	if err != nil {
+		return err
+	}
 	subject, err := events.UtteranceOn(o.channel)
 	if err != nil {
 		return err
 	}
 
 	c := &chatState{
-		ui: ui, view: newReplyView(ui), o: o, self: conn.Name(),
+		ui: ui, view: newReplyView(ui), o: o, self: conn.Name(), host: o.host,
+		handedOver: make(chan struct{}, 1),
 		unanswered: map[string]time.Time{},
 		started:    time.Now(),
 	}
@@ -416,6 +423,27 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 		case s := <-states:
 			if err := c.connection(ctx, conn, s); err != nil {
 				return err
+			}
+		case ev, ok := <-stops:
+			if !ok {
+				return ended(ctx)
+			}
+			c.stopping(ev.Data.Reason)
+		case <-c.takeover:
+			c.takeover = nil
+			c.takeOver(ctx)
+		case <-c.handoverRequests():
+			c.handOver()
+		case <-c.handedOver:
+			c.view.note("· handed DOGGIE over")
+		case <-c.host.done():
+			own := c.host.release()
+			c.view.note(fmt.Sprintf("· the DOGGIE run here stopped: %v", own.err))
+			if own.logFile != nil {
+				own.logFile.Close()
+			}
+			if c.down {
+				c.takeover = time.After(takeoverDelay + jitter())
 			}
 		case now := <-tick.C:
 			c.checkSlow(now)
@@ -495,6 +523,73 @@ func (c *chatState) speak(ev bus.Event[events.SpeakData]) bool {
 	return true
 }
 
+// stopping takes DOGGIE's word on why it stops.
+func (c *chatState) stopping(reason string) {
+	if reason == c.stopReason {
+		return
+	}
+	c.stopReason = reason
+	switch reason {
+	case events.StopOnPurpose:
+		c.view.note("· DOGGIE was stopped; it's back when someone starts it (doggie run or doggie chat)")
+	case events.StopHandover:
+		c.view.note("· DOGGIE is moving to another process...")
+	case events.StopHostClosed:
+		c.view.note("· the chat that ran DOGGIE closed")
+	}
+}
+
+// takeOver runs DOGGIE in this chat's process, unless it was stopped on
+// purpose, it is moving and may still arrive, or it is back.
+func (c *chatState) takeOver(ctx context.Context) {
+	if !c.down || c.host == nil || c.host.own != nil {
+		return
+	}
+	// The file is sure to be there; the event may not have arrived.
+	if reason := c.host.lastStop(); reason != "" {
+		c.stopping(reason)
+	}
+	switch c.stopReason {
+	case events.StopOnPurpose:
+		return
+	case events.StopHandover:
+		if wait := handoverTimeout - time.Since(c.downAt); wait > 0 {
+			c.takeover = time.After(wait)
+			return
+		}
+	}
+	err := c.host.start(ctx)
+	switch {
+	case err == nil:
+		c.view.note(fmt.Sprintf("· DOGGIE was gone: started it here, logging to %s; it stops when you quit", c.host.logPath))
+	case errors.Is(err, errRunning):
+		// Another chat or doggie run took it: the connection comes back.
+	default:
+		c.view.note("· could not start DOGGIE here: " + err.Error())
+		c.takeover = time.After(10 * time.Second)
+	}
+}
+
+// handoverRequests delivers an explicit DOGGIE's requests for the one run
+// here; nil when none runs here.
+func (c *chatState) handoverRequests() <-chan os.Signal {
+	if c.host == nil || c.host.own == nil {
+		return nil
+	}
+	return c.host.handover
+}
+
+// handOver stops the DOGGIE run here for an explicit one, without holding
+// the chat meanwhile. The chat stays, and reconnects to the new DOGGIE.
+func (c *chatState) handOver() {
+	own := c.host.release()
+	c.view.note("· doggie run is taking DOGGIE over; handing it over...")
+	go func() {
+		stopCore(own, events.StopHandover)
+		c.handedOver <- struct{}{}
+	}()
+}
+
 // saidElsewhere shows a sentence said in this thread by someone else, e.g.
 // another chat, so the reply to it makes sense. It reports whether it did.
 func (c *chatState) saidElsewhere(env bus.Envelope) bool {
@@ -548,11 +643,20 @@ func (c *chatState) connection(ctx context.Context, conn *bus.Conn, s connState)
 	switch s.kind {
 	case connDown:
 		if !c.down {
-			c.down = true
-			c.view.note("· lost the connection to DOGGIE; reconnecting...")
+			c.down, c.downAt = true, time.Now()
+			if c.host != nil && c.stopReason == "" {
+				// On this machine, the reason is sure to be in the file.
+				c.stopping(c.host.lastStop())
+			}
+			if c.stopReason == "" {
+				c.view.note("· lost the connection to DOGGIE; reconnecting...")
+			}
+			if c.host != nil && c.host.own == nil {
+				c.takeover = time.After(takeoverDelay + jitter())
+			}
 		}
 	case connUp:
-		c.down = false
+		c.down, c.stopReason, c.takeover = false, "", nil
 		c.view.note("· connected again")
 		c.catchUp(ctx, conn)
 	case connClosed:

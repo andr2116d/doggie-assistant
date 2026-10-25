@@ -678,6 +678,10 @@ func TestUnansweredSentencesAreResumedAfterARestart(t *testing.T) {
 		t.Errorf("resumed = %q", said)
 	}
 	mustContain(t, h.fake.requests()[0].Input, `resumed="yes">¿qué hora es?</said>`, `resumed="yes">¿sigues ahí?</said>`)
+	// The tools guard the resumed turn from the oldest resumed sentence on.
+	if got := h.fake.requests()[0].Turn.Resumed; !got.Equal(turn.Data.Inputs[0].At) {
+		t.Errorf("Turn.Resumed = %s, want %s", got, turn.Data.Inputs[0].At)
+	}
 
 	// Once answered, a further restart resumes nothing.
 	h.stop()

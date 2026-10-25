@@ -57,7 +57,22 @@ func (b *Brain) runTurn(ctx context.Context, job turnJob) events.BrainTurnData {
 		Tasks: tasks, History: job.history, MaxTurns: b.opts.HistoryTurns, Inputs: inputs,
 	})
 
-	out, err := b.provider.Generate(ctx, llm.Request{Turn: mcp.Turn{ThreadID: job.thread, Channel: job.channel}, Input: msg, Stream: true})
+	turn := mcp.Turn{ThreadID: job.thread, Channel: job.channel}
+	// A resumed sentence may already have been acted on: the tools guard
+	// against starting it again (see mcp.Turn.Resumed).
+	for _, in := range job.inputs {
+		if !in.Resumed {
+			continue
+		}
+		at := in.At
+		if at.IsZero() {
+			at = job.started.Add(-catchUpWindow) // unknown: assume the oldest
+		}
+		if turn.Resumed.IsZero() || at.Before(turn.Resumed) {
+			turn.Resumed = at
+		}
+	}
+	out, err := b.provider.Generate(ctx, llm.Request{Turn: turn, Input: msg, Stream: true})
 	if err != nil {
 		rec.Error = err.Error()
 		rec.DurationMS = time.Since(job.started).Milliseconds()

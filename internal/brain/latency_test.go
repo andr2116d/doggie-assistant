@@ -69,6 +69,7 @@ func TestRealLatency(t *testing.T) {
 
 type realStack struct {
 	t      *testing.T
+	srv    *bus.Server
 	client *bus.Conn
 	speaks <-chan bus.Event[events.SpeakData]
 	turns  <-chan bus.Event[events.BrainTurnData]
@@ -178,4 +179,54 @@ func (s samples) String() string {
 	sorted := slices.Sorted(slices.Values(s))
 	r := func(d time.Duration) string { return d.Round(10 * time.Millisecond).String() }
 	return strings.Join([]string{r(sorted[len(sorted)/2]), r(sorted[0]), r(sorted[len(sorted)-1])}, " / ")
+}
+
+// newRealStackDown runs the bus, the task manager and the demo worker, but
+// not the brain yet (see startBrain).
+func newRealStackDown(t *testing.T) *realStack {
+	srv, err := bus.Start(context.Background(), bus.Options{Token: "t", StoreDir: t.TempDir(), MaxAge: time.Hour, MaxBytes: 64 << 20, Log: discardLog()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Shutdown)
+	goRun(t, manager.New(connect(t, srv, "tasks"), discardLog(), manager.Options{}).Run)
+	goRun(t, demo.New(connect(t, srv, "demo"), discardLog()).Run)
+	r := &realStack{t: t, srv: srv, client: connect(t, srv, "client")}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	r.speaks, _ = bus.Subscribe(ctx, r.client, events.OutSpeak)
+	r.turns, _ = bus.Subscribe(ctx, r.client, events.BrainTurn)
+	r.dones, _ = bus.Subscribe(ctx, r.client, events.TaskDone)
+	r.deltas, _ = bus.SubscribeSignal(ctx, r.client, events.OutSpeakDelta)
+	time.Sleep(500 * time.Millisecond)
+	return r
+}
+
+// startBrain runs the brain with the real provider.
+func (r *realStack) startBrain(system string, warm int) {
+	dir := filepath.Join(r.t.TempDir(), "cc")
+	b := New(connect(r.t, r.srv, "brain"), discardLog(), Options{HistoryTurns: 20, NewProvider: func(tools *mcp.Server) (llm.Brain, func(), error) {
+		p, err := claudecode.New(claudecode.Options{Command: "claude", Model: "sonnet", System: system, Dir: dir, Tools: tools, Warm: warm, Log: discardLog()})
+		if err != nil {
+			return nil, nil, err
+		}
+		return p, p.Close, nil
+	}})
+	goRun(r.t, b.Run)
+}
+
+// waitTurn returns the next turn of thread.
+func (r *realStack) waitTurn(thread string) events.BrainTurnData {
+	r.t.Helper()
+	deadline := time.After(2 * time.Minute)
+	for {
+		select {
+		case turn := <-r.turns:
+			if turn.Data.ThreadID == thread {
+				return turn.Data
+			}
+		case <-deadline:
+			r.t.Fatal("no turn")
+		}
+	}
 }

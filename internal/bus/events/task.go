@@ -43,6 +43,11 @@ type TaskSpec struct {
 	ThreadID string `json:"thread_id,omitempty"`
 	// TimeoutS overrides the manager's default timeout, in seconds.
 	TimeoutS int `json:"timeout_s,omitempty"`
+	// Sensitive keeps Input and the result out of the event log: they only
+	// travel in commands and live in the manager's memory, so they are gone
+	// after a restart. Description, progress messages and questions are still
+	// logged, so keep them free of sensitive data.
+	Sensitive bool `json:"sensitive,omitempty"`
 }
 
 // TaskInfo is a snapshot of a task.
@@ -59,6 +64,9 @@ type TaskInfo struct {
 	Options   []string        `json:"options,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
 	Error     string          `json:"error,omitempty"`
+	// HeartbeatMS tells the worker how often to send TaskAlive. It is set on
+	// run requests only.
+	HeartbeatMS int `json:"heartbeat_ms,omitempty"`
 }
 
 // TaskRef identifies a task.
@@ -85,7 +93,20 @@ type TaskNeedsInputData struct {
 type TaskDoneData struct {
 	TaskID string          `json:"task_id"`
 	Result json.RawMessage `json:"result,omitempty"`
+	// Redacted means the result of a sensitive task was left out of the
+	// event; the manager received it with ReportResult.
+	Redacted bool `json:"redacted,omitempty"`
 }
+
+// TaskAliveData says a worker is still running a task.
+type TaskAliveData struct {
+	TaskID string `json:"task_id"`
+}
+
+// TaskAlive is sent by workers for every task they run, every HeartbeatMS.
+// The manager fails tasks whose heartbeat stops. It is a signal, so beats
+// don't flood the event log.
+var TaskAlive = bus.NewSignal[TaskAliveData]("task.alive")
 
 // TaskFailedData explains why a task failed.
 type TaskFailedData struct {
@@ -149,6 +170,9 @@ var (
 	AnswerTask = bus.NewCommand[TaskAnswer, Ack]("task.answer")
 	ListTasks  = bus.NewCommand[TaskListRequest, TaskList]("task.list")
 	GetTask    = bus.NewCommand[TaskRef, TaskInfo]("task.get")
+	// ReportResult hands the manager the result of a sensitive task, outside
+	// the event log, before the worker publishes a redacted task.done.
+	ReportResult = bus.NewCommand[TaskDoneData, Ack]("task.result")
 )
 
 // TaskControlAction is what the manager asks a worker to do with a task.
@@ -173,3 +197,25 @@ var (
 	RunTask     = bus.NewCommand[TaskInfo, Ack]("task.run")
 	ControlTask = bus.NewCommand[TaskControl, Ack]("task.control")
 )
+
+// SatellitePermissions is what satellites and tools connecting over TCP may
+// do: watch events, use the task manager's commands, and run tasks as
+// workers (report on them, beat, spawn subtasks). They cannot forge the
+// manager's events (task.created, running, cancelled) or the core's
+// (system.*), impersonate the manager, dispatch tasks to workers, or alter
+// the event log.
+func SatellitePermissions() bus.Permissions {
+	return bus.Permissions{
+		Publish: []string{
+			TaskProgress.Wire(), TaskNeedsInput.Wire(), TaskDone.Wire(), TaskFailed.Wire(),
+			TaskAlive.Wire(),
+			StartTask.Wire(), CancelTask.Wire(), AnswerTask.Wire(), ListTasks.Wire(), GetTask.Wire(),
+			ReportResult.Wire(),
+		},
+		Subscribe: []string{
+			bus.AllEvents,
+			RunTask.Wire() + ".>",
+			ControlTask.Wire() + ".>",
+		},
+	}
+}

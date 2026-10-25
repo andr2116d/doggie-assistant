@@ -126,19 +126,28 @@ func TestLastEvent(t *testing.T) {
 	}
 }
 
-// Logged is the bus's time, whatever the publisher's clock says.
-func TestHistoryTellsWhenEventsWereLogged(t *testing.T) {
+// Events read from the log carry their position in it, and LastSeq tells
+// the newest: later events have greater positions, whatever the
+// publishers' clocks say.
+func TestHistoryTellsWhereEventsAreInTheLog(t *testing.T) {
 	s := startTestServer(t, "")
 	c := connect(t, s, "test")
 	ctx := context.Background()
-	before := time.Now()
+	if seq, err := LastSeq(ctx, c); err != nil || seq != 0 {
+		t.Fatalf("LastSeq of an empty log = %d, %v", seq, err)
+	}
+	first, _ := Publish(ctx, c, testTaskA, ping{N: 1})
+	mark, err := LastSeq(ctx, c)
+	if err != nil || first.Seq != mark {
+		t.Fatalf("LastSeq = %d, %v; Publish said %d", mark, err, first.Seq)
+	}
 	// A publisher whose clock is an hour behind.
-	Publish(ctx, c, testTaskA, ping{N: 1}, func(m *Meta) { m.Time = m.Time.Add(-time.Hour) })
+	Publish(ctx, c, testTaskB, ping{N: 2}, func(m *Meta) { m.Time = m.Time.Add(-time.Hour) })
 	got, err := History(ctx, c, time.Time{}, "tasktest.>")
-	if err != nil || len(got) != 1 {
+	if err != nil || len(got) != 2 {
 		t.Fatalf("history = %+v, %v", got, err)
 	}
-	if l := got[0].Logged; l.Before(before.Add(-time.Second)) || l.After(time.Now().Add(time.Second)) {
-		t.Errorf("Logged = %v, want about %v", l, before)
+	if got[0].Seq == 0 || got[0].Seq != mark || got[1].Seq <= mark {
+		t.Errorf("positions %d and %d, with %d logged in between", got[0].Seq, got[1].Seq, mark)
 	}
 }

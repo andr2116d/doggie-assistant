@@ -83,7 +83,7 @@ func History(ctx context.Context, c *Conn, since time.Time, pattern string) ([]E
 				continue
 			}
 			if md, err := msg.Metadata(); err == nil {
-				env.Logged = md.Timestamp
+				env.Seq = md.Sequence.Stream
 			}
 			out = append(out, env)
 		}
@@ -123,6 +123,20 @@ func Decode[T any](env Envelope, s Subject[T]) (Event[T], error) {
 	return ev, nil
 }
 
+// LastSeq returns the position of the newest event in the log, or 0 if it is
+// empty: an event logged later has a greater Seq.
+func LastSeq(ctx context.Context, c *Conn) (uint64, error) {
+	stream, err := c.js.Stream(ctx, EventLogStream)
+	if err != nil {
+		return 0, fmt.Errorf("bus: event log: %w", err)
+	}
+	info, err := stream.Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("bus: event log: %w", err)
+	}
+	return info.State.LastSeq, nil
+}
+
 // LastEvent returns the most recent logged event of type s, however old, and
 // false if the log has none.
 func LastEvent[T any](ctx context.Context, c *Conn, s Subject[T]) (Event[T], bool, error) {
@@ -142,6 +156,7 @@ func LastEvent[T any](ctx context.Context, c *Conn, s Subject[T]) (Event[T], boo
 	if err := json.Unmarshal(msg.Data, &env); err != nil {
 		return ev, false, fmt.Errorf("bus: decode last %s: %w", s.typ, err)
 	}
+	env.Seq = msg.Sequence
 	ev, err = Decode(env, s)
 	return ev, err == nil, err
 }

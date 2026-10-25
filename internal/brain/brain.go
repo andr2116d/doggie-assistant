@@ -84,11 +84,11 @@ type Brain struct {
 	lookups  map[string][]bus.Envelope  // task events waiting for a lookup, by task
 	seen     map[string]bool            // task events read from the log on start
 	results  chan func()                // outcomes of turns and lookups
-	// started is when this run began: a sentence logged later can't have
-	// been seen by an earlier one.
-	started time.Time
-	turns   sync.WaitGroup
-	tick    uint64 // logical clock for thread recency
+	// startSeq is the newest event in the log when this run began: a
+	// sentence logged after it can't have been seen by an earlier run.
+	startSeq uint64
+	turns    sync.WaitGroup
+	tick     uint64 // logical clock for thread recency
 }
 
 type thread struct {
@@ -131,7 +131,11 @@ func (b *Brain) Run(ctx context.Context) error {
 	b.lookups = make(map[string][]bus.Envelope)
 	b.seen = make(map[string]bool)
 	b.results = make(chan func())
-	b.started = time.Now()
+	startSeq, err := bus.LastSeq(ctx, b.conn)
+	if err != nil {
+		return fmt.Errorf("brain: %w", err)
+	}
+	b.startSeq = startSeq
 
 	tools, err := mcp.Listen(b.conn, b.log)
 	if err != nil {
@@ -294,7 +298,7 @@ func (b *Brain) recover(ctx context.Context) error {
 // goes silent on someone. The turn that died may have acted on a sentence
 // already, so those are marked resumed: the LLM checks the tasks before
 // acting again. A sentence logged after this run started, while it was
-// getting ready, is new; the log and the brain share the core's clock.
+// getting ready, is new.
 func (b *Brain) catchUp(ctx context.Context, answered map[string]bool) error {
 	since := time.Now().Add(-catchUpWindow)
 	tasks, err := bus.History(ctx, b.conn, since, "task.>")
@@ -312,7 +316,7 @@ func (b *Brain) catchUp(ctx context.Context, answered map[string]bool) error {
 		switch {
 		case answered[env.ID]:
 		case strings.HasPrefix(env.Type, events.UserUtterance.Type()+"."):
-			b.onUtterance(env, env.Logged.IsZero() || env.Logged.Before(b.started))
+			b.onUtterance(env, env.Seq == 0 || env.Seq <= b.startSeq)
 		default:
 			b.onTaskEvent(ctx, env)
 		}

@@ -24,6 +24,10 @@ type Meta struct {
 	Source string `json:"source"`
 	// CausedBy is the ID of the event that triggered this one, if any.
 	CausedBy string `json:"caused_by,omitempty"`
+	// Seq is the event's position in the log, which only grows, so it
+	// orders events without trusting the publishers' clocks. Events read
+	// from the log have it, and Publish returns it; live ones don't.
+	Seq uint64 `json:"-"`
 }
 
 // Envelope is an event as it travels on the wire, with its payload still
@@ -31,9 +35,6 @@ type Meta struct {
 type Envelope struct {
 	Meta
 	Data json.RawMessage `json:"data"`
-	// Logged is when the bus stored the event, on the bus's clock, unlike
-	// Time, which is the publisher's. Only events read from the log have it.
-	Logged time.Time `json:"-"`
 }
 
 // Event is a decoded event with a typed payload.
@@ -115,9 +116,11 @@ func Publish[T any](ctx context.Context, c *Conn, s Subject[T], data T, opts ...
 	if err != nil {
 		return meta, fmt.Errorf("bus: encode envelope: %w", err)
 	}
-	if _, err := c.js.Publish(ctx, s.subject(), msg, jetstream.WithMsgID(meta.ID)); err != nil {
+	ack, err := c.js.Publish(ctx, s.subject(), msg, jetstream.WithMsgID(meta.ID))
+	if err != nil {
 		return meta, fmt.Errorf("bus: publish %s: %w", s.typ, err)
 	}
+	meta.Seq = ack.Sequence
 	return meta, nil
 }
 

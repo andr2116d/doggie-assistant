@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nats-io/jwt/v2"
@@ -52,9 +53,28 @@ var satelliteBase = Permissions{
 	Subscribe: []string{"_INBOX.>"},
 }
 
-// users returns the NATS users for the core secret and the satellite token.
-// The server only keeps bcrypt hashes of them.
-func users(coreSecret, satelliteToken string, p Permissions) ([]*server.User, error) {
+// Satellite is a named satellite with its own token and permissions, e.g. a
+// voice satellite that may only speak for its own channel. It connects with
+// DialOptions.User set to its name.
+type Satellite struct {
+	Name string
+	// TokenHash is the bcrypt hash of its token (see HashToken).
+	TokenHash   string
+	Permissions Permissions
+}
+
+// ValidSatelliteName reports whether name can name a satellite: a valid
+// name token that isn't one of the bus's own users.
+func ValidSatelliteName(name string) bool {
+	return ValidName(name) && !strings.Contains(name, ".") && len(name) <= 64 && name != coreUser && name != satelliteUser
+}
+
+// HashToken returns the bcrypt hash a Satellite keeps of its token.
+func HashToken(token string) (string, error) { return hashSecret(token) }
+
+// users returns the NATS users for the core secret, the satellite token and
+// the named satellites. The server only keeps bcrypt hashes of the secrets.
+func users(coreSecret, satelliteToken string, p Permissions, named []Satellite) ([]*server.User, error) {
 	coreHash, err := hashSecret(coreSecret)
 	if err != nil {
 		return nil, err
@@ -63,15 +83,10 @@ func users(coreSecret, satelliteToken string, p Permissions) ([]*server.User, er
 	if err != nil {
 		return nil, err
 	}
-	return []*server.User{
-		{
-			Username:               coreUser,
-			Password:               coreHash,
-			AllowedConnectionTypes: map[string]struct{}{jwt.ConnectionTypeInProcess: {}},
-		},
-		{
-			Username:               satelliteUser,
-			Password:               satelliteHash,
+	satellite := func(name, hash string, p Permissions) *server.User {
+		return &server.User{
+			Username:               name,
+			Password:               hash,
 			AllowedConnectionTypes: map[string]struct{}{jwt.ConnectionTypeStandard: {}},
 			Permissions: &server.Permissions{
 				Publish:   &server.SubjectPermission{Allow: append(append([]string{}, satelliteBase.Publish...), p.Publish...)},
@@ -80,8 +95,28 @@ func users(coreSecret, satelliteToken string, p Permissions) ([]*server.User, er
 				// and controls) without publish rights on reply subjects.
 				Response: &server.ResponsePermission{MaxMsgs: 1, Expires: time.Minute},
 			},
+		}
+	}
+	out := []*server.User{
+		{
+			Username:               coreUser,
+			Password:               coreHash,
+			AllowedConnectionTypes: map[string]struct{}{jwt.ConnectionTypeInProcess: {}},
 		},
-	}, nil
+		satellite(satelliteUser, satelliteHash, p),
+	}
+	seen := map[string]bool{}
+	for _, s := range named {
+		if !ValidSatelliteName(s.Name) || seen[s.Name] {
+			return nil, fmt.Errorf("bus: invalid or repeated satellite name %q", s.Name)
+		}
+		if !strings.HasPrefix(s.TokenHash, "$2") {
+			return nil, fmt.Errorf("bus: satellite %q has no bcrypt token hash", s.Name)
+		}
+		seen[s.Name] = true
+		out = append(out, satellite(s.Name, s.TokenHash, s.Permissions))
+	}
+	return out, nil
 }
 
 // hashSecret hashes a secret for the server's user list. The minimum cost is

@@ -95,6 +95,20 @@ func History(ctx context.Context, c *Conn, since time.Time, pattern string) ([]E
 
 // Decode returns the payload of env as an event of type s. It fails when env
 // is of another type.
+// DecodeUnder decodes an event of a type under s, e.g. "user.utterance.x"
+// under UserUtterance, and returns the rest of its type ("x").
+func DecodeUnder[T any](env Envelope, s Subject[T]) (Event[T], string, error) {
+	ev := Event[T]{Meta: env.Meta}
+	rest, ok := strings.CutPrefix(env.Type, s.typ+".")
+	if !ok || rest == "" {
+		return ev, "", fmt.Errorf("bus: event is %s, not under %s", env.Type, s.typ)
+	}
+	if err := json.Unmarshal(env.Data, &ev.Data); err != nil {
+		return ev, "", fmt.Errorf("bus: decode %s: %w", env.Type, err)
+	}
+	return ev, rest, nil
+}
+
 func Decode[T any](env Envelope, s Subject[T]) (Event[T], error) {
 	ev := Event[T]{Meta: env.Meta}
 	if env.Type != s.typ {

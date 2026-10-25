@@ -38,6 +38,9 @@ type Options struct {
 	// SatellitePermissions is what satellites may do beyond receiving replies
 	// and reading the event log.
 	SatellitePermissions Permissions
+	// Satellites are named satellites, each with its own token and
+	// permissions.
+	Satellites []Satellite
 	// StoreDir is where JetStream persists the event log.
 	StoreDir string
 	// MaxAge and MaxBytes bound the event log.
@@ -65,7 +68,7 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bus: generate core secret: %w", err)
 	}
-	natsUsers, err := users(coreSecret, opts.Token, opts.SatellitePermissions)
+	natsUsers, err := users(coreSecret, opts.Token, opts.SatellitePermissions, opts.Satellites)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +199,10 @@ func (s *Server) Shutdown() {
 // DialOptions configures a TCP connection to the bus.
 type DialOptions struct {
 	// Name identifies the client. Its events carry it as their source.
-	Name  string
+	Name string
+	// User is a named satellite (see Options.Satellites). Empty means the
+	// shared satellite token.
+	User  string
 	Token string
 	// CAFile is the bus CA certificate. Required when the bus uses TLS.
 	CAFile string
@@ -206,8 +212,12 @@ type DialOptions struct {
 // Dial connects to a DOGGIE bus over TCP, for satellites and tools running in
 // another process.
 func Dial(url string, opts DialOptions) (*Conn, error) {
+	user := opts.User
+	if user == "" {
+		user = satelliteUser
+	}
 	natsOpts := []nats.Option{
-		nats.UserInfo(satelliteUser, opts.Token),
+		nats.UserInfo(user, opts.Token),
 		nats.Name(opts.Name),
 		nats.MaxReconnects(-1),
 		errorHandler(opts.Log, opts.Name),

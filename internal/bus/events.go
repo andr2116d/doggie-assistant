@@ -69,6 +69,14 @@ func ValidName(name string) bool {
 // Type returns the event type name.
 func (s Subject[T]) Type() string { return s.typ }
 
+// With returns the event type with extra name tokens, e.g. a channel:
+// UserUtterance.With("terminal") is "user.utterance.terminal". Like
+// NewSubject, it panics on an invalid name: validate untrusted tokens with
+// ValidName first.
+func (s Subject[T]) With(tokens ...string) Subject[T] {
+	return NewSubject[T](s.typ + "." + strings.Join(tokens, "."))
+}
+
 func (s Subject[T]) subject() string { return subjectPrefix + s.typ }
 
 // Wire returns the NATS subject of the event type.

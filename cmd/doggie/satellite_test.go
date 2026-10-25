@@ -142,85 +142,107 @@ func TestLoadSatellitesChecksEveryEntry(t *testing.T) {
 	}
 }
 
+// reloads tells when watchSatellites has acted on a registry change, from
+// its log.
+type reloads struct{ applied, refused chan struct{} }
+
+func (r reloads) Enabled(context.Context, slog.Level) bool { return true }
+func (r reloads) WithAttrs([]slog.Attr) slog.Handler       { return r }
+func (r reloads) WithGroup(string) slog.Handler            { return r }
+func (r reloads) Handle(_ context.Context, rec slog.Record) error {
+	switch {
+	case strings.HasPrefix(rec.Message, "satellites: applied"):
+		r.applied <- struct{}{}
+	case strings.HasPrefix(rec.Message, "satellites: registry changed but is invalid"):
+		r.refused <- struct{}{}
+	}
+	return nil
+}
+
+func (r reloads) wait(t *testing.T, ch chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for the registry to be %s", what)
+	}
+}
+
 // doggie run applies registry changes without a restart, and keeps the
 // satellites as they were when the registry turns invalid.
+//
+// Clients connect only between reloads: the NATS server races with itself
+// when a client connects while it reloads its users.
 func TestRegistryChangesApplyWhileRunning(t *testing.T) {
 	cfg := testConfig(t, "127.0.0.1:-1")
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv, err := startBus(context.Background(), cfg, log)
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := startBus(context.Background(), cfg, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Shutdown()
+	r := reloads{applied: make(chan struct{}, 10), refused: make(chan struct{}, 10)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		watchSatellites(ctx, srv, satellitesFile(cfg), log, 20*time.Millisecond)
+		watchSatellites(ctx, srv, satellitesFile(cfg), slog.New(r), 20*time.Millisecond)
 		close(done)
 	}()
 	defer func() {
 		cancel()
 		<-done
 	}()
-	dial := func() (*bus.Conn, error) {
-		token, err := bus.LoadToken(satelliteTokenFile(cfg, "voice-room"))
-		if err != nil {
-			return nil, err
-		}
-		return bus.Dial(srv.ClientURL(), bus.DialOptions{Name: "voice", User: "voice-room", Token: token, CAFile: caFile("", cfg), Log: log})
+	dial := func(token string) (*bus.Conn, error) {
+		return bus.Dial(srv.ClientURL(), bus.DialOptions{Name: "voice", User: "voice-room", Token: token, CAFile: caFile("", cfg), Log: quiet})
 	}
-	connects := func() bool {
-		c, err := dial()
+	connects := func(token string) bool {
+		c, err := dial(token)
 		if err != nil {
 			return false
 		}
 		c.Close()
 		return true
 	}
-	if connects() {
+	if connects("no-token-yet") {
 		t.Fatal("connected before being added")
 	}
 	satelliteSub(cfg, io.Discard, "add", []string{"voice-room"}, []string{"voice:living_room"})
-	waitUntil(t, "the satellite to be accepted", connects)
+	r.wait(t, r.applied, "applied")
+	token, err := bus.LoadToken(satelliteTokenFile(cfg, "voice-room"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !connects(token) {
+		t.Fatal("added satellite refused")
+	}
 
 	// A broken registry keeps it working.
 	good, _ := os.ReadFile(satellitesFile(cfg))
 	os.WriteFile(satellitesFile(cfg), []byte("{broken"), 0o600)
-	time.Sleep(200 * time.Millisecond)
-	if !connects() {
+	r.wait(t, r.refused, "refused")
+	if !connects(token) {
 		t.Error("an invalid registry dropped the satellites")
 	}
 	os.WriteFile(satellitesFile(cfg), good, 0o600)
+	r.wait(t, r.applied, "applied again")
 
 	// Removed: refused, and the live connection loses its rights.
-	live, err := dial()
+	live, err := dial(token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer live.Close()
-	oldToken, _ := bus.LoadToken(satelliteTokenFile(cfg, "voice-room"))
 	satelliteSub(cfg, io.Discard, "remove", []string{"voice-room"}, nil)
-	waitUntil(t, "the satellite's real token to be refused", func() bool {
-		c, err := bus.Dial(srv.ClientURL(), bus.DialOptions{Name: "voice", User: "voice-room", Token: oldToken, CAFile: caFile("", cfg), Log: log})
-		if err == nil {
-			c.Close()
-		}
-		return err != nil
-	})
-	waitUntil(t, "the live connection to lose its rights", func() bool { return !canSay(live, "voice:living_room") })
+	r.wait(t, r.applied, "applied without it")
+	if connects(token) {
+		t.Error("removed satellite connected")
+	}
+	if canSay(live, "voice:living_room") {
+		t.Error("the live connection kept its rights")
+	}
+	// It keeps trying to reconnect: close it before the next reload.
+	live.Close()
 
 	// A deleted registry means no named satellites.
 	os.Remove(satellitesFile(cfg))
-	time.Sleep(100 * time.Millisecond)
-}
-
-func waitUntil(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	r.wait(t, r.applied, "applied once deleted")
 }

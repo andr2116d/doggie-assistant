@@ -307,3 +307,27 @@ func TestOptionsDefaults(t *testing.T) {
 		t.Errorf("MaxTimeout = %s, want capped at Retention (1h)", o.MaxTimeout)
 	}
 }
+
+// A fast worker can finish (task.done reaches the manager) before the
+// manager processes the delivery of the answer that unblocked it. The answer
+// was used, so answering must succeed.
+func TestAnswerThatFinishesTheTaskSucceeds(t *testing.T) {
+	h := newHarness(t, testOptions(), nil)
+	f := newFakeWorker(h)
+	f.serveRuns("test.quick", func(in bus.Incoming[events.TaskInfo, events.Ack]) {
+		id := in.Req.ID
+		f.serveControl(id, func(c bus.Incoming[events.TaskControl, events.Ack]) {
+			bus.Publish(f.ctx, f.conn, events.TaskDone, events.TaskDoneData{TaskID: id})
+			h.waitStatus(id, events.StatusDone) // done is recorded first...
+			c.Reply(events.Ack{})               // ...then the delivery is confirmed
+		})
+		in.Reply(events.Ack{})
+		f.ask(id, "Q1")
+	})
+
+	id := h.mustStart(events.TaskSpec{Kind: "test.quick"})
+	h.waitQuestion(id, "Q1")
+	if err := h.answer(id, "A1"); err != nil {
+		t.Fatalf("answer that finished the task was reported as failed: %v", err)
+	}
+}

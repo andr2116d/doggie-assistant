@@ -454,7 +454,9 @@ func (m *Manager) answered(ctx context.Context, in bus.Incoming[events.TaskAnswe
 		in.Fail(fmt.Errorf("task %s: its worker is gone", id))
 	case err != nil:
 		in.Fail(fmt.Errorf("deliver answer to %s: %w", id, err))
-	case t.Status().Terminal():
+	case t.Status() == events.StatusFailed || t.Status() == events.StatusCancelled:
+		// It ended (e.g. timed out) before the answer could matter. A done
+		// task is fine: the answer was delivered and let it finish.
 		in.Fail(fmt.Errorf("task %s is already %s", id, t.Status()))
 	default:
 		// Mark it running only if it still waits on the question we

@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
@@ -118,10 +119,10 @@ type TaskFailedData struct {
 type TaskCancelledData struct {
 	TaskID string `json:"task_id"`
 	Reason string `json:"reason,omitempty"`
-	// ByUser means a person asked for it directly, e.g. from a chat, not
-	// through the brain; so did the cancellation of its parent, for a
-	// subtask. They already know, so nobody needs to tell them.
-	ByUser bool `json:"by_user,omitempty"`
+	// Channel is where a person asked for it directly, e.g. from a chat,
+	// not through the brain; for a subtask, where its parent's was asked
+	// for. Empty when DOGGIE did it. The bus vouches for it.
+	Channel string `json:"channel,omitempty"`
 }
 
 // Task events. The manager publishes created, running, cancelled and failed
@@ -144,8 +145,6 @@ type Ack struct{}
 type TaskCancelRequest struct {
 	TaskID string `json:"task_id"`
 	Reason string `json:"reason,omitempty"`
-	// ByUser marks a request a person made directly, not through the brain.
-	ByUser bool `json:"by_user,omitempty"`
 }
 
 // TaskAnswer answers the question of a task waiting for input.
@@ -179,7 +178,20 @@ var (
 	// ReportResult hands the manager the result of a sensitive task, outside
 	// the event log, before the worker publishes a redacted task.done.
 	ReportResult = bus.NewCommand[TaskDoneData, Ack]("task.result")
+	// CancelTaskFrom is CancelTask asked for by a person directly, on a
+	// channel: CancelTaskFrom.With(channel), see CancelTaskOn. The bus only
+	// lets each satellite use its own channels, and CancelTask is for
+	// DOGGIE itself, so task.cancelled tells truly who asked.
+	CancelTaskFrom = bus.NewCommand[TaskCancelRequest, Ack]("task.cancel.from")
 )
+
+// CancelTaskOn is the command a channel cancels tasks with.
+func CancelTaskOn(channel string) (bus.Command[TaskCancelRequest, Ack], error) {
+	if !ValidChannel(channel) {
+		return bus.Command[TaskCancelRequest, Ack]{}, fmt.Errorf("invalid channel %q", channel)
+	}
+	return CancelTaskFrom.With(channel), nil
+}
 
 // TaskControlAction is what the manager asks a worker to do with a task.
 type TaskControlAction string

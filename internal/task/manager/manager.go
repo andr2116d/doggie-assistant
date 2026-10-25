@@ -160,6 +160,10 @@ func (m *Manager) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	directCancels, err := bus.ServeUnder(ctx, m.conn, events.CancelTaskFrom)
+	if err != nil {
+		return err
+	}
 	answers, err := bus.Serve(ctx, m.conn, events.AnswerTask)
 	if err != nil {
 		return err
@@ -203,7 +207,16 @@ func (m *Manager) Run(ctx context.Context) error {
 			if !ok {
 				return ctx.Err()
 			}
-			m.cancel(ctx, in)
+			m.cancel(ctx, in, "")
+		case in, ok := <-directCancels:
+			if !ok {
+				return ctx.Err()
+			}
+			if !events.ValidChannel(in.Under()) {
+				in.Fail(fmt.Errorf("invalid channel %q", in.Under()))
+				continue
+			}
+			m.cancel(ctx, in, in.Under())
 		case in, ok := <-answers:
 			if !ok {
 				return ctx.Err()
@@ -296,7 +309,7 @@ func (m *Manager) onEvent(ctx context.Context, env bus.Envelope) {
 	}
 	m.alive(t.ID())
 	if t.Status().Terminal() {
-		m.finished(ctx, t, false)
+		m.finished(ctx, t, "")
 	}
 }
 
@@ -435,7 +448,9 @@ func (m *Manager) dispatched(ctx context.Context, in bus.Incoming[events.TaskSpe
 	in.Reply(events.TaskRef{TaskID: id})
 }
 
-func (m *Manager) cancel(ctx context.Context, in bus.Incoming[events.TaskCancelRequest, events.Ack]) {
+// cancel serves a cancellation. channel is where a person asked for it
+// directly, if they did.
+func (m *Manager) cancel(ctx context.Context, in bus.Incoming[events.TaskCancelRequest, events.Ack], channel string) {
 	t, err := m.lookup(in.Req.TaskID)
 	if err != nil {
 		in.Fail(err)
@@ -449,20 +464,20 @@ func (m *Manager) cancel(ctx context.Context, in bus.Incoming[events.TaskCancelR
 	if reason == "" {
 		reason = "cancelled by request"
 	}
-	m.cancelTask(ctx, t, reason, in.Req.ByUser)
+	m.cancelTask(ctx, t, reason, channel)
 	in.Reply(events.Ack{})
 }
 
 // cancelTask records the cancellation at once and tells the worker to stop,
-// best effort: a worker that is gone can't run the task anyway. byUser is
-// whether a person asked for it directly.
-func (m *Manager) cancelTask(ctx context.Context, t *task.Task, reason string, byUser bool) {
+// best effort: a worker that is gone can't run the task anyway. channel is
+// where a person asked for it directly, if they did.
+func (m *Manager) cancelTask(ctx context.Context, t *task.Task, reason, channel string) {
 	if err := t.Cancel(reason, time.Now().UTC()); err != nil {
 		return
 	}
-	publish(ctx, m, events.TaskCancelled, events.TaskCancelledData{TaskID: t.ID(), Reason: reason, ByUser: byUser})
+	publish(ctx, m, events.TaskCancelled, events.TaskCancelledData{TaskID: t.ID(), Reason: reason, Channel: channel})
 	m.controlWorker(ctx, t, events.TaskControl{Action: events.ControlCancel, Reason: reason})
-	m.finished(ctx, t, byUser)
+	m.finished(ctx, t, channel)
 }
 
 func (m *Manager) answer(ctx context.Context, in bus.Incoming[events.TaskAnswer, events.Ack]) {
@@ -580,12 +595,13 @@ func (m *Manager) fail(ctx context.Context, t *task.Task, reason string) {
 		return
 	}
 	publish(ctx, m, events.TaskFailed, events.TaskFailedData{TaskID: t.ID(), Error: reason})
-	m.finished(ctx, t, false)
+	m.finished(ctx, t, "")
 }
 
 // finished cleans up after a task ended and cancels its active subtasks if
-// it did not succeed. byUser is whether a person cancelled it directly.
-func (m *Manager) finished(ctx context.Context, t *task.Task, byUser bool) {
+// it did not succeed. channel is where a person cancelled it directly, if
+// they did.
+func (m *Manager) finished(ctx context.Context, t *task.Task, channel string) {
 	if timer, ok := m.timers[t.ID()]; ok {
 		timer.Stop()
 		delete(m.timers, t.ID())
@@ -597,7 +613,7 @@ func (m *Manager) finished(ctx context.Context, t *task.Task, byUser bool) {
 	}
 	for _, child := range m.sorted() {
 		if child.Info().ParentID == t.ID() && !child.Status().Terminal() {
-			m.cancelTask(ctx, child, fmt.Sprintf("parent task %s %s", t.ID(), t.Status()), byUser)
+			m.cancelTask(ctx, child, fmt.Sprintf("parent task %s %s", t.ID(), t.Status()), channel)
 		}
 	}
 }

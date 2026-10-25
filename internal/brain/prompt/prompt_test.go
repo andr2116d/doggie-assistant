@@ -158,6 +158,8 @@ func TestBuildEvents(t *testing.T) {
 		"failed":            {TaskEvent{Type: "task.failed", Task: task, Reason: "worker stopped responding"}, []string{"failed: <data>worker stopped responding</data>"}, nil},
 		"cancelled":         {TaskEvent{Type: "task.cancelled", Task: task, Reason: "el usuario cambió de idea"}, []string{"was cancelled: <data>el usuario cambió de idea</data>."}, nil},
 		"cancelled, no why": {TaskEvent{Type: "task.cancelled", Task: task}, []string{"was cancelled.</event>"}, nil},
+		"cancelled elsewhere": {TaskEvent{Type: "task.cancelled", Task: task, Channel: "voice:kitchen", Reason: "ya no"},
+			[]string{"was cancelled by someone on voice:kitchen: <data>ya no</data>."}, nil},
 		"needs input": {TaskEvent{Type: "task.needs_input", Task: task, Question: "¿Qué perfil?", Options: []string{"Ana", "Luis"}},
 			[]string{"needs an answer: <data>¿Qué perfil?</data> Options: <data>Ana | Luis</data>"}, nil},
 		"needs input, no options": {TaskEvent{Type: "task.needs_input", Task: task, Question: "¿Cuál?"}, []string{"<data>¿Cuál?</data></event>"}, []string{"Options", "Only the user"}},

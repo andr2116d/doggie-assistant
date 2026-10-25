@@ -241,23 +241,38 @@ func TestCancellationByTheLLMIsNotAnnounced(t *testing.T) {
 	}
 }
 
-// A task the user cancelled directly, e.g. from a chat, is not told.
+// A task the user cancelled directly on the conversation's channel, e.g.
+// from its chat, is not told. One cancelled from another channel is, with
+// the channel.
 func TestCancellationByTheUserIsNotAnnounced(t *testing.T) {
 	h := newHarness(t, Options{})
 	h.say("th", "terminal", "hola")
 	h.nextTurn()
 	ctx := context.Background()
-	long, _ := bus.Request(ctx, h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
-	h.waitStatus(long.TaskID, events.StatusRunning)
-	if _, err := bus.Request(ctx, h.client, events.CancelTask, events.TaskCancelRequest{TaskID: long.TaskID, ByUser: true}); err != nil {
+	start := func() string {
+		ref, _ := bus.Request(ctx, h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
+		h.waitStatus(ref.TaskID, events.StatusRunning)
+		return ref.TaskID
+	}
+	fromHere, _ := events.CancelTaskOn("terminal")
+	if _, err := bus.Request(ctx, h.client, fromHere, events.TaskCancelRequest{TaskID: start()}); err != nil {
 		t.Fatal(err)
 	}
 	h.noTurn(300 * time.Millisecond)
 
-	// The brain still tells what the user didn't do.
-	other, _ := bus.Request(ctx, h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
-	bus.Request(ctx, h.client, events.CancelTask, events.TaskCancelRequest{TaskID: other.TaskID})
-	if turn := h.nextTurn(); len(turn.Data.Inputs) != 1 || turn.Data.Inputs[0].Task == nil || turn.Data.Inputs[0].Task.TaskID != other.TaskID {
+	fromKitchen, _ := events.CancelTaskOn("voice:kitchen")
+	kitchen := start()
+	bus.Request(ctx, h.client, fromKitchen, events.TaskCancelRequest{TaskID: kitchen})
+	turn := h.nextTurn()
+	if len(turn.Data.Inputs) != 1 || turn.Data.Inputs[0].Task == nil || turn.Data.Inputs[0].Task.Channel != "voice:kitchen" {
+		t.Errorf("turn = %+v", turn.Data.Inputs)
+	}
+	mustContain(t, inputOf(h.fake.requests()[1].Input), "was cancelled by someone on voice:kitchen")
+
+	// DOGGIE's own cancellations are told too.
+	other := start()
+	bus.Request(ctx, h.client, events.CancelTask, events.TaskCancelRequest{TaskID: other})
+	if turn := h.nextTurn(); len(turn.Data.Inputs) != 1 || turn.Data.Inputs[0].Task == nil || turn.Data.Inputs[0].Task.TaskID != other {
 		t.Errorf("turn = %+v", turn.Data.Inputs)
 	}
 }

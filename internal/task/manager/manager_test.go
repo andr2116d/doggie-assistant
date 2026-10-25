@@ -450,7 +450,9 @@ func TestManyConcurrentTasks(t *testing.T) {
 	}
 }
 
-func TestCancelByUserReachesItsEventsAndSubtasks(t *testing.T) {
+// A cancellation asked for directly on a channel says so, also for the
+// subtasks cancelled with the task.
+func TestDirectCancelTellsItsChannel(t *testing.T) {
 	b := newBlocker()
 	childID := make(chan string, 4)
 	h := newHarness(t, testOptions(), map[string]worker.Func{
@@ -469,11 +471,15 @@ func TestCancelByUserReachesItsEventsAndSubtasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, byUser := range []bool{true, false} {
+	for _, channel := range []string{"voice:kitchen", ""} {
+		cmd := events.CancelTask
+		if channel != "" {
+			cmd, _ = events.CancelTaskOn(channel)
+		}
 		parent := h.mustStart(events.TaskSpec{Kind: "test.parent"})
 		child := recv(t, childID, "subtask")
 		recv(t, b.started, "subtask start")
-		_, err := bus.Request(context.Background(), h.client, events.CancelTask, events.TaskCancelRequest{TaskID: parent, ByUser: byUser})
+		_, err := bus.Request(context.Background(), h.client, cmd, events.TaskCancelRequest{TaskID: parent})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -481,17 +487,28 @@ func TestCancelByUserReachesItsEventsAndSubtasks(t *testing.T) {
 		for len(got) < 2 {
 			select {
 			case ev := <-cancelled:
-				if ev.Data.ByUser != byUser {
-					t.Errorf("by user %v: %s cancelled with ByUser = %v", byUser, ev.Data.TaskID, ev.Data.ByUser)
+				if ev.Data.Channel != channel {
+					t.Errorf("from %q: %s cancelled from %q", channel, ev.Data.TaskID, ev.Data.Channel)
 				}
 				got[ev.Data.TaskID] = true
 			case <-time.After(3 * time.Second):
-				t.Fatalf("by user %v: cancelled %v, want %s and %s", byUser, got, parent, child)
+				t.Fatalf("from %q: cancelled %v, want %s and %s", channel, got, parent, child)
 			}
 		}
 		if !got[parent] || !got[child] {
-			t.Errorf("by user %v: cancelled %v, want %s and %s", byUser, got, parent, child)
+			t.Errorf("from %q: cancelled %v, want %s and %s", channel, got, parent, child)
 		}
 		recv(t, b.stopped, "subtask worker to stop")
+	}
+
+	// A token too long for a channel is refused.
+	id := h.mustStart(events.TaskSpec{Kind: "test.block"})
+	recv(t, b.started, "task start")
+	bad := events.CancelTaskFrom.With(strings.Repeat("x", 65))
+	if _, err := bus.Request(context.Background(), h.client, bad, events.TaskCancelRequest{TaskID: id}); err == nil || !strings.Contains(err.Error(), "invalid channel") {
+		t.Errorf("err = %v, want an invalid channel", err)
+	}
+	if info := h.get(id); info.Status.Terminal() {
+		t.Errorf("task %s is %s", id, info.Status)
 	}
 }

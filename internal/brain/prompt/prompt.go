@@ -92,6 +92,8 @@ type TaskEvent struct {
 	Result json.RawMessage
 	// Reason is the error of a failed task or why it was cancelled.
 	Reason string
+	// Channel is where a person cancelled the task directly, if they did.
+	Channel string
 	// Question and Options, for task.needs_input.
 	Question string
 	Options  []string
@@ -262,6 +264,9 @@ func writeInput(b *strings.Builder, in Input, clk clock, omitAt string, maxText 
 		fmt.Fprintf(b, "failed: <data>%s</data>", esc(cut(e.Reason, maxDataText)))
 	case events.TaskCancelled.Type():
 		b.WriteString("was cancelled")
+		if e.Channel != "" {
+			fmt.Fprintf(b, " by someone on %s", esc(e.Channel))
+		}
 		if e.Reason != "" {
 			fmt.Fprintf(b, ": <data>%s</data>", esc(cut(e.Reason, maxDataText)))
 		}

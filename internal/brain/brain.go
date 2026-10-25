@@ -515,10 +515,10 @@ func (b *Brain) taskEvent(info events.TaskInfo, env bus.Envelope) {
 	case events.TaskCancelled.Type():
 		var d events.TaskCancelledData
 		json.Unmarshal(env.Data, &d)
-		if d.ByUser {
+		if d.Channel != "" && d.Channel == th.channel {
 			return // the user did it themselves: nothing to tell them
 		}
-		in.Task.Reason = d.Reason
+		in.Task.Reason, in.Task.Channel = d.Reason, d.Channel
 	case events.TaskNeedsInput.Type():
 		var d events.TaskNeedsInputData
 		json.Unmarshal(env.Data, &d)
@@ -610,7 +610,7 @@ func promptInput(in events.TurnInput) prompt.Input {
 			Task: events.TaskInfo{ID: t.TaskID, TaskSpec: events.TaskSpec{
 				Kind: t.Kind, Description: t.Description, Sensitive: t.Sensitive,
 			}},
-			Result: t.Result, Reason: t.Reason, Question: t.Question, Options: t.Options,
+			Result: t.Result, Reason: t.Reason, Channel: t.Channel, Question: t.Question, Options: t.Options,
 		}
 	}
 	return p

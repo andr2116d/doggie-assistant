@@ -108,6 +108,44 @@ func TestStartBusRestrictsSatellites(t *testing.T) {
 	if published(sat, events.UserUtterance, events.UtteranceData{Channel: "terminal", Text: "no channel subject"}) {
 		t.Error("satellite could publish an utterance outside a channel subject")
 	}
+
+	// It cancels tasks from its own channel only, never as DOGGIE does.
+	core, err := srv.Connect("tasks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Close()
+	direct, _ := bus.ServeUnder(ctx, core, events.CancelTaskFrom)
+	plain, _ := bus.Serve(ctx, core, events.CancelTask)
+	go func() {
+		for {
+			select {
+			case in := <-direct:
+				in.Reply(events.Ack{})
+			case in := <-plain:
+				in.Reply(events.Ack{})
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	canCancel := func(cmd bus.Command[events.TaskCancelRequest, events.Ack]) bool {
+		rctx, rcancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer rcancel()
+		_, err := bus.Request(rctx, sat, cmd, events.TaskCancelRequest{TaskID: "t1"})
+		return err == nil
+	}
+	fromTerminal, _ := events.CancelTaskOn("terminal")
+	fromWhatsApp, _ := events.CancelTaskOn("whatsapp")
+	if !canCancel(fromTerminal) {
+		t.Error("the shared token cannot cancel from the terminal")
+	}
+	if canCancel(fromWhatsApp) {
+		t.Error("the shared token could cancel from whatsapp")
+	}
+	if canCancel(events.CancelTask) {
+		t.Error("satellite could cancel as DOGGIE does")
+	}
 }
 
 // A satellite added to the registry speaks for its own channels only, with

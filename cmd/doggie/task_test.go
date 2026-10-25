@@ -132,14 +132,14 @@ func TestTaskCLICancel(t *testing.T) {
 	if out, err := sub(t, c, "get", []string{id}, taskOptions{}); err != nil || !strings.Contains(out, `"timeout_s": 2`) {
 		t.Errorf("timeout not rounded up to 2s: %v\n%s", err, out)
 	}
-	if out, err := sub(t, c, "cancel", []string{id}, taskOptions{reason: "changed my mind"}); err != nil || !strings.Contains(out, "cancelled "+id) {
+	if out, err := sub(t, c, "cancel", []string{id}, taskOptions{reason: "changed my mind", channel: "terminal"}); err != nil || !strings.Contains(out, "cancelled "+id) {
 		t.Fatalf("cancel: %q, %v", out, err)
 	}
 	waitStatus(t, c, id, events.StatusCancelled)
-	// The person asked for it, so the brain doesn't tell them.
+	// A person asked for it, on the terminal.
 	ev, ok, err := bus.LastEvent(context.Background(), c, events.TaskCancelled)
-	if err != nil || !ok || ev.Data.TaskID != id || !ev.Data.ByUser {
-		t.Errorf("task.cancelled = %+v, %v, %v; want %s by the user", ev.Data, ok, err, id)
+	if err != nil || !ok || ev.Data.TaskID != id || ev.Data.Channel != "terminal" {
+		t.Errorf("task.cancelled = %+v, %v, %v; want %s from the terminal", ev.Data, ok, err, id)
 	}
 }
 

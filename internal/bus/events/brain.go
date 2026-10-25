@@ -57,8 +57,10 @@ type TurnTask struct {
 	Sensitive   bool            `json:"sensitive,omitempty"`
 	Result      json.RawMessage `json:"result,omitempty"`
 	Reason      string          `json:"reason,omitempty"`
-	Question    string          `json:"question,omitempty"`
-	Options     []string        `json:"options,omitempty"`
+	// Channel is where a person cancelled the task directly, if they did.
+	Channel  string   `json:"channel,omitempty"`
+	Question string   `json:"question,omitempty"`
+	Options  []string `json:"options,omitempty"`
 }
 
 // TurnAction is a tool call.

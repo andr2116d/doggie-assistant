@@ -20,7 +20,7 @@ const taskUsage = `Usage:
   doggie task start [-desc text] [-timeout 30s] [-thread id] [-sensitive] <kind> [input-json]
   doggie task list [-active] [-limit n]
   doggie task get <id>
-  doggie task cancel [-reason text] <id>
+  doggie task cancel [-reason text] [-channel terminal] <id>
   doggie task answer <id> <answer...>
 
 All subcommands also take -config, -server and -ca (see "doggie events -h").
@@ -28,10 +28,10 @@ All subcommands also take -config, -server and -ca (see "doggie events -h").
 
 // taskOptions are the subcommand flags.
 type taskOptions struct {
-	desc, thread, reason string
-	timeout              time.Duration
-	active, sensitive    bool
-	limit                int
+	desc, thread, reason, channel string
+	timeout                       time.Duration
+	active, sensitive             bool
+	limit                         int
 }
 
 // taskCmd manages tasks of a running DOGGIE over TCP.
@@ -76,6 +76,7 @@ func parseTask(sub string, args []string) ([]string, taskOptions, clientFlags, e
 		flags.IntVar(&o.limit, "limit", 0, "show at most this many recent tasks (default: the manager's)")
 	case "cancel":
 		flags.StringVar(&o.reason, "reason", "", "why the task is cancelled")
+		flags.StringVar(&o.channel, "channel", "terminal", "channel the person cancelling it is on")
 	case "get", "answer":
 	default:
 		return nil, o, client, fmt.Errorf("unknown task subcommand %q (see \"doggie task help\")", sub)
@@ -143,9 +144,13 @@ func taskSub(ctx context.Context, conn *bus.Conn, w io.Writer, sub string, args 
 
 	case "cancel":
 		if len(args) != 1 {
-			return errors.New("usage: doggie task cancel [-reason text] <id>")
+			return errors.New("usage: doggie task cancel [-reason text] [-channel terminal] <id>")
 		}
-		if _, err := bus.Request(ctx, conn, events.CancelTask, events.TaskCancelRequest{TaskID: args[0], Reason: o.reason, ByUser: true}); err != nil {
+		cancel, err := events.CancelTaskOn(o.channel)
+		if err != nil {
+			return err
+		}
+		if _, err := bus.Request(ctx, conn, cancel, events.TaskCancelRequest{TaskID: args[0], Reason: o.reason}); err != nil {
 			return err
 		}
 		fmt.Fprintf(w, "cancelled %s\n", args[0])

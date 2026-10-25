@@ -34,7 +34,8 @@ var SystemStopping = bus.NewSubject[StoppingData]("system.stopping")
 
 // SatellitePermissions is what a satellite or tool connecting over TCP may
 // do: watch events, pass on what people say on its own channels
-// (user.utterance.<channel>), use the task manager's commands, and run tasks
+// (user.utterance.<channel>), use the task manager's commands, cancelling
+// only from its own channels (task.cancel.from.<channel>), and run tasks
 // as workers (report on them, beat, spawn subtasks). It cannot speak for
 // other channels, forge the manager's events (task.created, running,
 // cancelled), the brain's (out.speak, brain.turn) or the core's (system.*),
@@ -42,17 +43,20 @@ var SystemStopping = bus.NewSubject[StoppingData]("system.stopping")
 // log. It may follow what DOGGIE says as it is written (out.speak.delta).
 // Invalid channels are left out.
 func SatellitePermissions(channels ...string) bus.Permissions {
-	var utterances []string
+	var byChannel []string
 	for _, c := range channels {
 		if s, err := UtteranceOn(c); err == nil {
-			utterances = append(utterances, s.Wire())
+			byChannel = append(byChannel, s.Wire())
+		}
+		if cmd, err := CancelTaskOn(c); err == nil {
+			byChannel = append(byChannel, cmd.Wire())
 		}
 	}
 	return bus.Permissions{
-		Publish: append(utterances,
+		Publish: append(byChannel,
 			TaskProgress.Wire(), TaskNeedsInput.Wire(), TaskDone.Wire(), TaskFailed.Wire(),
 			TaskAlive.Wire(),
-			StartTask.Wire(), CancelTask.Wire(), AnswerTask.Wire(), ListTasks.Wire(), GetTask.Wire(),
+			StartTask.Wire(), AnswerTask.Wire(), ListTasks.Wire(), GetTask.Wire(),
 			ReportResult.Wire(),
 		),
 		Subscribe: []string{

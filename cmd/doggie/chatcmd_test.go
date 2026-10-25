@@ -133,8 +133,8 @@ func TestChatListsAndCancelsTasks(t *testing.T) {
 	ui.lines <- "/tasks"
 	ui.waitPrinted(t, "· cancelled "+mine+"\n· 2 tasks in progress:\n")
 	ev, _, _ := bus.LastEvent(context.Background(), c, events.TaskCancelled)
-	if ev.Data.TaskID != mine || ev.Data.Reason != "ya no" || !ev.Data.ByUser {
-		t.Errorf("task.cancelled = %+v, want %s by the user", ev.Data, mine)
+	if ev.Data.TaskID != mine || ev.Data.Reason != "ya no" || ev.Data.Channel != "terminal" {
+		t.Errorf("task.cancelled = %+v, want %s from the terminal", ev.Data, mine)
 	}
 	ui.lines <- "/cancel " + mine
 	ui.waitPrinted(t, "· could not cancel "+mine+": task "+mine+" is already cancelled\n")

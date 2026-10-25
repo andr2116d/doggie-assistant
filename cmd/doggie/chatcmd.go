@@ -89,8 +89,8 @@ func (cmd *command) check() string {
 }
 
 // run runs a checked command against DOGGIE, other than /help, and returns
-// what to show and whether it worked. thread is the chat's conversation.
-func (cmd *command) run(ctx context.Context, conn *bus.Conn, thread string) (string, bool) {
+// what to show and whether it worked. thread and channel are the chat's.
+func (cmd *command) run(ctx context.Context, conn *bus.Conn, thread, channel string) (string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	switch cmd.name {
@@ -105,7 +105,10 @@ func (cmd *command) run(ctx context.Context, conn *bus.Conn, thread string) (str
 		}
 		return taskTable(list, req.ActiveOnly, thread, time.Now()), true
 	case "/cancel":
-		_, err := bus.Request(ctx, conn, events.CancelTask, events.TaskCancelRequest{TaskID: cmd.id, Reason: cmd.text, ByUser: true})
+		cancel, err := events.CancelTaskOn(channel)
+		if err == nil {
+			_, err = bus.Request(ctx, conn, cancel, events.TaskCancelRequest{TaskID: cmd.id, Reason: cmd.text})
+		}
 		if err != nil {
 			return fmt.Sprintf("· could not cancel %s: %s", cmd.id, commandError(err)), false
 		}
@@ -220,11 +223,11 @@ type commandResult struct {
 
 // commander runs commands in order, so each sees what the one before did,
 // without holding the chat loop.
-func commander(ctx context.Context, conn *bus.Conn, thread string, cmds <-chan *command, done chan<- commandResult) {
+func commander(ctx context.Context, conn *bus.Conn, thread, channel string, cmds <-chan *command, done chan<- commandResult) {
 	for {
 		select {
 		case cmd := <-cmds:
-			out, ok := cmd.run(ctx, conn, thread)
+			out, ok := cmd.run(ctx, conn, thread, channel)
 			select {
 			case done <- commandResult{out, ok}:
 			case <-ctx.Done():

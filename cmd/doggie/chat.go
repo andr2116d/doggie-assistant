@@ -389,7 +389,7 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 	inFlight, running, failed := 0, 0, false
 	commands := make(chan *command, 64)
 	commandsDone := make(chan commandResult, 64)
-	go commander(sctx, conn, o.thread, commands, commandsDone)
+	go commander(sctx, conn, o.thread, o.channel, commands, commandsDone)
 	if ui.IsInteractive() && o.history > 0 {
 		c.showHistory(sctx, conn)
 	}

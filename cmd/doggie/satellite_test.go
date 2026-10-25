@@ -7,6 +7,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/andr2116d/doggie-assistant/internal/bus"
 )
 
 func TestSatelliteAddListRemove(t *testing.T) {
@@ -136,5 +139,88 @@ func TestLoadSatellitesChecksEveryEntry(t *testing.T) {
 		if _, err := loadSatellites(satellitesFile(cfg)); err == nil {
 			t.Errorf("%s: loaded", name)
 		}
+	}
+}
+
+// doggie run applies registry changes without a restart, and keeps the
+// satellites as they were when the registry turns invalid.
+func TestRegistryChangesApplyWhileRunning(t *testing.T) {
+	cfg := testConfig(t, "127.0.0.1:-1")
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := startBus(context.Background(), cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		watchSatellites(ctx, srv, satellitesFile(cfg), log, 20*time.Millisecond)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	dial := func() (*bus.Conn, error) {
+		token, err := bus.LoadToken(satelliteTokenFile(cfg, "voice-room"))
+		if err != nil {
+			return nil, err
+		}
+		return bus.Dial(srv.ClientURL(), bus.DialOptions{Name: "voice", User: "voice-room", Token: token, CAFile: caFile("", cfg), Log: log})
+	}
+	connects := func() bool {
+		c, err := dial()
+		if err != nil {
+			return false
+		}
+		c.Close()
+		return true
+	}
+	if connects() {
+		t.Fatal("connected before being added")
+	}
+	satelliteSub(cfg, io.Discard, "add", []string{"voice-room"}, []string{"voice:living_room"})
+	waitUntil(t, "the satellite to be accepted", connects)
+
+	// A broken registry keeps it working.
+	good, _ := os.ReadFile(satellitesFile(cfg))
+	os.WriteFile(satellitesFile(cfg), []byte("{broken"), 0o600)
+	time.Sleep(200 * time.Millisecond)
+	if !connects() {
+		t.Error("an invalid registry dropped the satellites")
+	}
+	os.WriteFile(satellitesFile(cfg), good, 0o600)
+
+	// Removed: refused, and the live connection loses its rights.
+	live, err := dial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	oldToken, _ := bus.LoadToken(satelliteTokenFile(cfg, "voice-room"))
+	satelliteSub(cfg, io.Discard, "remove", []string{"voice-room"}, nil)
+	waitUntil(t, "the satellite's real token to be refused", func() bool {
+		c, err := bus.Dial(srv.ClientURL(), bus.DialOptions{Name: "voice", User: "voice-room", Token: oldToken, CAFile: caFile("", cfg), Log: log})
+		if err == nil {
+			c.Close()
+		}
+		return err != nil
+	})
+	waitUntil(t, "the live connection to lose its rights", func() bool { return !canSay(live, "voice:living_room") })
+
+	// A deleted registry means no named satellites.
+	os.Remove(satellitesFile(cfg))
+	time.Sleep(100 * time.Millisecond)
+}
+
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

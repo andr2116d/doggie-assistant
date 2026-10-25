@@ -109,6 +109,7 @@ func runCmd(args []string) error {
 		return err
 	}
 	defer srv.Shutdown()
+	go watchSatellites(ctx, srv, satellitesFile(cfg), log, satelliteWatchInterval)
 
 	comps, closeConns, err := buildComponents(selected, cfg, log, srv)
 	if err != nil {

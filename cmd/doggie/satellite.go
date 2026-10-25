@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,7 +33,8 @@ A satellite (a voice satellite, the WhatsApp bridge...) gets its own token,
 and the bus only lets it speak for its own channels. The token is shown once
 and saved for this machine in $XDG_DATA_HOME/doggie/satellites/<name>.token;
 connect with -as <name> or DOGGIE_BUS_USER=<name> plus DOGGIE_BUS_TOKEN.
-Changes apply when DOGGIE restarts.
+A running DOGGIE applies changes within a few seconds: a removed satellite
+is disconnected.
 
 The shared bus token (doggie events, task, say) may only speak for the
 "terminal" channel.
@@ -204,7 +208,7 @@ func satelliteSub(cfg config.Config, w io.Writer, sub string, args []string, cha
 			os.Remove(tokenFile)
 			return err
 		}
-		fmt.Fprintf(w, "added satellite %s for %s\ntoken: %s\nsaved in %s\nrestart doggie to apply\n", name, strings.Join(channels, ", "), token, tokenFile)
+		fmt.Fprintf(w, "added satellite %s for %s\ntoken: %s\nsaved in %s\na running doggie applies it within a few seconds\n", name, strings.Join(channels, ", "), token, tokenFile)
 		return nil
 
 	case "remove":
@@ -220,7 +224,7 @@ func satelliteSub(cfg config.Config, w io.Writer, sub string, args []string, cha
 			return err
 		}
 		os.Remove(satelliteTokenFile(cfg, args[0]))
-		fmt.Fprintf(w, "removed satellite %s\nrestart doggie to apply\n", args[0])
+		fmt.Fprintf(w, "removed satellite %s\na running doggie disconnects it within a few seconds\n", args[0])
 		return nil
 	}
 	return fmt.Errorf("unknown satellite subcommand %q (see \"doggie satellite help\")", sub)
@@ -232,4 +236,41 @@ func newToken() (string, error) {
 		return "", fmt.Errorf("generate token: %w", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// satelliteWatchInterval is how often doggie run checks the registry.
+const satelliteWatchInterval = 2 * time.Second
+
+// watchSatellites applies registry changes to the running bus, so adding or
+// removing a satellite needs no restart. An invalid registry is reported and
+// leaves the satellites as they were.
+func watchSatellites(ctx context.Context, srv *bus.Server, path string, log *slog.Logger, every time.Duration) {
+	last, _ := os.ReadFile(path)
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		data, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			log.Warn("satellites: cannot read the registry", "err", err)
+			continue
+		}
+		if bytes.Equal(data, last) {
+			continue
+		}
+		last = data
+		list, err := loadSatellites(path)
+		if err == nil {
+			err = srv.SetSatellites(busSatellites(list))
+		}
+		if err != nil {
+			log.Error("satellites: registry changed but is invalid, keeping the previous satellites", "err", err)
+			continue
+		}
+		log.Info("satellites: applied the registry", "satellites", len(list))
+	}
 }

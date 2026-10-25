@@ -7,6 +7,7 @@ package bus
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -37,7 +38,10 @@ type Options struct {
 	// MaxAge and MaxBytes bound the event log.
 	MaxAge   time.Duration
 	MaxBytes int64
-	Log      *slog.Logger
+	// TLS, when set, is required for every TCP client. In-process
+	// connections never touch the network and are not affected.
+	TLS *tls.Config
+	Log *slog.Logger
 }
 
 // Server is the embedded NATS server.
@@ -60,6 +64,11 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		StoreDir:               opts.StoreDir,
 		NoSigs:                 true,
 		DisableJetStreamBanner: true,
+	}
+	if opts.TLS != nil {
+		sopts.TLS = true
+		sopts.TLSConfig = opts.TLS
+		sopts.TLSTimeout = 2
 	}
 	if opts.Listen != "" {
 		host, port, err := net.SplitHostPort(opts.Listen)
@@ -153,22 +162,36 @@ func (s *Server) Shutdown() {
 	s.ns.WaitForShutdown()
 }
 
+// DialOptions configures a TCP connection to the bus.
+type DialOptions struct {
+	// Name identifies the client. Its events carry it as their source.
+	Name  string
+	Token string
+	// CAFile is the bus CA certificate. Required when the bus uses TLS.
+	CAFile string
+	Log    *slog.Logger
+}
+
 // Dial connects to a DOGGIE bus over TCP, for satellites and tools running in
 // another process.
-func Dial(url, token, name string, log *slog.Logger) (*Conn, error) {
-	nc, err := nats.Connect(url,
-		nats.Token(token),
-		nats.Name(name),
+func Dial(url string, opts DialOptions) (*Conn, error) {
+	natsOpts := []nats.Option{
+		nats.Token(opts.Token),
+		nats.Name(opts.Name),
 		nats.MaxReconnects(-1),
-		errorHandler(log, name),
-	)
+		errorHandler(opts.Log, opts.Name),
+	}
+	if opts.CAFile != "" {
+		natsOpts = append(natsOpts, nats.RootCAs(opts.CAFile))
+	}
+	nc, err := nats.Connect(url, natsOpts...)
 	if errors.Is(err, nats.ErrNoServers) {
 		return nil, fmt.Errorf("bus: no server at %s (is doggie running?): %w", url, err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("bus: dial %s: %w", url, err)
 	}
-	return newConn(nc, name, log), nil
+	return newConn(nc, opts.Name, opts.Log), nil
 }
 
 func errorHandler(log *slog.Logger, name string) nats.Option {

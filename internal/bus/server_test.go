@@ -59,10 +59,10 @@ func TestTCPRequiresToken(t *testing.T) {
 	s := startTestServer(t, "127.0.0.1:-1")
 	url := s.ClientURL()
 
-	if _, err := Dial(url, "wrong", "intruder", discardLog()); err == nil {
+	if _, err := Dial(url, DialOptions{Name: "intruder", Token: "wrong", Log: discardLog()}); err == nil {
 		t.Fatal("dial with a wrong token succeeded")
 	}
-	c, err := Dial(url, "test-token", "satellite", discardLog())
+	c, err := Dial(url, DialOptions{Name: "satellite", Token: "test-token", Log: discardLog()})
 	if err != nil {
 		t.Fatalf("dial with the right token: %v", err)
 	}

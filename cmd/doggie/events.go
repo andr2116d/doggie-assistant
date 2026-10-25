@@ -45,7 +45,7 @@ func eventsCmd(args []string, stdout io.Writer) error {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	conn, err := bus.Dial(url, token, "events-viewer", log)
+	conn, err := bus.Dial(url, bus.DialOptions{Name: "events-viewer", Token: token, Log: log})
 	if err != nil {
 		return err
 	}

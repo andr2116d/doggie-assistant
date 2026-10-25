@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -165,15 +166,30 @@ type replyView struct {
 	printed map[blockKey]string // what is on screen, by block
 	pending map[blockKey]string // leading whitespace, not shown yet
 	open    *blockKey           // the block on the current line, if any
+	// done are blocks already shown whole: a piece of them arriving late
+	// is dropped.
+	done recentIDs
 }
+
+// maxOpenBlocks bounds the blocks whose end hasn't come, e.g. when the brain
+// stopped in the middle of one.
+const maxOpenBlocks = 64
+
+func (k blockKey) id() string { return k.cause + "#" + strconv.Itoa(k.block) }
 
 func newReplyView(w io.Writer) *replyView {
 	return &replyView{w: w, printed: map[blockKey]string{}, pending: map[blockKey]string{}}
 }
 
 func (v *replyView) delta(k blockKey, text string) {
+	if v.done.has(k.id()) {
+		return
+	}
 	if v.open != nil && *v.open != k {
 		v.close()
+	}
+	if len(v.printed)+len(v.pending) >= maxOpenBlocks {
+		v.forgetOpenBlocks()
 	}
 	if _, ok := v.printed[k]; ok {
 		if v.open != nil && *v.open == k {
@@ -197,6 +213,7 @@ func (v *replyView) delta(k blockKey, text string) {
 }
 
 func (v *replyView) block(k blockKey, text string) {
+	v.done.add(k.id())
 	p, shown := v.printed[k]
 	delete(v.printed, k)
 	delete(v.pending, k)
@@ -212,7 +229,47 @@ func (v *replyView) block(k blockKey, text string) {
 	fmt.Fprintf(v.w, "doggie> %s\n", strings.TrimSpace(text))
 }
 
+// forgetOpenBlocks drops the blocks still waiting for their end, but the
+// one on the current line.
+func (v *replyView) forgetOpenBlocks() {
+	for k := range v.printed {
+		if v.open == nil || k != *v.open {
+			delete(v.printed, k)
+		}
+	}
+	clear(v.pending)
+}
+
 func (v *replyView) close() {
 	fmt.Fprintln(v.w)
 	v.open = nil
 }
+
+// recentIDs is a set of event IDs that forgets the oldest past maxRecent.
+type recentIDs struct {
+	set   map[string]bool
+	order []string
+}
+
+// maxRecent is enough to recognize events seen twice, live and from the
+// log after a reconnection.
+const maxRecent = 4096
+
+// add reports whether id is new, and keeps it.
+func (r *recentIDs) add(id string) bool {
+	if r.set[id] {
+		return false
+	}
+	if r.set == nil {
+		r.set = map[string]bool{}
+	}
+	r.set[id] = true
+	r.order = append(r.order, id)
+	if len(r.order) > maxRecent {
+		delete(r.set, r.order[0])
+		r.order = r.order[1:]
+	}
+	return true
+}
+
+func (r *recentIDs) has(id string) bool { return r.set[id] }

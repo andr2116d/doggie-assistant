@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -172,6 +173,10 @@ func TestReplyViewStreams(t *testing.T) {
 		"leading whitespace": {[]step{d("u", 0, "  "), d("u", 0, "\nHola"), e("u", 0, "\nHola")}, "doggie> Hola\n"},
 		"blank piece only":   {[]step{d("u", 0, "   "), e("u", 1, "Hola")}, "doggie> Hola\n"},
 		"another turn":       {[]step{d("u1", 0, "A"), d("u2", 0, "B"), e("u1", 0, "A"), e("u2", 0, "B")}, "doggie> A\ndoggie> B\n"},
+		// Pieces travel apart from the log: one may come after its block.
+		"late piece": {[]step{d("u", 0, "Un "), e("u", 0, "Un chiste."), d("u", 0, "chiste."), e("u", 1, "Otro.")},
+			"doggie> Un \ndoggie> Un chiste.\ndoggie> Otro.\n"},
+		"late piece of a block shown whole": {[]step{e("u", 0, "Hola."), d("u", 0, "Hola.")}, "doggie> Hola.\n"},
 	} {
 		var out strings.Builder
 		v := newReplyView(&out)
@@ -185,5 +190,36 @@ func TestReplyViewStreams(t *testing.T) {
 		if out.String() != tt.want {
 			t.Errorf("%s: printed %q, want %q", name, out.String(), tt.want)
 		}
+	}
+}
+
+// Blocks whose end never comes (the brain stopped mid-block) don't pile up.
+func TestReplyViewIsBounded(t *testing.T) {
+	v := newReplyView(io.Discard)
+	for i := range 10 * maxOpenBlocks {
+		v.delta(blockKey{fmt.Sprint(i), 0}, "x")
+		v.delta(blockKey{fmt.Sprint(i), 1}, " ")
+		v.block(blockKey{fmt.Sprint(i), 2}, "y")
+	}
+	if n := len(v.printed) + len(v.pending); n > 2*maxOpenBlocks {
+		t.Errorf("%d blocks kept", n)
+	}
+	if len(v.done.set) > maxRecent {
+		t.Errorf("%d done blocks kept", len(v.done.set))
+	}
+}
+
+func TestRecentIDsForgetsTheOldest(t *testing.T) {
+	var r recentIDs
+	for i := range maxRecent + 10 {
+		if !r.add(fmt.Sprint(i)) {
+			t.Fatalf("%d not new", i)
+		}
+	}
+	if r.has("9") || !r.has("10") || r.add("20") || len(r.set) != maxRecent || len(r.order) != maxRecent {
+		t.Errorf("kept %d ids, %d in order", len(r.set), len(r.order))
+	}
+	if !r.add("5") {
+		t.Error("a forgotten id is not new again")
 	}
 }

@@ -31,6 +31,7 @@ Usage:
   doggie events [flags]   watch bus events live (see "doggie events -h")
   doggie task <cmd>       start, list, get, cancel or answer tasks (see "doggie task help")
   doggie say <text>       say something to DOGGIE and print its replies (see "doggie say -h")
+  doggie satellite <cmd>  add, list or remove satellites (see "doggie satellite help")
   doggie version          print the version
 `
 
@@ -57,6 +58,8 @@ func run(args []string, stdout io.Writer) error {
 		return taskCmd(args[1:], stdout)
 	case "say":
 		return sayCmd(args[1:], stdout)
+	case "satellite":
+		return satelliteCmd(args[1:], stdout)
 	case "version":
 		fmt.Fprintln(stdout, version)
 		return nil
@@ -124,10 +127,15 @@ func startBus(ctx context.Context, cfg config.Config, log *slog.Logger) (*bus.Se
 	if err != nil {
 		return nil, err
 	}
+	satellites, err := loadSatellites(satellitesFile(cfg))
+	if err != nil {
+		return nil, err
+	}
 	opts := bus.Options{
 		Listen:               cfg.Bus.Listen,
 		Token:                token,
-		SatellitePermissions: events.SatellitePermissions(),
+		SatellitePermissions: events.SatellitePermissions(sharedChannels...),
+		Satellites:           busSatellites(satellites),
 		StoreDir:             filepath.Join(cfg.DataDir, "nats"),
 		MaxAge:               cfg.Bus.EventLog.MaxAge,
 		MaxBytes:             cfg.Bus.EventLog.MaxSizeMB << 20,

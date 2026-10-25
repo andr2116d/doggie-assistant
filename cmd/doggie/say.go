@@ -18,13 +18,16 @@ import (
 )
 
 const sayUsage = `Usage:
-  doggie say [-channel terminal] [-thread id] [-wait 20s] <text...>
+  doggie say [-channel terminal] [-thread id] [-wait 20s] [-as satellite] <text...>
 
 Says text to DOGGIE as if it came from a channel, prints the replies, then
 keeps listening for -wait after the last one, for notices about tasks the
 reply started. Ctrl+C stops listening.
 
-It also takes -config, -server and -ca (see "doggie events -h").
+The shared token may only speak for "terminal"; for another channel, connect
+as a satellite that owns it (see "doggie satellite help").
+
+It also takes -config, -server, -ca and -as (see "doggie events -h").
 `
 
 // sayOptions are the flags of doggie say.
@@ -81,9 +84,17 @@ func say(ctx context.Context, conn *bus.Conn, w io.Writer, text string, o sayOpt
 	if err != nil {
 		return err
 	}
-	meta, err := bus.Publish(ctx, conn, events.UserUtterance, events.UtteranceData{ThreadID: o.thread, Channel: o.channel, Text: text})
+	subject, err := events.UtteranceOn(o.channel)
 	if err != nil {
 		return err
+	}
+	// A channel this connection may not speak for is refused by the bus,
+	// which then never confirms the publish: bound the wait.
+	pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)
+	meta, err := bus.Publish(pctx, conn, subject, events.UtteranceData{ThreadID: o.thread, Channel: o.channel, Text: text})
+	pcancel()
+	if err != nil {
+		return fmt.Errorf("could not say it on %s (is this connection allowed to speak for that channel? see \"doggie satellite help\"): %w", o.channel, err)
 	}
 
 	answered := false

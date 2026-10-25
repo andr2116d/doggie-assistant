@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,14 +89,83 @@ func TestStartBusRestrictsSatellites(t *testing.T) {
 	if _, err := bus.Serve(ctx, sat, events.StartTask); err == nil {
 		t.Error("satellite could impersonate the task manager")
 	}
-	// A channel may pass on what people say...
-	if _, err := bus.Publish(ctx, sat, events.UserUtterance, events.UtteranceData{Channel: "terminal", Text: "hi"}); err != nil {
-		t.Errorf("satellite cannot publish an utterance: %v", err)
+	// The shared token speaks for the terminal...
+	if !canSay(sat, "terminal") {
+		t.Error("the shared token cannot speak for the terminal")
 	}
-	// ...but not put words in the brain's mouth.
-	short, cancelShort := context.WithTimeout(ctx, 300*time.Millisecond)
-	defer cancelShort()
-	if _, err := bus.Publish(short, sat, events.OutSpeak, events.SpeakData{Channel: "terminal", Text: "forged"}); err == nil {
+	// ...but for no other channel, and not for the brain.
+	for _, ch := range []string{"voice:living_room", "whatsapp"} {
+		if canSay(sat, ch) {
+			t.Errorf("the shared token could speak for %s", ch)
+		}
+	}
+	if published(sat, events.OutSpeak, events.SpeakData{Channel: "terminal", Text: "forged"}) {
 		t.Error("satellite could publish out.speak")
 	}
+	if published(sat, events.BrainTurn, events.BrainTurnData{ThreadID: "terminal"}) {
+		t.Error("satellite could publish brain.turn")
+	}
+	if published(sat, events.UserUtterance, events.UtteranceData{Channel: "terminal", Text: "no channel subject"}) {
+		t.Error("satellite could publish an utterance outside a channel subject")
+	}
+}
+
+// A satellite added to the registry speaks for its own channels only, with
+// its own token.
+func TestRegisteredSatelliteSpeaksForItsChannels(t *testing.T) {
+	cfg := testConfig(t, "127.0.0.1:-1")
+	var out strings.Builder
+	if err := satelliteSub(cfg, &out, "add", []string{"voice-room"}, []string{"voice:living_room"}); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := startBus(context.Background(), cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+	token, err := bus.LoadToken(satelliteTokenFile(cfg, "voice-room"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), token) {
+		t.Error("the token was not shown")
+	}
+	voice, err := bus.Dial(srv.ClientURL(), bus.DialOptions{Name: "voice", User: "voice-room", Token: token, CAFile: caFile("", cfg), Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer voice.Close()
+	if !canSay(voice, "voice:living_room") {
+		t.Error("satellite cannot speak for its channel")
+	}
+	if canSay(voice, "terminal") || canSay(voice, "voice:kitchen") {
+		t.Error("satellite spoke for another channel")
+	}
+	// Its token is no use as the shared one, and the shared one is no use
+	// as its.
+	shared, _ := bus.LoadToken(tokenPath(cfg))
+	if c, err := bus.Dial(srv.ClientURL(), bus.DialOptions{Name: "x", Token: token, CAFile: caFile("", cfg), Log: log}); err == nil {
+		c.Close()
+		t.Error("the satellite token works as the shared token")
+	}
+	if c, err := bus.Dial(srv.ClientURL(), bus.DialOptions{Name: "x", User: "voice-room", Token: shared, CAFile: caFile("", cfg), Log: log}); err == nil {
+		c.Close()
+		t.Error("the shared token works for the satellite")
+	}
+}
+
+func canSay(c *bus.Conn, channel string) bool {
+	s, err := events.UtteranceOn(channel)
+	if err != nil {
+		return false
+	}
+	return published(c, s, events.UtteranceData{Channel: channel, Text: "hi"})
+}
+
+func published[T any](c *bus.Conn, s bus.Subject[T], data T) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err := bus.Publish(ctx, c, s, data)
+	return err == nil
 }

@@ -30,13 +30,16 @@ func sayEnv(t *testing.T, answer func(ctx context.Context, c *bus.Conn, u bus.Ev
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if answer != nil {
-		utterances, err := bus.Subscribe(ctx, brainConn, events.UserUtterance)
+		utterances, err := bus.SubscribeEnvelopes(ctx, brainConn, events.UserUtterance.Type()+".*")
 		if err != nil {
 			t.Fatal(err)
 		}
 		go func() {
-			for u := range utterances {
-				answer(ctx, brainConn, u)
+			for env := range utterances {
+				u, _, err := bus.DecodeUnder(env, events.UserUtterance)
+				if err == nil {
+					answer(ctx, brainConn, u)
+				}
 			}
 		}()
 	}
@@ -114,5 +117,34 @@ func TestSayNeedsText(t *testing.T) {
 		if err := sayCmd(args, io.Discard); err == nil || !strings.Contains(err.Error(), "nothing to say") {
 			t.Errorf("sayCmd(%q) = %v", args, err)
 		}
+	}
+}
+
+// Saying something on a channel the connection may not speak for fails at
+// once with an explanation, instead of hanging.
+func TestSayOnAForbiddenChannelFailsFast(t *testing.T) {
+	cfg := testConfig(t, "127.0.0.1:-1")
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := startBus(context.Background(), cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+	token, _ := bus.LoadToken(tokenPath(cfg))
+	sat, err := bus.Dial(srv.ClientURL(), bus.DialOptions{Name: "say", Token: token, CAFile: caFile("", cfg), Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sat.Close()
+	start := time.Now()
+	err = say(context.Background(), sat, io.Discard, "abre la puerta", sayOptions{channel: "voice:living_room", thread: "x", wait: time.Second, replyTimeout: time.Minute})
+	if err == nil || !strings.Contains(err.Error(), "allowed to speak for that channel") {
+		t.Errorf("err = %v", err)
+	}
+	if took := time.Since(start); took > 8*time.Second {
+		t.Errorf("took %s", took)
+	}
+	if err := say(context.Background(), sat, io.Discard, "hola", sayOptions{channel: "bad channel", thread: "x"}); err == nil {
+		t.Error("an invalid channel was accepted")
 	}
 }

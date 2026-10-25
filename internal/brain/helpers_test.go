@@ -255,7 +255,11 @@ func (h *harness) waitManager() {
 // say publishes an utterance and returns its event ID.
 func (h *harness) say(thread, channel, text string) string {
 	h.t.Helper()
-	meta, err := bus.Publish(context.Background(), h.client, events.UserUtterance, events.UtteranceData{ThreadID: thread, Channel: channel, Text: text})
+	subject, err := events.UtteranceOn(channel)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	meta, err := bus.Publish(context.Background(), h.client, subject, events.UtteranceData{ThreadID: thread, Channel: channel, Text: text})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -290,6 +294,9 @@ func (h *harness) nextTurn() bus.Event[events.BrainTurnData] {
 
 func (h *harness) noTurn(d time.Duration) {
 	h.t.Helper()
+	if len(h.early) > 0 {
+		h.t.Fatalf("unexpected turn: %+v", h.early[0].Data)
+	}
 	deadline := time.After(d)
 	for {
 		select {

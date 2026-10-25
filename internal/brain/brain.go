@@ -155,7 +155,8 @@ func (b *Brain) Run(ctx context.Context) error {
 	defer stopProvider()
 
 	// Subscribe before reading the history, so nothing falls in between.
-	utterances, err := bus.Subscribe(ctx, b.conn, events.UserUtterance)
+	// Every channel publishes under its own name, which the bus enforces.
+	utterances, err := bus.SubscribeEnvelopes(ctx, b.conn, events.UserUtterance.Type()+".*")
 	if err != nil {
 		return err
 	}
@@ -178,12 +179,12 @@ func (b *Brain) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			b.drain()
 			return ctx.Err()
-		case ev, ok := <-utterances:
+		case env, ok := <-utterances:
 			if !ok {
 				b.drain()
 				return ctx.Err()
 			}
-			b.onUtterance(ev)
+			b.onUtterance(env)
 		case env, ok := <-taskEvents:
 			if !ok {
 				b.drain()
@@ -345,15 +346,28 @@ func (b *Brain) remember(th *thread, at time.Time, rec events.BrainTurnData) {
 	}
 }
 
-func (b *Brain) onUtterance(ev bus.Event[events.UtteranceData]) {
+// onUtterance queues a sentence for its thread. The channel comes from the
+// event's subject, which the bus only lets each satellite use for its own
+// channels; a payload claiming another channel is a forgery.
+func (b *Brain) onUtterance(env bus.Envelope) {
+	ev, channel, err := bus.DecodeUnder(env, events.UserUtterance)
+	if err != nil {
+		b.log.Warn("brain: dropping undecodable utterance", "id", env.ID, "err", err)
+		return
+	}
 	u := ev.Data
+	if u.Channel != "" && u.Channel != channel {
+		b.log.Warn("brain: dropping an utterance that claims another channel", "id", env.ID, "subject", channel, "claimed", u.Channel, "source", env.Source)
+		return
+	}
+	u.Channel = channel
 	text := strings.TrimSpace(u.Text)
 	threadID := u.ThreadID
 	if threadID == "" {
 		threadID = u.Channel
 	}
 	switch {
-	case !validID(u.Channel) || !validID(threadID):
+	case !events.ValidChannel(u.Channel) || !validID(threadID):
 		b.log.Warn("brain: ignoring utterance with an invalid channel or thread", "id", ev.ID)
 		return
 	case text == "" || !utf8.ValidString(text):

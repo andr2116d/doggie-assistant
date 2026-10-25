@@ -16,14 +16,18 @@ import (
 // clientFlags are the flags of commands that talk to a running DOGGIE over
 // TCP.
 type clientFlags struct {
-	config, server, ca *string
+	config, server, ca, as *string
 }
+
+// userEnv names the satellite a client connects as, like -as.
+const userEnv = "DOGGIE_BUS_USER"
 
 func addClientFlags(flags *flag.FlagSet) clientFlags {
 	return clientFlags{
 		config: flags.String("config", "", "config file (default $XDG_CONFIG_HOME/doggie/config.yaml)"),
 		server: flags.String("server", "", "bus URL (default derived from bus.listen)"),
 		ca:     flags.String("ca", "", "bus CA certificate (default $DOGGIE_BUS_CA, or the local one when bus.tls is enabled)"),
+		as:     flags.String("as", "", "connect as this satellite (default $"+userEnv+", or the shared token)"),
 	}
 }
 
@@ -40,15 +44,30 @@ func (f clientFlags) dial(name string) (*bus.Conn, string, error) {
 			return nil, "", err
 		}
 	}
-	token, err := bus.LoadToken(tokenPath(cfg))
+	user := *f.as
+	if user == "" {
+		user = os.Getenv(userEnv)
+	}
+	path := tokenPath(cfg)
+	if user != "" {
+		if !bus.ValidSatelliteName(user) {
+			return nil, "", fmt.Errorf("invalid satellite name %q", user)
+		}
+		path = satelliteTokenFile(cfg, user)
+	}
+	token, err := bus.LoadToken(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, "", fmt.Errorf("no bus token at %s: start doggie once or set %s", tokenPath(cfg), bus.TokenEnv)
+		if user != "" {
+			return nil, "", fmt.Errorf("no token for satellite %s at %s: add it with doggie satellite add, or set %s", user, path, bus.TokenEnv)
+		}
+		return nil, "", fmt.Errorf("no bus token at %s: start doggie once or set %s", path, bus.TokenEnv)
 	}
 	if err != nil {
 		return nil, "", err
 	}
 	conn, err := bus.Dial(url, bus.DialOptions{
 		Name:   name,
+		User:   user,
 		Token:  token,
 		CAFile: caFile(*f.ca, cfg),
 		Log:    slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),

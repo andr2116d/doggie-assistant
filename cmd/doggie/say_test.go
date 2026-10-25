@@ -148,3 +148,42 @@ func TestSayOnAForbiddenChannelFailsFast(t *testing.T) {
 		t.Error("an invalid channel was accepted")
 	}
 }
+
+func TestReplyViewStreams(t *testing.T) {
+	type step struct {
+		delta bool
+		cause string
+		block int
+		text  string
+	}
+	d := func(c string, b int, s string) step { return step{true, c, b, s} }
+	e := func(c string, b int, s string) step { return step{false, c, b, s} }
+	for name, tt := range map[string]struct {
+		steps []step
+		want  string
+	}{
+		"pieces then the block": {[]step{d("u", 0, "Ya "), d("u", 0, "voy."), e("u", 0, "Ya voy.")}, "doggie> Ya voy.\n"},
+		"no pieces":             {[]step{e("u", 0, "Hola")}, "doggie> Hola\n"},
+		"two blocks":            {[]step{d("u", 0, "Uno"), e("u", 0, "Uno"), d("u", 1, "Dos"), e("u", 1, "Dos")}, "doggie> Uno\ndoggie> Dos\n"},
+		"a lost piece":          {[]step{d("u", 0, "Ya "), e("u", 0, "Ya voy.")}, "doggie> Ya \ndoggie> Ya voy.\n"},
+		// The next block's pieces overtake the end of the previous one.
+		"overtaken": {[]step{d("u", 0, "Uno, "), d("u", 1, "Dos"), d("u", 0, "más"), e("u", 0, "Uno, más"), e("u", 1, "Dos")},
+			"doggie> Uno, \ndoggie> Dos\ndoggie> Uno, más\n"},
+		"leading whitespace": {[]step{d("u", 0, "  "), d("u", 0, "\nHola"), e("u", 0, "\nHola")}, "doggie> Hola\n"},
+		"blank piece only":   {[]step{d("u", 0, "   "), e("u", 1, "Hola")}, "doggie> Hola\n"},
+		"another turn":       {[]step{d("u1", 0, "A"), d("u2", 0, "B"), e("u1", 0, "A"), e("u2", 0, "B")}, "doggie> A\ndoggie> B\n"},
+	} {
+		var out strings.Builder
+		v := newReplyView(&out)
+		for _, s := range tt.steps {
+			if s.delta {
+				v.delta(blockKey{s.cause, s.block}, s.text)
+			} else {
+				v.block(blockKey{s.cause, s.block}, s.text)
+			}
+		}
+		if out.String() != tt.want {
+			t.Errorf("%s: printed %q, want %q", name, out.String(), tt.want)
+		}
+	}
+}

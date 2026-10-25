@@ -411,8 +411,14 @@ func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, o
 					return d, !said
 				}
 			case "stream_event":
-				if d.FirstText == 0 && ev.isTextDelta() {
+				if !ev.isTextDelta() {
+					continue
+				}
+				if d.FirstText == 0 {
 					d.FirstText = time.Since(start)
+				}
+				if req.Stream && !emit(llm.Output{Delta: ev.Event.Delta.Text}) {
+					continue
 				}
 			case "assistant":
 				if ev.Message == nil {

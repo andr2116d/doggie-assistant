@@ -20,7 +20,8 @@ var Heartbeat = bus.NewSubject[HeartbeatData]("system.heartbeat")
 // other channels, forge the manager's events (task.created, running,
 // cancelled), the brain's (out.speak, brain.turn) or the core's (system.*),
 // impersonate the manager, dispatch tasks to workers, or alter the event
-// log. Invalid channels are left out.
+// log. It may follow what DOGGIE says as it is written (out.speak.delta).
+// Invalid channels are left out.
 func SatellitePermissions(channels ...string) bus.Permissions {
 	var utterances []string
 	for _, c := range channels {
@@ -37,6 +38,7 @@ func SatellitePermissions(channels ...string) bus.Permissions {
 		),
 		Subscribe: []string{
 			bus.AllEvents,
+			OutSpeakDelta.Wire(),
 			RunTask.Wire() + ".>",
 			ControlTask.Wire() + ".>",
 		},

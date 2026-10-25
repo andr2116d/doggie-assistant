@@ -57,18 +57,25 @@ func (b *Brain) runTurn(ctx context.Context, job turnJob) events.BrainTurnData {
 		Tasks: tasks, History: job.history, MaxTurns: b.opts.HistoryTurns, Inputs: inputs,
 	})
 
-	out, err := b.provider.Generate(ctx, llm.Request{Turn: mcp.Turn{ThreadID: job.thread, Channel: job.channel}, Input: msg})
+	out, err := b.provider.Generate(ctx, llm.Request{Turn: mcp.Turn{ThreadID: job.thread, Channel: job.channel}, Input: msg, Stream: true})
 	if err != nil {
 		rec.Error = err.Error()
 		rec.DurationMS = time.Since(job.started).Milliseconds()
 		b.log.Warn("brain: turn failed", "thread", job.thread, "err", err)
 		return rec
 	}
+	block := 0
 	for o := range out {
 		switch {
+		case o.Delta != "":
+			// Fire and forget: the out.speak that ends the block is the truth.
+			bus.Emit(b.conn, events.OutSpeakDelta, events.SpeakDeltaData{
+				ThreadID: job.thread, Channel: job.channel, Text: o.Delta, Block: block, CausedBy: cause,
+			})
 		case o.Text != "":
 			rec.Replies = append(rec.Replies, o.Text)
-			b.say(job, o.Text, cause)
+			b.say(job, o.Text, block, cause)
+			block++
 		case o.Tool != nil:
 			rec.Actions = append(rec.Actions, events.TurnAction{Tool: o.Tool.Name, Input: o.Tool.Input})
 		case o.Done != nil:
@@ -90,11 +97,11 @@ func (b *Brain) runTurn(ctx context.Context, job turnJob) events.BrainTurnData {
 
 // say publishes a text block for the thread's channel. It is published even
 // while DOGGIE stops: it was already written.
-func (b *Brain) say(job turnJob, text, cause string) {
+func (b *Brain) say(job turnJob, text string, block int, cause string) {
 	ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 	defer cancel()
 	if _, err := bus.Publish(ctx, b.conn, events.OutSpeak, events.SpeakData{
-		ThreadID: job.thread, Channel: job.channel, Text: text,
+		ThreadID: job.thread, Channel: job.channel, Text: text, Block: block,
 	}, bus.CausedBy(cause)); err != nil {
 		b.log.Error("brain: could not say a reply", "thread", job.thread, "err", err)
 	}

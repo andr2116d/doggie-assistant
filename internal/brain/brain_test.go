@@ -734,3 +734,55 @@ func TestFailingSentenceIsResumedOnlyOnce(t *testing.T) {
 	h.startBrain(Options{})
 	h.noTurn(300 * time.Millisecond)
 }
+
+// Text is streamed as signals while it is written; each out.speak then ends
+// its block, numbered within the turn.
+func TestRepliesAreStreamed(t *testing.T) {
+	h := newHarness(t, Options{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	deltas, err := bus.SubscribeSignal(ctx, h.client, events.OutSpeakDelta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var streamed bool
+	h.fake.set(func(f *fake) {
+		f.reply = func(_ context.Context, req llm.Request) []llm.Output {
+			streamed = req.Stream
+			return []llm.Output{{Delta: "Ya "}, {Delta: "voy."}, {Text: "Ya voy."}, {Tool: &llm.ToolCall{Name: "list_tasks"}}, {Delta: "Listo"}, {Text: "Listo"}}
+		}
+	})
+	id := h.say("th", "terminal", "hola")
+	var got []string
+	for range 3 {
+		d := receiveSignal(t, deltas)
+		if d.ThreadID != "th" || d.Channel != "terminal" || d.CausedBy != id {
+			t.Errorf("delta = %+v", d)
+		}
+		got = append(got, fmt.Sprintf("%d:%s", d.Block, d.Text))
+	}
+	if strings.Join(got, "|") != "0:Ya |0:voy.|1:Listo" {
+		t.Errorf("deltas = %q", got)
+	}
+	for i, want := range []string{"Ya voy.", "Listo"} {
+		if s := h.nextSpeak(); s.Data.Text != want || s.Data.Block != i {
+			t.Errorf("out.speak = %+v, want %q block %d", s.Data, want, i)
+		}
+	}
+	h.nextTurn()
+	if !streamed {
+		t.Error("the brain did not ask for streaming")
+	}
+}
+
+func receiveSignal[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatal("no signal")
+	}
+	var zero T
+	return zero
+}

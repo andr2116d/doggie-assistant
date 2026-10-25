@@ -34,10 +34,15 @@ type Request struct {
 	// Input is the whole user message: the context DOGGIE built plus what
 	// just happened.
 	Input string
+	// Stream asks for Delta outputs too, as the text is written.
+	Stream bool
 }
 
 // Output is one piece of a turn. Exactly one field is set.
 type Output struct {
+	// Delta is a piece of a text block as it is written, with
+	// Request.Stream. The whole block follows as Text.
+	Delta string
 	// Text is a complete block of text the LLM wrote for the user.
 	Text string
 	// Tool is a tool the LLM called.

@@ -138,6 +138,9 @@ func countSet(o llm.Output) int {
 	if o.Text != "" {
 		n++
 	}
+	if o.Delta != "" {
+		n++
+	}
 	if o.Tool != nil {
 		n++
 	}
@@ -922,5 +925,40 @@ func TestNoRetryOnceTheTurnStarted(t *testing.T) {
 				t.Errorf("%d spawns, want 1 (no retry)", n)
 			}
 		})
+	}
+}
+
+// With Stream, each text block arrives in pieces first, then whole.
+func TestStreamDeltas(t *testing.T) {
+	p := newProvider(t, testOptions(t))
+	ch, err := p.Generate(context.Background(), llm.Request{Turn: turn, Stream: true, Input: scriptOf(
+		step{Text: "Ya estoy "}, step{Tool: "start_task"}, step{Text: "¿Sabes…?"},
+	)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outs, done := drain(t, ch)
+	if done.Err != nil {
+		t.Fatal(done.Err)
+	}
+	var kinds []string
+	for _, o := range outs {
+		switch {
+		case o.Delta != "":
+			kinds = append(kinds, "delta:"+o.Delta)
+		case o.Text != "":
+			kinds = append(kinds, "text:"+o.Text)
+		case o.Tool != nil:
+			kinds = append(kinds, "tool")
+		}
+	}
+	want := "delta:Ya estoy |text:Ya estoy |tool|delta:¿Sabes…?|text:¿Sabes…?"
+	if got := strings.Join(kinds, "|"); got != want {
+		t.Errorf("outputs = %s, want %s", got, want)
+	}
+	// Without Stream, no deltas.
+	outs, _ = collect(t, p, context.Background(), scriptOf(step{Text: "hola"}))
+	if len(outs) != 1 || outs[0].Text != "hola" {
+		t.Errorf("outputs without Stream = %+v", outs)
 	}
 }

@@ -26,7 +26,26 @@ type SpeakData struct {
 	ThreadID string `json:"thread_id,omitempty"`
 	Channel  string `json:"channel"`
 	Text     string `json:"text"`
+	// Block numbers the text blocks of a turn, from 0, so a channel can
+	// match them with the OutSpeakDelta pieces it already showed.
+	Block int `json:"block"`
 }
+
+// SpeakDeltaData is a piece of a text block as the LLM writes it.
+type SpeakDeltaData struct {
+	ThreadID string `json:"thread_id,omitempty"`
+	Channel  string `json:"channel"`
+	Text     string `json:"text"`
+	Block    int    `json:"block"`
+	// CausedBy is the event the turn answers, as in the out.speak that
+	// completes the block.
+	CausedBy string `json:"caused_by"`
+}
+
+// OutSpeakDelta streams a text block while it is written, so a channel can
+// show or say it at once. It is a signal: pieces stay out of the event log
+// and may be lost, so the out.speak that completes the block is the truth.
+var OutSpeakDelta = bus.NewSignal[SpeakDeltaData]("out.speak.delta")
 
 var (
 	// UserUtterance is a complete sentence from a person, published by the

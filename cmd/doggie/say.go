@@ -76,6 +76,10 @@ func say(ctx context.Context, conn *bus.Conn, w io.Writer, text string, o sayOpt
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Subscribe first, so no reply is missed.
+	deltas, err := bus.SubscribeSignal(sctx, conn, events.OutSpeakDelta)
+	if err != nil {
+		return err
+	}
 	speaks, err := bus.Subscribe(sctx, conn, events.OutSpeak)
 	if err != nil {
 		return err
@@ -97,6 +101,7 @@ func say(ctx context.Context, conn *bus.Conn, w io.Writer, text string, o sayOpt
 		return fmt.Errorf("could not say it on %s (is this connection allowed to speak for that channel? see \"doggie satellite help\"): %w", o.channel, err)
 	}
 
+	view := newReplyView(w)
 	answered := false
 	idle := time.NewTimer(o.replyTimeout)
 	defer idle.Stop()
@@ -109,12 +114,19 @@ func say(ctx context.Context, conn *bus.Conn, w io.Writer, text string, o sayOpt
 				return errors.New("no reply: is DOGGIE running with the brain component?")
 			}
 			return nil
+		case d, ok := <-deltas:
+			if !ok {
+				return ctx.Err()
+			}
+			if d.ThreadID == o.thread {
+				view.delta(blockKey{d.CausedBy, d.Block}, d.Text)
+			}
 		case ev, ok := <-speaks:
 			if !ok {
 				return ctx.Err()
 			}
 			if ev.Data.ThreadID == o.thread {
-				fmt.Fprintf(w, "doggie> %s\n", ev.Data.Text)
+				view.block(blockKey{ev.CausedBy, ev.Data.Block}, ev.Data.Text)
 			}
 		case ev, ok := <-turns:
 			if !ok {
@@ -135,4 +147,72 @@ func say(ctx context.Context, conn *bus.Conn, w io.Writer, text string, o sayOpt
 			}
 		}
 	}
+}
+
+// blockKey identifies a text block: the event its turn answers and its
+// number in the turn.
+type blockKey struct {
+	cause string
+	block int
+}
+
+// replyView prints replies as they are written. Pieces (out.speak.delta) may
+// be lost or arrive before the end of the previous block (out.speak, which
+// travels through the event log), so each out.speak checks what is on screen
+// and prints the block again if it differs.
+type replyView struct {
+	w       io.Writer
+	printed map[blockKey]string // what is on screen, by block
+	pending map[blockKey]string // leading whitespace, not shown yet
+	open    *blockKey           // the block on the current line, if any
+}
+
+func newReplyView(w io.Writer) *replyView {
+	return &replyView{w: w, printed: map[blockKey]string{}, pending: map[blockKey]string{}}
+}
+
+func (v *replyView) delta(k blockKey, text string) {
+	if v.open != nil && *v.open != k {
+		v.close()
+	}
+	if _, ok := v.printed[k]; ok {
+		if v.open != nil && *v.open == k {
+			fmt.Fprint(v.w, text)
+			v.printed[k] += text
+		}
+		// Else its line was closed by another block: its out.speak will
+		// show it whole.
+		return
+	}
+	s := v.pending[k] + text
+	if strings.TrimSpace(s) == "" {
+		v.pending[k] = s // start the line once there is something to see
+		return
+	}
+	delete(v.pending, k)
+	s = strings.TrimLeft(s, " \t\r\n")
+	fmt.Fprintf(v.w, "doggie> %s", s)
+	v.printed[k] = s
+	v.open = &k
+}
+
+func (v *replyView) block(k blockKey, text string) {
+	p, shown := v.printed[k]
+	delete(v.printed, k)
+	delete(v.pending, k)
+	if v.open != nil && *v.open == k {
+		v.close()
+	}
+	if shown && strings.TrimSpace(p) == strings.TrimSpace(text) {
+		return
+	}
+	if v.open != nil {
+		v.close()
+	}
+	fmt.Fprintf(v.w, "doggie> %s\n", strings.TrimSpace(text))
+}
+
+func (v *replyView) close() {
+	fmt.Fprintln(v.w)
+	v.open = nil
 }

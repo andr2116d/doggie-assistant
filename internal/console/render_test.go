@@ -149,7 +149,7 @@ type rig struct {
 }
 
 func newRig(t *testing.T, cols int, prompt string) *rig {
-	g := &rig{t: t, v: newVT(t, cols), s: &screen{cols: cols, prompt: []rune(prompt)}, e: newEditor(0)}
+	g := &rig{t: t, v: newVT(t, cols), s: &screen{cols: cols, prompt: []rune(prompt)}, e: newEditor(0, nil)}
 	g.update(nil)
 	return g
 }
@@ -177,8 +177,15 @@ func (g *rig) setStatus(text, want string) {
 }
 
 func (g *rig) key(k key) {
+	hidden, hiddenPrompt := g.e.hidden, string(g.e.hiddenPrompt)
 	if act, line := g.e.apply(k); act == actSubmit {
 		echo := string(g.s.prompt) + line + "\n"
+		switch {
+		case hidden && line == "":
+			echo = ""
+		case hidden:
+			echo = hiddenPrompt + "•••\n"
+		}
 		saved := g.partial
 		g.partial = ""
 		g.modelPrint(echo)
@@ -257,7 +264,11 @@ func (g *rig) check() {
 		g.t.Fatalf("cursor on row %d, want the input row %d", g.v.row, len(want)-1)
 	}
 	prompt := g.shownPrompt()
-	if col := runewidthOf(prompt) + widthOf(g.e.line[g.s.scroll:g.e.pos]); g.v.col != col {
+	col := runewidthOf(prompt) + widthOf(g.e.line[g.s.scroll:g.e.pos])
+	if g.e.hidden {
+		col = runewidthOf(prompt)
+	}
+	if g.v.col != col {
 		g.t.Fatalf("cursor at column %d, want %d", g.v.col, col)
 	}
 	for i, l := range got {
@@ -272,6 +283,9 @@ func (g *rig) check() {
 
 func (g *rig) shownPrompt() string {
 	p := g.s.prompt
+	if g.e.hidden {
+		p = g.e.hiddenPrompt
+	}
 	for len(p) > 0 && widthOf(p) > g.s.cols-3 {
 		p = p[:len(p)-1]
 	}
@@ -283,6 +297,9 @@ func (g *rig) shownPrompt() string {
 func (g *rig) inputRow() string {
 	room := g.s.cols - 1 - runewidthOf(g.shownPrompt())
 	shown := g.e.line[g.s.scroll:]
+	if g.e.hidden {
+		return g.shownPrompt()
+	}
 	for widthOf(shown) > room {
 		shown = shown[:len(shown)-1]
 	}
@@ -387,7 +404,7 @@ func TestScreenRandom(t *testing.T) {
 // shows.
 func TestScreenLongLineIsCheap(t *testing.T) {
 	s := &screen{cols: 80, prompt: []rune("> ")}
-	e := newEditor(0)
+	e := newEditor(0, nil)
 	e.apply(paste(strings.Repeat("palabra ", 25000)))
 	var b bytes.Buffer
 	start := time.Now()
@@ -447,5 +464,20 @@ func TestStatusRow(t *testing.T) {
 	got := g.v.lines()
 	if last := strings.TrimRight(got[len(got)-1], " "); last == "x" {
 		t.Errorf("the status row stays after finishing: %q", got)
+	}
+}
+
+func TestHiddenLineOnScreen(t *testing.T) {
+	g := newRig(t, 30, "you> ")
+	g.typeText("medio")
+	g.update(func() { g.e.hide("answer for t5: ") })
+	g.typeText("secreto")
+	if strings.Contains(strings.Join(g.v.lines(), "\n"), "secreto") {
+		t.Fatalf("the hidden line shows: %q", g.v.lines())
+	}
+	g.print("doggie> algo\n")
+	g.key(k(keyEnter))
+	if got := g.v.lines(); !slices.Contains(got, "answer for t5: •••") || got[len(got)-1] != "you> medio" {
+		t.Errorf("screen = %q", got)
 	}
 }

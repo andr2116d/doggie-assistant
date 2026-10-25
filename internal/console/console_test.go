@@ -407,3 +407,63 @@ func TestPlainConsoleIgnoresStatus(t *testing.T) {
 		t.Errorf("printed %q", s)
 	}
 }
+
+func recvHidden(t *testing.T, ch <-chan string) (string, bool) {
+	t.Helper()
+	select {
+	case l, ok := <-ch:
+		return l, ok
+	case <-time.After(5 * time.Second):
+		t.Fatal("no hidden line")
+		return "", false
+	}
+}
+
+func TestConsoleHiddenLine(t *testing.T) {
+	c, f := openFake(t, 40, Options{Prompt: "you> ", Forget: func(l string) bool { return strings.HasPrefix(l, "/answer") }})
+	f.typeKeys(t, "/answer t5\r")
+	if l, _ := next(t, c.Lines()); l != "/answer t5" {
+		t.Fatalf("line %q", l)
+	}
+	answer := c.AskHidden("answer for t5 (hidden): ")
+	f.waitScreen(t, "you> /answer t5", "answer for t5 (hidden):")
+	f.typeKeys(t, "1234\r")
+	if l, ok := recvHidden(t, answer); !ok || l != "1234" {
+		t.Fatalf("hidden line %q, %v", l, ok)
+	}
+	f.waitScreen(t, "you> /answer t5", "answer for t5 (hidden): •••", "you>")
+	f.typeKeys(t, "\x1b[A") // Up: neither line was kept
+	f.waitScreen(t, "you> /answer t5", "answer for t5 (hidden): •••", "you>")
+
+	// The hidden line never shows on Lines, and a newer ask cancels the
+	// one before.
+	first := c.AskHidden("? ")
+	second := c.AskHidden("?? ")
+	if l, _ := recvHidden(t, first); l != "" {
+		t.Errorf("replaced ask got %q", l)
+	}
+	f.typeKeys(t, "secreto\r")
+	if l, _ := recvHidden(t, second); l != "secreto" {
+		t.Errorf("hidden line %q", l)
+	}
+	f.typeKeys(t, "visible\r")
+	if l, _ := next(t, c.Lines()); l != "visible" {
+		t.Errorf("line %q", l)
+	}
+
+	// Closing ends a pending ask.
+	pending := c.AskHidden("? ")
+	f.waitScreen(t, "you> /answer t5", "answer for t5 (hidden): •••", "?? •••", "you> visible", "?")
+	c.Close()
+	if _, ok := recvHidden(t, pending); ok {
+		t.Error("a pending ask wasn't closed")
+	}
+	if _, ok := recvHidden(t, c.AskHidden("after close")); ok {
+		t.Error("an ask after Close wasn't closed")
+	}
+	p := Plain(strings.NewReader(""), &syncBuffer{})
+	if _, ok := recvHidden(t, p.AskHidden("? ")); ok {
+		t.Error("a plain console asked for a hidden line")
+	}
+	p.Close()
+}

@@ -26,6 +26,9 @@ type Options struct {
 	// MaxRunes bounds a line; typing or pasting beyond it rings the bell.
 	// Zero means no bound.
 	MaxRunes int
+	// Forget reports the submitted lines not to keep for Up and Down, e.g.
+	// ones with secrets. Nil keeps all.
+	Forget func(line string) bool
 }
 
 // Terminal is a terminal already in raw mode.
@@ -46,6 +49,7 @@ type Console struct {
 	lines    chan string
 	writes   chan []byte
 	statuses chan string
+	hides    chan hiddenAsk
 	stop     chan struct{}
 	done     chan struct{}
 	once     sync.Once
@@ -99,6 +103,33 @@ func (c *Console) SetStatus(text string) {
 	}
 }
 
+// hiddenAsk asks for a line typed unseen.
+type hiddenAsk struct {
+	prompt string
+	answer chan string
+}
+
+// AskHidden has the user type the next line unseen, after prompt, as a
+// password, and delivers it on the returned channel, never on Lines. The
+// line being typed meanwhile waits. Ctrl+C, or Ctrl+D on an empty line,
+// cancel it, which delivers an empty line, as does a newer AskHidden.
+// Hidden lines are never kept for Up and Down, and show as "•••" once
+// submitted. The channel is closed if the console closes first, and at once
+// without a terminal.
+func (c *Console) AskHidden(prompt string) <-chan string {
+	answer := make(chan string, 1)
+	if !c.interactive {
+		close(answer)
+		return answer
+	}
+	select {
+	case c.hides <- hiddenAsk{prompt, answer}:
+	case <-c.done:
+		close(answer)
+	}
+	return answer
+}
+
 // Close ends the console and restores the terminal. Everything written
 // before is on screen when it returns.
 func (c *Console) Close() error {
@@ -112,6 +143,7 @@ func newConsole(interactive bool) *Console {
 		lines:       make(chan string),
 		writes:      make(chan []byte),
 		statuses:    make(chan string),
+		hides:       make(chan hiddenAsk),
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 		interactive: interactive,
@@ -124,6 +156,9 @@ type lineQueue struct {
 	lines   chan string // nil once closed
 	pending []string
 	ending  bool // close lines once pending is delivered
+	// hidden is where the line typed unseen goes, if one is asked for; it
+	// takes one line.
+	hidden chan string
 }
 
 // send is the channel the next line goes out on, nil if there is none.
@@ -194,7 +229,7 @@ func (c *Console) runInteractive(t Terminal, opts Options) {
 	defer close(c.done)
 	input := reader(t, c.done)
 	s := &screen{prompt: []rune(oneLine(opts.Prompt))}
-	e := newEditor(opts.MaxRunes)
+	e := newEditor(opts.MaxRunes, opts.Forget)
 	q := lineQueue{lines: c.lines}
 	var dec decoder
 	var b bytes.Buffer
@@ -234,6 +269,12 @@ func (c *Console) runInteractive(t Terminal, opts Options) {
 			update(func() { s.print(&b, string(p)) })
 		case text := <-c.statuses:
 			update(func() { s.setStatus(text) })
+		case ask := <-c.hides:
+			if q.hidden != nil {
+				q.hidden <- "" // replaced
+			}
+			q.hidden = ask.answer
+			update(func() { e.hide(ask.prompt) })
 		case <-t.Resized():
 			update(nil)
 		case q.send() <- q.next():
@@ -245,6 +286,9 @@ func (c *Console) runInteractive(t Terminal, opts Options) {
 			t.Write(b.Bytes())
 			t.Restore()
 			q.close()
+			if q.hidden != nil {
+				close(q.hidden)
+			}
 			return
 		}
 	}
@@ -256,12 +300,25 @@ func (c *Console) keys(keys []key, e *editor, s *screen, q *lineQueue, b *bytes.
 		if q.ending {
 			return
 		}
+		hidden, hiddenPrompt := e.hidden, string(e.hiddenPrompt)
 		act, line := e.apply(k)
 		switch act {
 		case actSubmit:
-			q.pending = append(q.pending, line)
+			if hidden {
+				q.hidden <- line
+				q.hidden = nil
+			} else {
+				q.pending = append(q.pending, line)
+			}
+			echo := string(s.prompt) + line + "\n"
+			switch {
+			case hidden && line == "":
+				echo = "" // cancelled
+			case hidden:
+				echo = hiddenPrompt + "•••\n"
+			}
 			// Above a reply being written, so it doesn't split it.
-			update(func() { s.printAbove(b, string(s.prompt)+line+"\n") })
+			update(func() { s.printAbove(b, echo) })
 		case actQuit:
 			q.ending = true
 			update(nil)

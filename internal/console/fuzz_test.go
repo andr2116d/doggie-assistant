@@ -65,6 +65,9 @@ func FuzzScreen(f *testing.F) {
 			typed = typed[n:]
 			m := min(len(printed), 11)
 			g.print(string(printed[:m]))
+			if m > 0 && printed[0]%7 == 0 && !g.e.hidden {
+				g.update(func() { g.e.hide(string(printed[:m])) })
+			}
 			if m > 0 && printed[0]%3 == 0 {
 				text := string(printed[:m])
 				g.status = string(statusModel(text, g.s.cols))

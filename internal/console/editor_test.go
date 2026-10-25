@@ -5,7 +5,7 @@ import "testing"
 // typed applies keys to a fresh editor, typing s first.
 func typed(t *testing.T, max int, s string, keys ...key) *editor {
 	t.Helper()
-	e := newEditor(max)
+	e := newEditor(max, nil)
 	for _, c := range s {
 		e.apply(r(c))
 	}
@@ -87,7 +87,7 @@ func TestMaxRunes(t *testing.T) {
 }
 
 func TestHistory(t *testing.T) {
-	e := newEditor(0)
+	e := newEditor(0, nil)
 	for _, s := range []string{"one", "two", "two", " ", "three"} {
 		for _, c := range s {
 			e.apply(r(c))
@@ -123,7 +123,7 @@ func TestHistory(t *testing.T) {
 }
 
 func TestHistoryIsBounded(t *testing.T) {
-	e := newEditor(0)
+	e := newEditor(0, nil)
 	for i := range maxHistory + 10 {
 		e.apply(r(rune('a' + i%26)))
 		e.apply(r(rune('0' + i%10)))
@@ -131,5 +131,78 @@ func TestHistoryIsBounded(t *testing.T) {
 	}
 	if len(e.history) > maxHistory {
 		t.Errorf("history holds %d lines", len(e.history))
+	}
+}
+
+func TestForgottenLines(t *testing.T) {
+	e := newEditor(0, func(l string) bool { return len(l) > 0 && l[0] == '/' })
+	for _, s := range []string{"hola", "/answer t1 1234"} {
+		for _, c := range s {
+			e.apply(r(c))
+		}
+		if act, line := e.apply(k(keyEnter)); act != actSubmit || line != s {
+			t.Fatalf("submitted %q, %v", line, act)
+		}
+	}
+	e.apply(k(keyUp))
+	if string(e.line) != "hola" {
+		t.Errorf("Up shows %q, want the line before the forgotten one", string(e.line))
+	}
+	e.apply(k(keyUp))
+	if string(e.line) != "hola" {
+		t.Errorf("the forgotten line is in the history: %q", string(e.line))
+	}
+}
+
+func TestHiddenLine(t *testing.T) {
+	e := typed(t, 0, "medio escrito")
+	e.hide("answer for t5: ")
+	if !e.hidden || len(e.line) != 0 {
+		t.Fatalf("hidden %v, line %q", e.hidden, string(e.line))
+	}
+	for _, c := range "1234" {
+		e.apply(r(c))
+	}
+	if act, _ := e.apply(k(keyUp)); act != actRefused || string(e.line) != "1234" {
+		t.Errorf("Up in a hidden line: %v, line %q", act, string(e.line))
+	}
+	if act, line := e.apply(k(keyEnter)); act != actSubmit || line != "1234" {
+		t.Errorf("submitted %q, %v", line, act)
+	}
+	if e.hidden || string(e.line) != "medio escrito" || e.pos != len("medio escrito") {
+		t.Errorf("after it: hidden %v, line %q at %d", e.hidden, string(e.line), e.pos)
+	}
+	e.apply(k(keyEnter))
+	e.apply(k(keyUp))
+	if string(e.line) != "medio escrito" {
+		t.Errorf("Up shows %q", string(e.line))
+	}
+	e.apply(k(keyUp))
+	if string(e.line) == "1234" {
+		t.Error("the hidden line is in the history")
+	}
+
+	// Ctrl+C, or Ctrl+D on an empty line, cancel it; Ctrl+D deletes otherwise.
+	for name, keys := range map[string][]key{
+		"ctrl+c":       {r('x'), k(keyInterrupt)},
+		"ctrl+d empty": {k(keyEOF)},
+		"ctrl+d":       {r('x'), k(keyLeft), k(keyEOF), k(keyEOF)},
+	} {
+		e := typed(t, 0, "antes")
+		e.hide("? ")
+		var act action
+		var line string
+		for _, key := range keys {
+			act, line = e.apply(key)
+		}
+		if act != actSubmit || line != "" || e.hidden || string(e.line) != "antes" {
+			t.Errorf("%s: %v %q, hidden %v, line %q", name, act, line, e.hidden, string(e.line))
+		}
+	}
+	// A hidden line that can't be typed in still quits nothing.
+	e = typed(t, 0, "")
+	e.hide("? ")
+	if act, _ := e.apply(k(keyInterrupt)); act == actQuit {
+		t.Error("Ctrl+C on a hidden line quit")
 	}
 }

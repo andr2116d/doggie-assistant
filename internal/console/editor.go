@@ -30,10 +30,35 @@ type editor struct {
 	// which draft keeps meanwhile.
 	browsing int
 	draft    []rune
+	// forget reports the lines not to keep in the history; nil keeps all.
+	forget func(string) bool
+
+	// hidden is set while a line is typed unseen, after hiddenPrompt; the
+	// line being typed before is kept in stashed meanwhile.
+	hidden       bool
+	hiddenPrompt []rune
+	stashed      []rune
 }
 
-func newEditor(maxRunes int) *editor {
-	return &editor{maxRunes: maxRunes}
+func newEditor(maxRunes int, forget func(string) bool) *editor {
+	return &editor{maxRunes: maxRunes, forget: forget}
+}
+
+// hide starts a line typed unseen, after prompt. It ends when submitted or
+// cancelled, and the line being typed before comes back.
+func (e *editor) hide(prompt string) {
+	if !e.hidden {
+		e.stashed = e.line
+	}
+	e.hidden, e.hiddenPrompt = true, []rune(oneLine(prompt))
+	e.set(nil)
+}
+
+// unhide ends a hidden line, bringing back the one typed before.
+func (e *editor) unhide() {
+	e.hidden, e.hiddenPrompt = false, nil
+	e.set(e.stashed)
+	e.stashed = nil
 }
 
 // apply edits the line with k. On actSubmit, line is what was submitted.
@@ -45,8 +70,17 @@ func (e *editor) apply(k key) (act action, line string) {
 		return e.insert([]rune(k.text)), ""
 	case keyEnter:
 		line = string(e.line)
-		e.remember(line)
-		e.set(nil)
+		switch {
+		case e.hidden:
+			e.unhide()
+			e.browsing = len(e.history)
+		case e.forget != nil && e.forget(line):
+			e.set(nil)
+			e.browsing, e.draft = len(e.history), nil
+		default:
+			e.remember(line)
+			e.set(nil)
+		}
 		return actSubmit, line
 	case keyBackspace:
 		if e.pos > 0 {
@@ -78,23 +112,38 @@ func (e *editor) apply(k key) (act action, line string) {
 		start := e.wordStart()
 		e.line = slices.Delete(e.line, start, e.pos)
 		e.pos = start
-	case keyUp:
-		e.browse(-1)
-	case keyDown:
-		e.browse(+1)
+	case keyUp, keyDown:
+		if e.hidden {
+			return actRefused, "" // the history would show in the hidden line
+		}
+		if k.kind == keyUp {
+			e.browse(-1)
+		} else {
+			e.browse(+1)
+		}
 	case keyInterrupt:
-		// Ctrl+C drops what was typed; on an empty line it quits.
-		if len(e.line) == 0 {
+		// Ctrl+C cancels a hidden line, which is then submitted empty. It
+		// drops what was typed otherwise; on an empty line it quits.
+		switch {
+		case e.hidden:
+			e.unhide()
+			return actSubmit, ""
+		case len(e.line) == 0:
 			return actQuit, ""
 		}
 		e.set(nil)
 		e.browsing = len(e.history)
 	case keyEOF:
-		// Ctrl+D quits on an empty line, and deletes forward otherwise.
-		if len(e.line) == 0 {
-			return actQuit, ""
+		// Ctrl+D on an empty line cancels a hidden one, or quits. It
+		// deletes forward otherwise.
+		switch {
+		case len(e.line) > 0:
+			return e.apply(key{kind: keyDelete})
+		case e.hidden:
+			e.unhide()
+			return actSubmit, ""
 		}
-		return e.apply(key{kind: keyDelete})
+		return actQuit, ""
 	case keyRedraw:
 		return actRedraw, ""
 	}

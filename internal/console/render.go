@@ -95,6 +95,9 @@ func (s *screen) draw(b *bytes.Buffer, e *editor) {
 		s.rowsAbove++
 	}
 	prompt := s.prompt
+	if e.hidden {
+		prompt = e.hiddenPrompt
+	}
 	// Room for the prompt, at least one rune and the cursor after it.
 	for len(prompt) > 0 && widthOf(prompt) > s.cols-3 {
 		prompt = prompt[:len(prompt)-1]
@@ -102,6 +105,9 @@ func (s *screen) draw(b *bytes.Buffer, e *editor) {
 	room := s.cols - 1 - widthOf(prompt) // the last column stays free
 	cursor := s.fit(e, room)
 	shown := fitting(e.line[s.scroll:], room)
+	if e.hidden {
+		cursor, shown = 0, nil
+	}
 	b.WriteString(string(prompt))
 	b.WriteString(string(shown))
 	b.WriteString("\r")

@@ -48,14 +48,18 @@ type Subject[T any] struct{ typ string }
 // It panics on an invalid type (empty tokens, spaces or wildcards), since
 // event types are declared once in the catalog.
 func NewSubject[T any](typ string) Subject[T] {
-	if !validType(typ) {
+	if !ValidName(typ) {
 		panic(fmt.Sprintf("bus: invalid event type %q", typ))
 	}
 	return Subject[T]{typ: typ}
 }
 
-func validType(typ string) bool {
-	for _, tok := range strings.Split(typ, ".") {
+// ValidName reports whether name can be an event type, a command name or a
+// name suffix: dot-separated, non-empty tokens with no whitespace or
+// wildcards. Validate untrusted input with it before passing it to
+// Command.With.
+func ValidName(name string) bool {
+	for _, tok := range strings.Split(name, ".") {
 		if tok == "" || strings.ContainsAny(tok, " \t\r\n*>") {
 			return false
 		}

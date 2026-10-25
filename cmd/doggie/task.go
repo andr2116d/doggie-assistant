@@ -145,7 +145,7 @@ func taskSub(ctx context.Context, conn *bus.Conn, w io.Writer, sub string, args 
 		if len(args) != 1 {
 			return errors.New("usage: doggie task cancel [-reason text] <id>")
 		}
-		if _, err := bus.Request(ctx, conn, events.CancelTask, events.TaskCancelRequest{TaskID: args[0], Reason: o.reason}); err != nil {
+		if _, err := bus.Request(ctx, conn, events.CancelTask, events.TaskCancelRequest{TaskID: args[0], Reason: o.reason, ByUser: true}); err != nil {
 			return err
 		}
 		fmt.Fprintf(w, "cancelled %s\n", args[0])

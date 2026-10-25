@@ -224,6 +224,27 @@ func TestCancellationByTheLLMIsNotAnnounced(t *testing.T) {
 	}
 }
 
+// A task the user cancelled directly, e.g. from a chat, is not told.
+func TestCancellationByTheUserIsNotAnnounced(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	ctx := context.Background()
+	long, _ := bus.Request(ctx, h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
+	h.waitStatus(long.TaskID, events.StatusRunning)
+	if _, err := bus.Request(ctx, h.client, events.CancelTask, events.TaskCancelRequest{TaskID: long.TaskID, ByUser: true}); err != nil {
+		t.Fatal(err)
+	}
+	h.noTurn(300 * time.Millisecond)
+
+	// The brain still tells what the user didn't do.
+	other, _ := bus.Request(ctx, h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
+	bus.Request(ctx, h.client, events.CancelTask, events.TaskCancelRequest{TaskID: other.TaskID})
+	if turn := h.nextTurn(); len(turn.Data.Inputs) != 1 || turn.Data.Inputs[0].Task == nil || turn.Data.Inputs[0].Task.TaskID != other.TaskID {
+		t.Errorf("turn = %+v", turn.Data.Inputs)
+	}
+}
+
 // A task ends once: a second end in the log (e.g. done racing a timeout) and
 // a question after the end are not told.
 func TestSecondEndsAndStaleQuestionsAreIgnored(t *testing.T) {

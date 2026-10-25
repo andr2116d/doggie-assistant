@@ -506,6 +506,9 @@ func (b *Brain) taskEvent(info events.TaskInfo, env bus.Envelope) {
 	case events.TaskCancelled.Type():
 		var d events.TaskCancelledData
 		json.Unmarshal(env.Data, &d)
+		if d.ByUser {
+			return // the user did it themselves: nothing to tell them
+		}
 		in.Task.Reason = d.Reason
 	case events.TaskNeedsInput.Type():
 		var d events.TaskNeedsInputData

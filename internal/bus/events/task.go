@@ -118,6 +118,10 @@ type TaskFailedData struct {
 type TaskCancelledData struct {
 	TaskID string `json:"task_id"`
 	Reason string `json:"reason,omitempty"`
+	// ByUser means a person asked for it directly, e.g. from a chat, not
+	// through the brain; so did the cancellation of its parent, for a
+	// subtask. They already know, so nobody needs to tell them.
+	ByUser bool `json:"by_user,omitempty"`
 }
 
 // Task events. The manager publishes created, running, cancelled and failed
@@ -140,6 +144,8 @@ type Ack struct{}
 type TaskCancelRequest struct {
 	TaskID string `json:"task_id"`
 	Reason string `json:"reason,omitempty"`
+	// ByUser marks a request a person made directly, not through the brain.
+	ByUser bool `json:"by_user,omitempty"`
 }
 
 // TaskAnswer answers the question of a task waiting for input.

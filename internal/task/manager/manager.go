@@ -296,7 +296,7 @@ func (m *Manager) onEvent(ctx context.Context, env bus.Envelope) {
 	}
 	m.alive(t.ID())
 	if t.Status().Terminal() {
-		m.finished(ctx, t)
+		m.finished(ctx, t, false)
 	}
 }
 
@@ -449,19 +449,20 @@ func (m *Manager) cancel(ctx context.Context, in bus.Incoming[events.TaskCancelR
 	if reason == "" {
 		reason = "cancelled by request"
 	}
-	m.cancelTask(ctx, t, reason)
+	m.cancelTask(ctx, t, reason, in.Req.ByUser)
 	in.Reply(events.Ack{})
 }
 
 // cancelTask records the cancellation at once and tells the worker to stop,
-// best effort: a worker that is gone can't run the task anyway.
-func (m *Manager) cancelTask(ctx context.Context, t *task.Task, reason string) {
+// best effort: a worker that is gone can't run the task anyway. byUser is
+// whether a person asked for it directly.
+func (m *Manager) cancelTask(ctx context.Context, t *task.Task, reason string, byUser bool) {
 	if err := t.Cancel(reason, time.Now().UTC()); err != nil {
 		return
 	}
-	publish(ctx, m, events.TaskCancelled, events.TaskCancelledData{TaskID: t.ID(), Reason: reason})
+	publish(ctx, m, events.TaskCancelled, events.TaskCancelledData{TaskID: t.ID(), Reason: reason, ByUser: byUser})
 	m.controlWorker(ctx, t, events.TaskControl{Action: events.ControlCancel, Reason: reason})
-	m.finished(ctx, t)
+	m.finished(ctx, t, byUser)
 }
 
 func (m *Manager) answer(ctx context.Context, in bus.Incoming[events.TaskAnswer, events.Ack]) {
@@ -579,12 +580,12 @@ func (m *Manager) fail(ctx context.Context, t *task.Task, reason string) {
 		return
 	}
 	publish(ctx, m, events.TaskFailed, events.TaskFailedData{TaskID: t.ID(), Error: reason})
-	m.finished(ctx, t)
+	m.finished(ctx, t, false)
 }
 
 // finished cleans up after a task ended and cancels its active subtasks if
-// it did not succeed.
-func (m *Manager) finished(ctx context.Context, t *task.Task) {
+// it did not succeed. byUser is whether a person cancelled it directly.
+func (m *Manager) finished(ctx context.Context, t *task.Task, byUser bool) {
 	if timer, ok := m.timers[t.ID()]; ok {
 		timer.Stop()
 		delete(m.timers, t.ID())
@@ -596,7 +597,7 @@ func (m *Manager) finished(ctx context.Context, t *task.Task) {
 	}
 	for _, child := range m.sorted() {
 		if child.Info().ParentID == t.ID() && !child.Status().Terminal() {
-			m.cancelTask(ctx, child, fmt.Sprintf("parent task %s %s", t.ID(), t.Status()))
+			m.cancelTask(ctx, child, fmt.Sprintf("parent task %s %s", t.ID(), t.Status()), byUser)
 		}
 	}
 }

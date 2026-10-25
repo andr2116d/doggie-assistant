@@ -136,6 +136,11 @@ func TestTaskCLICancel(t *testing.T) {
 		t.Fatalf("cancel: %q, %v", out, err)
 	}
 	waitStatus(t, c, id, events.StatusCancelled)
+	// The person asked for it, so the brain doesn't tell them.
+	ev, ok, err := bus.LastEvent(context.Background(), c, events.TaskCancelled)
+	if err != nil || !ok || ev.Data.TaskID != id || !ev.Data.ByUser {
+		t.Errorf("task.cancelled = %+v, %v, %v; want %s by the user", ev.Data, ok, err, id)
+	}
 }
 
 func TestTaskCLIErrors(t *testing.T) {

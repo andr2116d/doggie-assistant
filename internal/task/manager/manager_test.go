@@ -449,3 +449,49 @@ func TestManyConcurrentTasks(t *testing.T) {
 		h.waitStatus(id, events.StatusDone)
 	}
 }
+
+func TestCancelByUserReachesItsEventsAndSubtasks(t *testing.T) {
+	b := newBlocker()
+	childID := make(chan string, 4)
+	h := newHarness(t, testOptions(), map[string]worker.Func{
+		"test.block": b.run,
+		"test.parent": func(ctx context.Context, t *worker.Task) (any, error) {
+			id, err := t.Spawn(ctx, events.TaskSpec{Kind: "test.block"})
+			if err != nil {
+				return nil, err
+			}
+			childID <- id
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	cancelled, err := bus.Subscribe(context.Background(), h.client, events.TaskCancelled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, byUser := range []bool{true, false} {
+		parent := h.mustStart(events.TaskSpec{Kind: "test.parent"})
+		child := recv(t, childID, "subtask")
+		recv(t, b.started, "subtask start")
+		_, err := bus.Request(context.Background(), h.client, events.CancelTask, events.TaskCancelRequest{TaskID: parent, ByUser: byUser})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]bool{}
+		for len(got) < 2 {
+			select {
+			case ev := <-cancelled:
+				if ev.Data.ByUser != byUser {
+					t.Errorf("by user %v: %s cancelled with ByUser = %v", byUser, ev.Data.TaskID, ev.Data.ByUser)
+				}
+				got[ev.Data.TaskID] = true
+			case <-time.After(3 * time.Second):
+				t.Fatalf("by user %v: cancelled %v, want %s and %s", byUser, got, parent, child)
+			}
+		}
+		if !got[parent] || !got[child] {
+			t.Errorf("by user %v: cancelled %v, want %s and %s", byUser, got, parent, child)
+		}
+		recv(t, b.stopped, "subtask worker to stop")
+	}
+}

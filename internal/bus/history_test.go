@@ -125,3 +125,20 @@ func TestLastEvent(t *testing.T) {
 		t.Fatalf("LastEvent = %+v, %v, %v; want N=2", ev, ok, err)
 	}
 }
+
+// Logged is the bus's time, whatever the publisher's clock says.
+func TestHistoryTellsWhenEventsWereLogged(t *testing.T) {
+	s := startTestServer(t, "")
+	c := connect(t, s, "test")
+	ctx := context.Background()
+	before := time.Now()
+	// A publisher whose clock is an hour behind.
+	Publish(ctx, c, testTaskA, ping{N: 1}, func(m *Meta) { m.Time = m.Time.Add(-time.Hour) })
+	got, err := History(ctx, c, time.Time{}, "tasktest.>")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("history = %+v, %v", got, err)
+	}
+	if l := got[0].Logged; l.Before(before.Add(-time.Second)) || l.After(time.Now().Add(time.Second)) {
+		t.Errorf("Logged = %v, want about %v", l, before)
+	}
+}

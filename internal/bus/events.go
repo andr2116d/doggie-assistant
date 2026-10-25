@@ -31,6 +31,9 @@ type Meta struct {
 type Envelope struct {
 	Meta
 	Data json.RawMessage `json:"data"`
+	// Logged is when the bus stored the event, on the bus's clock, unlike
+	// Time, which is the publisher's. Only events read from the log have it.
+	Logged time.Time `json:"-"`
 }
 
 // Event is a decoded event with a typed payload.

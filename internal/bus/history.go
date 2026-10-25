@@ -82,6 +82,9 @@ func History(ctx context.Context, c *Conn, since time.Time, pattern string) ([]E
 				c.log.Warn("bus: skipping undecodable logged event", "subject", msg.Subject(), "err", err)
 				continue
 			}
+			if md, err := msg.Metadata(); err == nil {
+				env.Logged = md.Timestamp
+			}
 			out = append(out, env)
 		}
 		if err := batch.Error(); err != nil {

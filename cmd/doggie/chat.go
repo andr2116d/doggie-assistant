@@ -106,6 +106,10 @@ func chatCmd(args []string) error {
 	return chatSession(ctx, conn, ui, states, own, o)
 }
 
+// chatName is this chat's connection name, the source of what it says. It
+// tells its own sentences apart from those said in its thread elsewhere.
+var chatName = fmt.Sprintf("chat-%d", os.Getpid())
+
 func openChatUI() (*console.Console, error) {
 	return console.Open(os.Stdin, os.Stdout, console.Options{Prompt: "you> ", MaxRunes: events.MaxUtteranceRunes})
 }
@@ -113,7 +117,7 @@ func openChatUI() (*console.Console, error) {
 // dialChat connects the chat to the bus, reporting what happens to the
 // connection on states.
 func dialChat(client clientFlags, ui chatUI, states chan<- connState) (*bus.Conn, string, error) {
-	return client.dial("chat", func(d *bus.DialOptions) {
+	return client.dial(chatName, func(d *bus.DialOptions) {
 		d.OnDisconnect = func(err error) { sendState(states, connState{kind: connDown, err: err}) }
 		d.OnReconnect = func() { sendState(states, connState{kind: connUp}) }
 		d.OnClosed = func(err error) { sendState(states, connState{kind: connClosed, err: err}) }
@@ -208,7 +212,7 @@ func runWithChat(ctx context.Context, cfg config.Config, selected []factory, cli
 	var conn *bus.Conn
 	if cfg.Bus.Listen == "" {
 		// Only in-process connections: the chat is part of this process.
-		conn, err = own.srv.Connect("chat")
+		conn, err = own.srv.Connect(chatName)
 	} else {
 		conn, _, err = dialChat(client, ui, states)
 	}
@@ -303,6 +307,8 @@ type chatState struct {
 	// what a catch-up may show.
 	lastSeen, started time.Time
 	down              bool
+	// self is the chat's connection name, the source of its sentences.
+	self string
 }
 
 // chat runs until the user quits, the input ends and replies are in, or
@@ -323,13 +329,17 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 	if err != nil {
 		return err
 	}
+	said, err := bus.SubscribeEnvelopes(sctx, conn, events.UserUtterance.Type()+".*")
+	if err != nil {
+		return err
+	}
 	subject, err := events.UtteranceOn(o.channel)
 	if err != nil {
 		return err
 	}
 
 	c := &chatState{
-		ui: ui, view: newReplyView(ui), o: o,
+		ui: ui, view: newReplyView(ui), o: o, self: conn.Name(),
 		unanswered: map[string]time.Time{},
 		started:    time.Now(),
 	}
@@ -394,6 +404,13 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 				return ended(ctx)
 			}
 			if c.turn(ev) {
+				idleSince = time.Now()
+			}
+		case env, ok := <-said:
+			if !ok {
+				return ended(ctx)
+			}
+			if c.saidElsewhere(env) {
 				idleSince = time.Now()
 			}
 		case s := <-states:
@@ -478,6 +495,33 @@ func (c *chatState) speak(ev bus.Event[events.SpeakData]) bool {
 	return true
 }
 
+// saidElsewhere shows a sentence said in this thread by someone else, e.g.
+// another chat, so the reply to it makes sense. It reports whether it did.
+func (c *chatState) saidElsewhere(env bus.Envelope) bool {
+	ev, channel, err := bus.DecodeUnder(env, events.UserUtterance)
+	if err != nil || env.Source == c.self || !c.fresh(env.Meta) {
+		return false
+	}
+	thread := ev.Data.ThreadID
+	if thread == "" {
+		thread = channel
+	}
+	if thread != c.o.thread {
+		return false
+	}
+	who := channel
+	if channel == c.o.channel {
+		who = "you (elsewhere)"
+	}
+	c.view.note(fmt.Sprintf("%s> %s", who, oneLineText(ev.Data.Text)))
+	return true
+}
+
+// oneLineText keeps a sentence on one line of the chat.
+func oneLineText(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
 // turn takes the end of a turn of this thread: its sentences are answered,
 // and a failure is told.
 func (c *chatState) turn(ev bus.Event[events.BrainTurnData]) bool {
@@ -522,17 +566,23 @@ func (c *chatState) connection(ctx context.Context, conn *bus.Conn, s connState)
 	return nil
 }
 
-// catchUp shows this thread's replies and turns logged while the chat was
-// disconnected, oldest first. Events seen live are skipped.
+// catchUpMargin widens the catch-up window, since a satellite's clock may
+// lag the core's; events already seen are skipped anyway.
+const catchUpMargin = 2 * time.Minute
+
+// catchUp shows this thread's sentences, replies and turns logged while
+// the chat was disconnected, oldest first. Events seen live are skipped.
 func (c *chatState) catchUp(ctx context.Context, conn *bus.Conn) {
 	since := c.lastSeen
 	if since.IsZero() {
 		since = c.started
 	}
+	// Event times come from the clocks of whoever published them.
+	since = since.Add(-catchUpMargin)
 	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var missed []bus.Envelope
-	for _, typ := range []string{events.OutSpeak.Type(), events.BrainTurn.Type()} {
+	for _, typ := range []string{events.OutSpeak.Type(), events.BrainTurn.Type(), events.UserUtterance.Type() + ".*"} {
 		envs, err := bus.History(hctx, conn, since, typ)
 		if err != nil {
 			c.view.note("· could not read what was said meanwhile: " + err.Error())
@@ -554,6 +604,8 @@ func (c *chatState) catchUp(ctx context.Context, conn *bus.Conn) {
 			if ev, err := bus.Decode(env, events.BrainTurn); err == nil {
 				c.turn(ev)
 			}
+		default:
+			c.saidElsewhere(env)
 		}
 	}
 }

@@ -331,3 +331,48 @@ func TestChatPipedWaitsForSlowSends(t *testing.T) {
 		t.Errorf("err = %v, printed %q", err, ui.printed())
 	}
 }
+
+// Sentences said in the thread by others show, so their replies make sense;
+// the chat's own don't show twice, and other threads' don't show.
+func TestChatShowsSentencesSaidElsewhere(t *testing.T) {
+	brains := make(chan *bus.Conn, 1)
+	client := sayEnv(t, func(ctx context.Context, c *bus.Conn, u bus.Event[events.UtteranceData]) {
+		brains <- c
+	})
+	ui := newFakeUI(true)
+	runChat(t, client, ui, make(chan connState), testChatOptions())
+	ui.lines <- "mine"
+	brain := <-brains
+	ctx := context.Background()
+	other, _ := events.UtteranceOn("voice:kitchen")
+	bus.Publish(ctx, brain, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: "terminal", Channel: "terminal", Text: "from  another\nchat"})
+	bus.Publish(ctx, brain, other, events.UtteranceData{ThreadID: "terminal", Channel: "voice:kitchen", Text: "from the kitchen"})
+	bus.Publish(ctx, brain, other, events.UtteranceData{Channel: "voice:kitchen", Text: "kitchen's own thread"})
+	ui.waitPrinted(t, "you (elsewhere)> from another chat\nvoice:kitchen> from the kitchen\n")
+	time.Sleep(200 * time.Millisecond)
+	if p := ui.printed(); strings.Contains(p, "mine") || strings.Contains(p, "own thread") {
+		t.Errorf("printed %q", p)
+	}
+}
+
+func TestChatCatchesUpSentencesSaidElsewhere(t *testing.T) {
+	client := sayEnv(t, nil)
+	ui := newFakeUI(true)
+	c := &chatState{ui: ui, view: newReplyView(ui), o: testChatOptions(), self: client.Name(),
+		unanswered: map[string]time.Time{}, started: time.Now().Add(-time.Second)}
+	ctx := context.Background()
+	bus.Publish(ctx, client, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: "terminal", Text: "my own"})
+	bus.Publish(ctx, client, events.OutSpeak, events.SpeakData{ThreadID: "terminal", Text: "reply"})
+	c.catchUp(ctx, client)
+	if got := ui.printed(); got != "doggie> reply\n" {
+		t.Errorf("printed %q", got)
+	}
+	// As seen by another chat: the sentence is someone else's.
+	c.self = "someone-else"
+	c.seen = recentIDs{}
+	ui.out.Reset()
+	c.catchUp(ctx, client)
+	if got := ui.printed(); got != "you (elsewhere)> my own\ndoggie> reply\n" {
+		t.Errorf("printed %q", got)
+	}
+}

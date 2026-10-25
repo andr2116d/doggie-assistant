@@ -164,7 +164,7 @@ func (s *Server) addTaskTools() {
 	addTool(s, &sdk.Tool{Name: "start_task", Description: s.startTaskDescription(), InputSchema: startTaskSchema()}, events.RiskAct, s.startTask)
 	addTool(s, &sdk.Tool{
 		Name:        "list_tasks",
-		Description: "List DOGGIE's tasks, most recent last: by default only the active ones (pending, running or waiting for an answer).",
+		Description: "List the tasks, most recent last: by default only the active ones (pending, running or waiting for an answer).",
 	}, events.RiskRead, s.listTasks)
 	addTool(s, &sdk.Tool{
 		Name:        "get_task",
@@ -195,7 +195,7 @@ func startTaskSchema() *jsonschema.Schema {
 func (s *Server) startTaskDescription() string {
 	var b strings.Builder
 	b.WriteString("Start a task in the background, such as an action on a device. It returns the task_id at once while the task keeps running: " +
-		"never wait for it or say it is done. DOGGIE tells you when the task finishes, fails or needs an answer.\n\nTask kinds:")
+		"never wait for it or say it is done. You are told when the task finishes, fails or needs an answer.\n\nTask kinds:")
 	for _, k := range s.ordered {
 		var schema bytes.Buffer
 		if err := json.Compact(&schema, k.InputSchema); err != nil {

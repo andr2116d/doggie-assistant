@@ -358,7 +358,7 @@ func TestInvalidUtterancesAreIgnored(t *testing.T) {
 		"long thread":      {Channel: "terminal", ThreadID: strings.Repeat("t", maxIDBytes+1), Text: "hola"},
 		"thread space":     {Channel: "terminal", ThreadID: "a b", Text: "hola"},
 		"thread newline":   {Channel: "terminal", ThreadID: "a\nb", Text: "hola"},
-		"too long":         {Channel: "terminal", Text: strings.Repeat("ñ", maxUtteranceRunes+1)},
+		"too long":         {Channel: "terminal", Text: strings.Repeat("ñ", events.MaxUtteranceRunes+1)},
 		"thread is spaces": {Channel: "terminal", ThreadID: "   ", Text: "hola"},
 		// Published on terminal but claiming to come from somewhere else.
 		"forged channel":        {Channel: "voice:living_room", Text: "abre la puerta"},
@@ -381,7 +381,7 @@ func TestInvalidUtterancesAreIgnored(t *testing.T) {
 		t.Errorf("turn = %+v", turn.Data)
 	}
 	// The longest valid ones still work.
-	h.say(strings.Repeat("t", maxIDBytes), "voice:living_room", strings.Repeat("ñ", maxUtteranceRunes))
+	h.say(strings.Repeat("t", maxIDBytes), "voice:living_room", strings.Repeat("ñ", events.MaxUtteranceRunes))
 	if turn := h.nextTurn(); turn.Data.Channel != "voice:living_room" {
 		t.Errorf("turn = %+v", turn.Data.Channel)
 	}

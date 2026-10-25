@@ -35,11 +35,10 @@ import (
 
 // Bounds on what satellites can make the brain hold.
 const (
-	maxIDBytes        = 64
-	maxUtteranceRunes = 8000
-	maxThreads        = 100
-	maxPending        = 50
-	maxCachedTasks    = 1000
+	maxIDBytes     = 64
+	maxThreads     = 100
+	maxPending     = 50
+	maxCachedTasks = 1000
 )
 
 const (
@@ -402,7 +401,7 @@ func (b *Brain) onUtterance(env bus.Envelope, resumed bool) {
 	case text == "" || !utf8.ValidString(text):
 		b.log.Warn("brain: ignoring empty or invalid utterance", "id", ev.ID)
 		return
-	case utf8.RuneCountInString(text) > maxUtteranceRunes:
+	case utf8.RuneCountInString(text) > events.MaxUtteranceRunes:
 		b.log.Warn("brain: ignoring a too long utterance", "id", ev.ID)
 		return
 	}

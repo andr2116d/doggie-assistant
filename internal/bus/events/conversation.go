@@ -60,6 +60,10 @@ var (
 	OutSpeak = bus.NewSubject[SpeakData]("out.speak")
 )
 
+// MaxUtteranceRunes bounds what a person can say in one utterance; the brain
+// ignores longer ones.
+const MaxUtteranceRunes = 8000
+
 // maxChannel bounds a channel name.
 const maxChannel = 64
 

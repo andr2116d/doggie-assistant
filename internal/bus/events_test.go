@@ -97,28 +97,6 @@ func TestSubscribeClosesOnCancel(t *testing.T) {
 	}
 }
 
-func TestSubscribeAllSeesEveryType(t *testing.T) {
-	s := startTestServer(t, "")
-	c := connect(t, s, "test")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	all, err := SubscribeAll(ctx, c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	other := NewSubject[ping]("other.thing")
-	Publish(c, testPing, ping{N: 1})
-	Publish(c, other, ping{N: 2})
-
-	if got := receive(t, all).Type; got != "test.ping" {
-		t.Errorf("first type = %q", got)
-	}
-	if got := receive(t, all).Type; got != "other.thing" {
-		t.Errorf("second type = %q", got)
-	}
-}
-
 func TestEventLogStoresEvents(t *testing.T) {
 	s := startTestServer(t, "")
 	c := connect(t, s, "test")

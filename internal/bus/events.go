@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -115,12 +116,56 @@ func Subscribe[T any](ctx context.Context, c *Conn, s Subject[T]) (<-chan Event[
 	})
 }
 
-// SubscribeAll delivers every DOGGIE event, still encoded. It is meant for
-// tools such as the event viewer.
-func SubscribeAll(ctx context.Context, c *Conn) (<-chan Envelope, error) {
-	return subscribe(ctx, c, subjectPrefix+">", func(env Envelope) (Envelope, error) {
-		return env, nil
-	})
+// Replay delivers every event in the event log from since onwards, then keeps
+// delivering new events live until ctx is cancelled. A zero since delivers
+// only new events. It is meant for tools such as the event viewer.
+func Replay(ctx context.Context, c *Conn, since time.Time) (<-chan Envelope, error) {
+	js, err := jetstream.New(c.nc)
+	if err != nil {
+		return nil, fmt.Errorf("bus: jetstream: %w", err)
+	}
+	cfg := jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{subjectPrefix + ">"},
+		DeliverPolicy:  jetstream.DeliverNewPolicy,
+	}
+	if !since.IsZero() {
+		cfg.DeliverPolicy = jetstream.DeliverByStartTimePolicy
+		cfg.OptStartTime = &since
+	}
+	cons, err := js.OrderedConsumer(ctx, EventLogStream, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("bus: replay consumer: %w", err)
+	}
+	it, err := cons.Messages()
+	if err != nil {
+		return nil, fmt.Errorf("bus: replay: %w", err)
+	}
+
+	out := make(chan Envelope)
+	go func() {
+		<-ctx.Done()
+		it.Stop()
+	}()
+	go func() {
+		defer close(out)
+		for {
+			msg, err := it.Next()
+			if err != nil {
+				return // iterator stopped (ctx cancelled) or connection closed
+			}
+			var env Envelope
+			if err := json.Unmarshal(msg.Data(), &env); err != nil {
+				c.log.Warn("bus: skipping undecodable logged event", "subject", msg.Subject(), "err", err)
+				continue
+			}
+			select {
+			case out <- env:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
 }
 
 func subscribe[E any](ctx context.Context, c *Conn, subject string, decode func(Envelope) (E, error)) (<-chan E, error) {

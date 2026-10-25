@@ -12,17 +12,20 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/config"
 )
 
-// eventsCmd connects to a running DOGGIE over TCP and prints every event.
+// eventsCmd connects to a running DOGGIE over TCP and prints its events:
+// optionally the recent history from the event log, then new events live.
 func eventsCmd(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("events", flag.ContinueOnError)
 	configPath := flags.String("config", "", "config file (default $XDG_CONFIG_HOME/doggie/config.yaml)")
 	server := flags.String("server", "", "bus URL (default derived from bus.listen)")
 	ca := flags.String("ca", "", "bus CA certificate (default $DOGGIE_BUS_CA, or the local one when bus.tls is enabled)")
+	since := flags.Duration("since", 0, "also show logged events from this long ago, e.g. 10m or 2h")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -59,12 +62,16 @@ func eventsCmd(args []string, stdout io.Writer) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	all, err := bus.SubscribeAll(ctx, conn)
+	var from time.Time
+	if *since > 0 {
+		from = time.Now().Add(-*since)
+	}
+	events, err := bus.Replay(ctx, conn, from)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "watching events on %s (Ctrl+C to stop)\n", url)
-	for env := range all {
+	for env := range events {
 		printEnvelope(stdout, env)
 	}
 	return nil

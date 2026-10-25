@@ -526,7 +526,7 @@ func TestLookedUpEventsKeepTheirOrder(t *testing.T) {
 	gate := make(chan struct{})
 	h.fake.set(func(f *fake) { f.gate = gate })
 	h.say("th", "terminal", "ocupado") // hold the thread so the events queue up
-	waitFor(t, "the busy turn", func() bool { return len(h.fake.requests()) == 1 })
+	h.waitRequest(">ocupado</said>")
 	h.stop()
 	ask, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.ask", ThreadID: "th"})
 	h.waitStatus(ask.TaskID, events.StatusWaitingInput)
@@ -656,7 +656,7 @@ func TestUnansweredSentencesAreResumedAfterARestart(t *testing.T) {
 	// A turn stopped mid-way, before it said or did anything.
 	h.fake.set(func(f *fake) { f.gate = make(chan struct{}) })
 	h.say("th", "terminal", "¿qué hora es?")
-	waitFor(t, "the turn", func() bool { return len(h.fake.requests()) == 1 })
+	h.waitRequest(">¿qué hora es?</said>")
 	h.stop()
 	if turn := h.nextTurn(); turn.Data.Error == "" {
 		t.Fatalf("interrupted turn = %+v", turn.Data)

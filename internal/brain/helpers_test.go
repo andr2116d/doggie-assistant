@@ -390,3 +390,16 @@ func inputOf(prompt string) string {
 	}
 	return prompt
 }
+
+// waitRequest waits until the provider got a turn whose input has text.
+func (h *harness) waitRequest(text string) {
+	h.t.Helper()
+	waitFor(h.t, "a turn with "+text, func() bool {
+		for _, r := range h.fake.requests() {
+			if strings.Contains(inputOf(r.Input), text) {
+				return true
+			}
+		}
+		return false
+	})
+}

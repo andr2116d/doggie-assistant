@@ -40,7 +40,8 @@ var SystemStopping = bus.NewSubject[StoppingData]("system.stopping")
 // other channels, forge the manager's events (task.created, running,
 // cancelled), the brain's (out.speak, brain.turn) or the core's (system.*),
 // impersonate the manager, dispatch tasks to workers, or alter the event
-// log. It may follow what DOGGIE says as it is written (out.speak.delta).
+// log. It may follow what DOGGIE says as it is written (out.speak.delta),
+// and ask the brain for a conversation's last turns (brain.history).
 // Invalid channels are left out.
 func SatellitePermissions(channels ...string) bus.Permissions {
 	var byChannel []string
@@ -56,7 +57,7 @@ func SatellitePermissions(channels ...string) bus.Permissions {
 		Publish: append(byChannel,
 			TaskProgress.Wire(), TaskNeedsInput.Wire(), TaskDone.Wire(), TaskFailed.Wire(),
 			TaskAlive.Wire(),
-			StartTask.Wire(), AnswerTask.Wire(), ListTasks.Wire(), GetTask.Wire(),
+			StartTask.Wire(), AnswerTask.Wire(), ListTasks.Wire(), GetTask.Wire(), BrainHistory.Wire(),
 			ReportResult.Wire(),
 		),
 		Subscribe: []string{

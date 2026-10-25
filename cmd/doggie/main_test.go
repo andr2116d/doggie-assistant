@@ -146,6 +146,17 @@ func TestStartBusRestrictsSatellites(t *testing.T) {
 	if canCancel(events.CancelTask) {
 		t.Error("satellite could cancel as DOGGIE does")
 	}
+
+	// It may ask the brain for a conversation's last turns.
+	histories, _ := bus.Serve(ctx, core, events.BrainHistory)
+	go func() {
+		if in, ok := <-histories; ok {
+			in.Reply(events.HistoryReply{Known: true})
+		}
+	}()
+	if r, err := bus.Request(ctx, sat, events.BrainHistory, events.HistoryRequest{ThreadID: "terminal"}); err != nil || !r.Known {
+		t.Errorf("satellite cannot ask for the history: %+v, %v", r, err)
+	}
 }
 
 // A satellite added to the registry speaks for its own channels only, with

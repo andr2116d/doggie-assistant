@@ -95,6 +95,8 @@ type thread struct {
 	id      string
 	channel string // where replies go: the channel the user last spoke on
 	history []prompt.Turn
+	// past are the last turns as logged, for whoever asks.
+	past    []events.PastTurn
 	pending []events.TurnInput
 	busy    bool
 	waiting bool // in Brain.order
@@ -172,6 +174,10 @@ func (b *Brain) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	histories, err := bus.Serve(ctx, b.conn, events.BrainHistory)
+	if err != nil {
+		return err
+	}
 	if err := b.recover(ctx); err != nil {
 		return err
 	}
@@ -205,6 +211,12 @@ func (b *Brain) Run(ctx context.Context) error {
 				continue // already read from the log
 			}
 			b.onTaskEvent(ctx, env)
+		case in, ok := <-histories:
+			if !ok {
+				b.drain()
+				return ctx.Err()
+			}
+			in.Reply(b.pastTurns(in.Req))
 		case f := <-b.results:
 			f()
 		}
@@ -268,7 +280,7 @@ func (b *Brain) recover(ctx context.Context) error {
 		if ev.Data.Channel != "" {
 			th.channel = ev.Data.Channel
 		}
-		b.remember(th, ev.Time, ev.Data)
+		b.remember(th, ev.Meta, ev.Time, ev.Data)
 		// A turn that failed without saying or doing anything answered
 		// nothing, so its inputs are caught up again (no action can repeat).
 		// Only once: a sentence that keeps failing, or crashing the brain,
@@ -350,8 +362,13 @@ func (b *Brain) thread(id string) *thread {
 	return th
 }
 
-// remember adds a finished turn to its thread's history.
-func (b *Brain) remember(th *thread, at time.Time, rec events.BrainTurnData) {
+// remember adds a finished turn to its thread's history; logged is where
+// the turn was logged.
+func (b *Brain) remember(th *thread, logged bus.Meta, at time.Time, rec events.BrainTurnData) {
+	th.past = append(th.past, events.PastTurn{ID: logged.ID, At: logged.Time, Seq: logged.Seq, Turn: rec})
+	if len(th.past) > maxPastTurns {
+		th.past = append([]events.PastTurn(nil), th.past[len(th.past)-maxPastTurns:]...)
+	}
 	for _, a := range rec.Actions {
 		if a.Tool == "cancel_task" {
 			var in struct {
@@ -565,8 +582,8 @@ func (b *Brain) schedule(ctx context.Context) {
 		results := b.results
 		go func() {
 			defer b.turns.Done()
-			rec := b.runTurn(ctx, job)
-			b.do(ctx, results, func() { b.turnEnded(th, job, rec) })
+			rec, logged := b.runTurn(ctx, job)
+			b.do(ctx, results, func() { b.turnEnded(th, job, rec, logged) })
 		}()
 	}
 }
@@ -586,10 +603,10 @@ func (b *Brain) relevant(th *thread) []events.TurnInput {
 	return out
 }
 
-func (b *Brain) turnEnded(th *thread, job turnJob, rec events.BrainTurnData) {
+func (b *Brain) turnEnded(th *thread, job turnJob, rec events.BrainTurnData, logged bus.Meta) {
 	b.running--
 	th.busy = false
-	b.remember(th, job.started, rec)
+	b.remember(th, logged, job.started, rec)
 	if len(th.pending) > 0 && !th.waiting {
 		th.waiting = true
 		b.order = append(b.order, th)
@@ -614,4 +631,36 @@ func promptInput(in events.TurnInput) prompt.Input {
 		}
 	}
 	return p
+}
+
+// History replies are bounded: the turns kept per thread, and a size that
+// fits in one message.
+const (
+	maxPastTurns     = 20
+	maxHistoryReply  = 512 << 10
+	defaultPastTurns = 5
+)
+
+// pastTurns answers brain.history: a thread's last turns, the newest that
+// fit, oldest first.
+func (b *Brain) pastTurns(req events.HistoryRequest) events.HistoryReply {
+	th, ok := b.threads[req.ThreadID]
+	if !ok {
+		return events.HistoryReply{}
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = defaultPastTurns
+	}
+	var turns []events.PastTurn
+	size := 0
+	for i := len(th.past) - 1; i >= 0 && len(turns) < limit; i-- {
+		data, _ := json.Marshal(th.past[i])
+		if size += len(data); size > maxHistoryReply {
+			break
+		}
+		turns = append(turns, th.past[i])
+	}
+	slices.Reverse(turns)
+	return events.HistoryReply{Turns: turns, Known: true}
 }

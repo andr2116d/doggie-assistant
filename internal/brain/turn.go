@@ -24,16 +24,19 @@ type turnJob struct {
 }
 
 // runTurn runs one turn of the LLM: it says each text block as it comes and
-// records the turn. It runs outside the Run loop and touches no brain state.
-func (b *Brain) runTurn(ctx context.Context, job turnJob) events.BrainTurnData {
-	rec := events.BrainTurnData{ThreadID: job.thread, Channel: job.channel, Inputs: job.inputs, Provider: b.provider.Name()}
+// records the turn, returning where it was logged. It runs outside the Run
+// loop and touches no brain state.
+func (b *Brain) runTurn(ctx context.Context, job turnJob) (rec events.BrainTurnData, logged bus.Meta) {
+	rec = events.BrainTurnData{ThreadID: job.thread, Channel: job.channel, Inputs: job.inputs, Provider: b.provider.Name()}
 	cause := job.inputs[len(job.inputs)-1].EventID
 	defer func() {
 		pctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 		defer cancel()
-		if _, err := bus.Publish(pctx, b.conn, events.BrainTurn, rec, bus.CausedBy(cause)); err != nil {
+		meta, err := bus.Publish(pctx, b.conn, events.BrainTurn, rec, bus.CausedBy(cause))
+		if err != nil {
 			b.log.Error("brain: could not record a turn", "thread", job.thread, "err", err)
 		}
+		logged = meta
 	}()
 
 	// The task manager is the source of truth for the tasks the prompt
@@ -77,7 +80,7 @@ func (b *Brain) runTurn(ctx context.Context, job turnJob) events.BrainTurnData {
 		rec.Error = err.Error()
 		rec.DurationMS = time.Since(job.started).Milliseconds()
 		b.log.Warn("brain: turn failed", "thread", job.thread, "err", err)
-		return rec
+		return rec, logged
 	}
 	block := 0
 	for o := range out {
@@ -107,7 +110,7 @@ func (b *Brain) runTurn(ctx context.Context, job turnJob) events.BrainTurnData {
 		}
 	}
 	rec.DurationMS = time.Since(job.started).Milliseconds()
-	return rec
+	return rec, logged
 }
 
 // say publishes a text block for the thread's channel. It is published even

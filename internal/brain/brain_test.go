@@ -867,3 +867,78 @@ func receiveSignal[T any](t *testing.T, ch <-chan T) T {
 	var zero T
 	return zero
 }
+
+// brain.history gives a thread's last turns as they were logged, also after
+// a restart, when they come from the log.
+func TestBrainTellsAThreadsLastTurns(t *testing.T) {
+	h := newHarness(t, Options{})
+	var logged []bus.Event[events.BrainTurnData]
+	for _, s := range []string{"uno", "dos", "tres"} {
+		h.say("th", "terminal", s)
+		logged = append(logged, h.nextTurn())
+	}
+	ask := func(thread string, limit int) events.HistoryReply {
+		t.Helper()
+		r, err := bus.Request(context.Background(), h.client, events.BrainHistory, events.HistoryRequest{ThreadID: thread, Limit: limit})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	check := func(when string) {
+		t.Helper()
+		r := ask("th", 2)
+		if !r.Known || len(r.Turns) != 2 {
+			t.Fatalf("%s: reply = %+v", when, r)
+		}
+		for i, past := range r.Turns {
+			want := logged[i+1]
+			if past.ID != want.ID || past.Seq == 0 || !past.At.Equal(want.Time) || past.Turn.Inputs[0].Said != want.Data.Inputs[0].Said {
+				t.Errorf("%s: turn %d = %+v, want %s %q", when, i, past, want.ID, want.Data.Inputs[0].Said)
+			}
+		}
+		if r.Turns[0].Seq >= r.Turns[1].Seq {
+			t.Errorf("%s: positions %d, %d", when, r.Turns[0].Seq, r.Turns[1].Seq)
+		}
+		if r := ask("th", 0); len(r.Turns) != 3 {
+			t.Errorf("%s: default limit gave %d turns", when, len(r.Turns))
+		}
+		if r := ask("nadie", 5); r.Known || len(r.Turns) != 0 {
+			t.Errorf("%s: unknown thread = %+v", when, r)
+		}
+	}
+	check("live")
+	h.stop()
+	h.startBrain(Options{})
+	check("after a restart")
+}
+
+// A reply to brain.history fits in one message, keeping the newest turns.
+func TestBrainHistoryIsBounded(t *testing.T) {
+	th := &thread{id: "th"}
+	big := strings.Repeat("x", 200<<10)
+	for i := range maxPastTurns + 5 {
+		th.past = append(th.past, events.PastTurn{ID: fmt.Sprint(i), Turn: events.BrainTurnData{Replies: []string{big}}})
+	}
+	b := &Brain{threads: map[string]*thread{"th": th}}
+	r := b.pastTurns(events.HistoryRequest{ThreadID: "th", Limit: 100})
+	if len(r.Turns) != 2 || r.Turns[1].ID != fmt.Sprint(maxPastTurns+4) {
+		t.Errorf("%d turns, the last %s", len(r.Turns), r.Turns[len(r.Turns)-1].ID)
+	}
+	data, _ := json.Marshal(r)
+	if len(data) > 1<<20 {
+		t.Errorf("reply is %d bytes", len(data))
+	}
+}
+
+// The turns kept per thread for brain.history are bounded.
+func TestBrainKeepsFewPastTurns(t *testing.T) {
+	b := New(nil, discardLog(), Options{HistoryTurns: 20})
+	th := &thread{id: "th", cancelled: map[string]bool{}}
+	for i := range 3 * maxPastTurns {
+		b.remember(th, bus.Meta{ID: fmt.Sprint(i)}, time.Now(), events.BrainTurnData{ThreadID: "th", Replies: []string{"x"}})
+	}
+	if len(th.past) != maxPastTurns || th.past[len(th.past)-1].ID != fmt.Sprint(3*maxPastTurns-1) {
+		t.Errorf("kept %d turns, the last %s", len(th.past), th.past[len(th.past)-1].ID)
+	}
+}

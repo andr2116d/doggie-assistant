@@ -71,3 +71,31 @@ type TurnAction struct {
 
 // BrainTurn is published by the brain at the end of every turn.
 var BrainTurn = bus.NewSubject[BrainTurnData]("brain.turn")
+
+// PastTurn is a turn as it was logged.
+type PastTurn struct {
+	ID string    `json:"id"`
+	At time.Time `json:"at"`
+	// Seq is the turn's position in the event log, 0 if unknown.
+	Seq  uint64        `json:"seq,omitempty"`
+	Turn BrainTurnData `json:"turn"`
+}
+
+// HistoryRequest asks for the last turns of a conversation thread.
+type HistoryRequest struct {
+	ThreadID string `json:"thread_id"`
+	// Limit is how many turns, at most; the brain bounds it.
+	Limit int `json:"limit"`
+}
+
+// HistoryReply is a thread's last turns, oldest first.
+type HistoryReply struct {
+	Turns []PastTurn `json:"turns"`
+	// Known is false when the brain doesn't keep the thread in memory,
+	// though the event log may still have it.
+	Known bool `json:"known"`
+}
+
+// BrainHistory asks the brain for a thread's last turns, which it keeps in
+// memory, without reading the event log.
+var BrainHistory = bus.NewCommand[HistoryRequest, HistoryReply]("brain.history")

@@ -197,25 +197,3 @@ var (
 	RunTask     = bus.NewCommand[TaskInfo, Ack]("task.run")
 	ControlTask = bus.NewCommand[TaskControl, Ack]("task.control")
 )
-
-// SatellitePermissions is what satellites and tools connecting over TCP may
-// do: watch events, use the task manager's commands, and run tasks as
-// workers (report on them, beat, spawn subtasks). They cannot forge the
-// manager's events (task.created, running, cancelled) or the core's
-// (system.*), impersonate the manager, dispatch tasks to workers, or alter
-// the event log.
-func SatellitePermissions() bus.Permissions {
-	return bus.Permissions{
-		Publish: []string{
-			TaskProgress.Wire(), TaskNeedsInput.Wire(), TaskDone.Wire(), TaskFailed.Wire(),
-			TaskAlive.Wire(),
-			StartTask.Wire(), CancelTask.Wire(), AnswerTask.Wire(), ListTasks.Wire(), GetTask.Wire(),
-			ReportResult.Wire(),
-		},
-		Subscribe: []string{
-			bus.AllEvents,
-			RunTask.Wire() + ".>",
-			ControlTask.Wire() + ".>",
-		},
-	}
-}

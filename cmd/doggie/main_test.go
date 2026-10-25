@@ -88,4 +88,14 @@ func TestStartBusRestrictsSatellites(t *testing.T) {
 	if _, err := bus.Serve(ctx, sat, events.StartTask); err == nil {
 		t.Error("satellite could impersonate the task manager")
 	}
+	// A channel may pass on what people say...
+	if _, err := bus.Publish(ctx, sat, events.UserUtterance, events.UtteranceData{Channel: "terminal", Text: "hi"}); err != nil {
+		t.Errorf("satellite cannot publish an utterance: %v", err)
+	}
+	// ...but not put words in the brain's mouth.
+	short, cancelShort := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancelShort()
+	if _, err := bus.Publish(short, sat, events.OutSpeak, events.SpeakData{Channel: "terminal", Text: "forged"}); err == nil {
+		t.Error("satellite could publish out.speak")
+	}
 }

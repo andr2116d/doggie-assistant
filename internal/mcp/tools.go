@@ -306,10 +306,8 @@ func (s *Server) answerTask(ctx context.Context, _ Turn, in answerTaskIn) (okOut
 	if err != nil {
 		return okOut{}, err
 	}
-	// The LLM must not confirm sensitive actions on its own, so it may only
-	// answer tasks whose kind is known not to be sensitive. Tasks started
-	// elsewhere with other kinds are answered by a person directly.
-	if k, ok := s.kinds[info.Kind]; !ok || k.Risk == events.RiskSensitive || info.Sensitive {
+	// The LLM must not confirm sensitive actions on its own.
+	if events.PersonMustAnswer(info, s.ordered) {
 		return okOut{}, fmt.Errorf("task %s must be answered by the user directly, not through you", info.ID)
 	}
 	if _, err := bus.Request(ctx, s.conn, events.AnswerTask, events.TaskAnswer{TaskID: info.ID, Answer: answer}); err != nil {

@@ -64,3 +64,19 @@ var (
 func TaskKinds() []TaskKind {
 	return []TaskKind{KindDemoSleep, KindDemoAsk}
 }
+
+// PersonMustAnswer reports whether only a person may answer a task's
+// questions, never the LLM for them, since an answer may confirm what the
+// task does: the task is sensitive, or its kind is, or it isn't one of kinds,
+// those the LLM may start.
+func PersonMustAnswer(info TaskInfo, kinds []TaskKind) bool {
+	if info.Sensitive {
+		return true
+	}
+	for _, k := range kinds {
+		if k.Name == info.Kind {
+			return k.Risk == RiskSensitive
+		}
+	}
+	return true
+}

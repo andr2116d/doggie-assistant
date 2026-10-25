@@ -84,7 +84,13 @@ func (f *fake) Generate(ctx context.Context, req llm.Request) (<-chan llm.Output
 func (f *fake) requests() []llm.Request {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]llm.Request(nil), f.reqs...)
+	var out []llm.Request
+	for _, r := range f.reqs {
+		if r.Turn.ThreadID != probe {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (f *fake) set(fn func(*fake)) {
@@ -106,6 +112,8 @@ type harness struct {
 	// release ends demo.sleep tasks: one per receive, all when closed.
 	release chan struct{}
 	stop    func() error
+	// early are turns that ended while startBrain waited for its probe.
+	early []bus.Event[events.BrainTurnData]
 }
 
 func connect(t *testing.T, srv *bus.Server, name string) *bus.Conn {
@@ -177,16 +185,30 @@ func (h *harness) startBrain(opts Options) {
 	if opts.HistoryTurns == 0 {
 		opts.HistoryTurns = 20
 	}
+	// Requests from here on belong to this brain.
+	h.fake.set(func(f *fake) { f.reqs = nil })
 	h.brain = New(connect(h.t, h.srv, fmt.Sprintf("brain-%d", time.Now().UnixNano())), discardLog(), opts)
 	h.stop = goRun(h.t, h.brain.Run)
 	// The brain is ready once it answers: probe with a throwaway thread.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		h.say("probe", "terminal", "ping")
+		h.say(probe, "terminal", "ping")
 		select {
-		case <-h.turns:
+		case ev := <-h.turns:
+			if ev.Data.ThreadID != probe {
+				h.early = append(h.early, ev) // a real turn, kept for the test
+				continue
+			}
 			h.drainSpeaks()
-			h.fake.set(func(f *fake) { f.reqs = nil })
+			h.fake.set(func(f *fake) {
+				var keep []llm.Request
+				for _, r := range f.reqs {
+					if r.Turn.ThreadID != probe {
+						keep = append(keep, r)
+					}
+				}
+				f.reqs = keep
+			})
 			return
 		case <-time.After(100 * time.Millisecond):
 		}
@@ -240,35 +262,62 @@ func (h *harness) say(thread, channel, text string) string {
 	return meta.ID
 }
 
+// probe is the thread startBrain uses to see the brain is up. The helpers
+// below ignore it, since late probes can still be answered during a test.
+const probe = "probe"
+
 func (h *harness) nextTurn() bus.Event[events.BrainTurnData] {
 	h.t.Helper()
-	select {
-	case ev := <-h.turns:
+	if len(h.early) > 0 {
+		ev := h.early[0]
+		h.early = h.early[1:]
 		return ev
-	case <-time.After(10 * time.Second):
-		h.t.Fatal("no brain.turn")
 	}
-	return bus.Event[events.BrainTurnData]{}
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev := <-h.turns:
+			if ev.Data.ThreadID == probe {
+				continue
+			}
+			return ev
+		case <-deadline:
+			h.t.Fatal("no brain.turn")
+			return bus.Event[events.BrainTurnData]{}
+		}
+	}
 }
 
 func (h *harness) noTurn(d time.Duration) {
 	h.t.Helper()
-	select {
-	case ev := <-h.turns:
-		h.t.Fatalf("unexpected turn: %+v", ev.Data)
-	case <-time.After(d):
+	deadline := time.After(d)
+	for {
+		select {
+		case ev := <-h.turns:
+			if ev.Data.ThreadID != probe {
+				h.t.Fatalf("unexpected turn: %+v", ev.Data)
+			}
+		case <-deadline:
+			return
+		}
 	}
 }
 
 func (h *harness) nextSpeak() bus.Event[events.SpeakData] {
 	h.t.Helper()
-	select {
-	case ev := <-h.speaks:
-		return ev
-	case <-time.After(10 * time.Second):
-		h.t.Fatal("no out.speak")
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev := <-h.speaks:
+			if ev.Data.ThreadID == probe {
+				continue
+			}
+			return ev
+		case <-deadline:
+			h.t.Fatal("no out.speak")
+			return bus.Event[events.SpeakData]{}
+		}
 	}
-	return bus.Event[events.SpeakData]{}
 }
 
 func (h *harness) drainSpeaks() {

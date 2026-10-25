@@ -49,6 +49,10 @@ const (
 	publishTimeout = 5 * time.Second
 )
 
+// catchUpWindow is how far back the brain looks, on start, for task events
+// no turn answered. A variable so tests can shrink it.
+var catchUpWindow = 10 * time.Minute
+
 // Provider starts the LLM provider for one run of the brain, with DOGGIE's
 // tools. stop releases it.
 type Provider func(tools *mcp.Server) (brain llm.Brain, stop func(), err error)
@@ -78,6 +82,7 @@ type Brain struct {
 	tasks    map[string]events.TaskInfo // tasks seen being created
 	ended    map[string]bool            // tasks whose end was already queued
 	lookups  map[string][]bus.Envelope  // task events waiting for a lookup, by task
+	seen     map[string]bool            // task events read from the log on start
 	results  chan func()                // outcomes of turns and lookups
 	turns    sync.WaitGroup
 	tick     uint64 // logical clock for thread recency
@@ -121,6 +126,7 @@ func (b *Brain) Run(ctx context.Context) error {
 	b.tasks = make(map[string]events.TaskInfo)
 	b.ended = make(map[string]bool)
 	b.lookups = make(map[string][]bus.Envelope)
+	b.seen = make(map[string]bool)
 	b.results = make(chan func())
 
 	tools, err := mcp.Listen(b.conn, b.log)
@@ -161,6 +167,8 @@ func (b *Brain) Run(ctx context.Context) error {
 		return err
 	}
 	b.log.Info("brain ready", "provider", provider.Name(), "threads", len(b.threads))
+	// What recover caught up on runs now, not when the next event comes.
+	b.schedule(ctx)
 
 	// Turns end on their own once ctx is cancelled; wait for them so their
 	// last events are published before the tools and the provider stop.
@@ -180,6 +188,9 @@ func (b *Brain) Run(ctx context.Context) error {
 			if !ok {
 				b.drain()
 				return ctx.Err()
+			}
+			if b.seen[env.ID] {
+				continue // already read from the log
 			}
 			b.onTaskEvent(ctx, env)
 		case f := <-b.results:
@@ -222,12 +233,13 @@ func (b *Brain) do(ctx context.Context, results chan func(), f func()) {
 }
 
 // recover rebuilds the threads' history from the brain.turn events in the
-// log.
+// log, then catches up on the task events no turn answered.
 func (b *Brain) recover(ctx context.Context) error {
 	logged, err := bus.History(ctx, b.conn, time.Time{}, events.BrainTurn.Type())
 	if err != nil {
 		return fmt.Errorf("brain: read history: %w", err)
 	}
+	answered := make(map[string]bool)
 	for _, env := range logged {
 		ev, err := bus.Decode(env, events.BrainTurn)
 		if err != nil {
@@ -245,6 +257,31 @@ func (b *Brain) recover(ctx context.Context) error {
 			th.channel = ev.Data.Channel
 		}
 		b.remember(th, ev.Time, ev.Data)
+		for _, in := range ev.Data.Inputs {
+			answered[in.EventID] = true
+			if in.Task != nil && in.Task.Type != events.TaskNeedsInput.Type() {
+				b.ended[in.Task.TaskID] = true
+			}
+		}
+	}
+	return b.catchUp(ctx, answered)
+}
+
+// catchUp routes the recent task events no turn answered: those of the
+// tasks a restart interrupted (the task manager fails them while the brain
+// is starting) and those that came while the brain was down or was stopped
+// before answering them. Sentences are not replayed: the turn that missed
+// recording them may have acted on them already.
+func (b *Brain) catchUp(ctx context.Context, answered map[string]bool) error {
+	recent, err := bus.History(ctx, b.conn, time.Now().Add(-catchUpWindow), "task.>")
+	if err != nil {
+		return fmt.Errorf("brain: read recent task events: %w", err)
+	}
+	for _, env := range recent {
+		b.seen[env.ID] = true
+		if !answered[env.ID] {
+			b.onTaskEvent(ctx, env)
+		}
 	}
 	return nil
 }

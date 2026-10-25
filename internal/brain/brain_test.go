@@ -255,8 +255,10 @@ func TestUnknownTasksAreLookedUpInOrder(t *testing.T) {
 	ask, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.ask", ThreadID: "th"})
 	h.waitStatus(ask.TaskID, events.StatusWaitingInput)
 	h.startBrain(Options{})
-	// The question was asked while the brain was down: only the answer and
-	// the end are new.
+	// The question asked while the brain was down is caught up from the log.
+	if turn := h.nextTurn(); turn.Data.Inputs[0].Task == nil || turn.Data.Inputs[0].Task.Type != "task.needs_input" {
+		t.Fatalf("caught-up turn = %+v", turn.Data.Inputs)
+	}
 	bus.Request(context.Background(), h.client, events.AnswerTask, events.TaskAnswer{TaskID: ask.TaskID, Answer: "Luis"})
 	turn := h.nextTurn()
 	if task := turn.Data.Inputs[0].Task; task == nil || task.Type != "task.done" || task.Kind != "demo.ask" || string(task.Result) != `{"answer":"Luis"}` {
@@ -489,9 +491,18 @@ func TestLateQuestionAfterARestartIsIgnored(t *testing.T) {
 	h.waitStatus(ref.TaskID, events.StatusRunning)
 	h.release <- struct{}{}
 	h.waitStatus(ref.TaskID, events.StatusDone)
+	noCatchUp(t) // the task ended long ago: the brain must look it up
 	h.startBrain(Options{})
 	bus.Publish(context.Background(), h.client, events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: ref.TaskID, Question: "¿tarde?"})
 	h.noTurn(400 * time.Millisecond)
+}
+
+// noCatchUp makes the brain ignore past task events on start, as if they
+// were older than the catch-up window.
+func noCatchUp(t *testing.T) {
+	old := catchUpWindow
+	catchUpWindow = 0
+	t.Cleanup(func() { catchUpWindow = old })
 }
 
 // Events of a task the brain must look up all arrive, in order, even when
@@ -507,6 +518,8 @@ func TestLookedUpEventsKeepTheirOrder(t *testing.T) {
 	h.stop()
 	ask, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.ask", ThreadID: "th"})
 	h.waitStatus(ask.TaskID, events.StatusWaitingInput)
+	noCatchUp(t) // so the task is unknown and must be looked up
+	h.fake.set(func(f *fake) { f.gate = nil })
 	h.startBrain(Options{})
 	h.fake.set(func(f *fake) { f.gate = gate })
 	h.say("th", "terminal", "ocupado otra vez")
@@ -543,4 +556,79 @@ func TestSensitiveResultsStayHidden(t *testing.T) {
 	mustNotContain(t, string(b), "4821")
 	mustNotContain(t, h.fake.requests()[1].Input, "4821")
 	mustContain(t, h.fake.requests()[1].Input, "hidden: it is a sensitive task")
+}
+
+// What happened to a thread's tasks while the brain was down is told when it
+// comes back, and what was already told is not told again.
+func TestCatchesUpOnTaskEventsAfterARestart(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	told, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
+	h.waitStatus(told.TaskID, events.StatusRunning)
+	h.release <- struct{}{}
+	if turn := h.nextTurn(); turn.Data.Inputs[0].Task.TaskID != told.TaskID {
+		t.Fatalf("turn = %+v", turn.Data.Inputs)
+	}
+
+	h.stop()
+	missed, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
+	bus.Request(context.Background(), h.client, events.CancelTask, events.TaskCancelRequest{TaskID: missed.TaskID, Reason: "interrupted: DOGGIE restarted"})
+	h.waitStatus(missed.TaskID, events.StatusCancelled)
+	h.startBrain(Options{})
+
+	turn := h.nextTurn()
+	if len(turn.Data.Inputs) != 1 || turn.Data.Inputs[0].Task == nil || turn.Data.Inputs[0].Task.TaskID != missed.TaskID {
+		t.Fatalf("caught-up turn = %+v, want only the missed task", turn.Data.Inputs)
+	}
+	h.noTurn(300 * time.Millisecond)
+
+	// A second restart has nothing new to tell.
+	h.stop()
+	h.startBrain(Options{})
+	h.noTurn(300 * time.Millisecond)
+}
+
+// A question already asked is not asked again after a restart, and a second
+// end that comes after the restart is not told either.
+func TestRestartDoesNotRepeatQuestionsOrEnds(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	ask, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.ask", ThreadID: "th"})
+	if turn := h.nextTurn(); turn.Data.Inputs[0].Task == nil || turn.Data.Inputs[0].Task.Type != "task.needs_input" {
+		t.Fatalf("question turn = %+v", turn.Data.Inputs)
+	}
+	done, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
+	h.waitStatus(done.TaskID, events.StatusRunning)
+	h.release <- struct{}{}
+	h.nextTurn()
+
+	h.stop()
+	h.startBrain(Options{})
+	h.noTurn(300 * time.Millisecond) // the question was asked already
+	bus.Publish(context.Background(), h.client, events.TaskFailed, events.TaskFailedData{TaskID: done.TaskID, Error: "timed out"})
+	h.noTurn(300 * time.Millisecond) // the task already ended
+	_ = ask
+}
+
+// The catch-up runs on its own: the notice doesn't wait for the next event.
+func TestCaughtUpEventsAreToldWithoutWaitingForInput(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.say("th", "terminal", "hola")
+	h.nextTurn()
+	h.stop()
+	ref, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", ThreadID: "th"})
+	h.waitStatus(ref.TaskID, events.StatusRunning)
+	bus.Request(context.Background(), h.client, events.CancelTask, events.TaskCancelRequest{TaskID: ref.TaskID, Reason: "interrupted: DOGGIE restarted"})
+	h.waitStatus(ref.TaskID, events.StatusCancelled)
+
+	// Start the brain without probing it: nothing else will happen.
+	b := New(connect(t, h.srv, "brain-quiet"), discardLog(), Options{HistoryTurns: 20,
+		NewProvider: func(*mcp.Server) (llm.Brain, func(), error) { return h.fake, func() {}, nil }})
+	goRun(t, b.Run)
+	turn := h.nextTurn()
+	if task := turn.Data.Inputs[0].Task; task == nil || task.TaskID != ref.TaskID {
+		t.Errorf("turn = %+v", turn.Data.Inputs)
+	}
 }

@@ -55,6 +55,14 @@ cp configs/doggie.example.yaml ~/.config/doggie/config.yaml
 
 Edit `~/.config/doggie/config.yaml`: your name and profile, the assistant's persona, the language it speaks (`en`, `es`, ...). Without the file, DOGGIE starts with defaults. The example is also [in the repo](configs/doggie.example.yaml).
 
+DOGGIE thinks with your `claude` login. Optionally, give it a backup login, maybe of another account, for when your usage limit is spent:
+
+```sh
+doggie login
+```
+
+It runs `claude setup-token`, which opens the browser (log in there with the account to use), asks for the token it prints and tries it. While your limit is spent, turns run on the backup; once yours renews, DOGGIE comes back to it. The token is kept in `~/.local/share/doggie/`, readable by you only, and used from DOGGIE's next start. `doggie logout` forgets it.
+
 ## Quick start
 
 From any directory:

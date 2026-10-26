@@ -25,6 +25,7 @@ type harness struct {
 	srv    *bus.Server
 	client *bus.Conn
 	opts   Options
+	mgr    *Manager // the running manager
 
 	stopManager func()
 }
@@ -61,6 +62,7 @@ func (h *harness) startManager() {
 	h.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	m := New(connect(h.t, h.srv, "tasks"), discardLog(), h.opts)
+	h.mgr = m
 	done := make(chan struct{})
 	go func() {
 		m.Run(ctx)

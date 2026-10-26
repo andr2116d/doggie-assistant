@@ -155,6 +155,8 @@ func (b *Brain) failed(job turnJob, rec *events.BrainTurnData, err error, block 
 		rec.Failure = events.FailureTimeout
 	case errors.Is(err, llm.ErrToolsUnavailable):
 		rec.Failure = events.FailureNoTools
+	case errors.Is(err, llm.ErrNotLoggedIn):
+		rec.Failure = events.FailureNotLoggedIn
 	default:
 		rec.Failure = events.FailureOther
 	}

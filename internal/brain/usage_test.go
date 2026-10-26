@@ -67,6 +67,7 @@ func TestFailuresAreClassified(t *testing.T) {
 	}{
 		{llm.ErrTurnTimeout, events.FailureTimeout},
 		{fmt.Errorf("x: %w", llm.ErrToolsUnavailable), events.FailureNoTools},
+		{fmt.Errorf("claude: Please run /login: %w", llm.ErrNotLoggedIn), events.FailureNotLoggedIn},
 		{errBoom, events.FailureOther},
 	} {
 		h.fake.set(func(f *fake) {

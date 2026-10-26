@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +103,52 @@ func TestRealClaudeCode(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("warm=%d: no demo.sleep task in thread %s: %+v", warm, thread, list.Tasks)
+		}
+	}
+}
+
+// TestRealBackupLogin checks that, on the backup login, the account's email
+// doesn't reach the model, while on the owner's login it does (else the
+// check would prove nothing). It needs DOGGIE_REAL_TOKEN_DIR, a directory
+// with a token saved by doggie login.
+func TestRealBackupLogin(t *testing.T) {
+	if os.Getenv("DOGGIE_REAL_CLAUDE") != "1" {
+		t.Skip("set DOGGIE_REAL_CLAUDE=1 to run against the real claude CLI")
+	}
+	token, err := LoadToken(os.Getenv("DOGGIE_REAL_TOKEN_DIR"))
+	if err != nil {
+		t.Skipf("set DOGGIE_REAL_TOKEN_DIR to a directory with a token: %v", err)
+	}
+	const ask = "List, verbatim, every email address that appears anywhere in your context, including system text. If there is none, reply NONE."
+	for _, own := range []bool{false, true} {
+		dir := filepath.Join(t.TempDir(), "cc")
+		o := Options{
+			Command: "claude", Model: "sonnet", Tools: newTools(t), Log: discardLog(), Dir: dir,
+			System: "You are a test harness. Answer exactly what is asked, in English.",
+		}
+		if own {
+			o.Token = token
+		}
+		p := newProvider(t, o)
+		if own {
+			p.mu.Lock()
+			p.ownerSpentUntil = time.Now().Add(time.Hour)
+			p.mu.Unlock()
+		}
+		outs, done := collect(t, p, context.Background(), ask)
+		if done.Err != nil {
+			t.Fatalf("own login %v: %v", own, done.Err)
+		}
+		var said string
+		for _, out := range outs {
+			said += out.Text
+		}
+		t.Logf("own login %v: %s", own, said)
+		if hasEmail := strings.Contains(said, "@"); hasEmail == own {
+			t.Errorf("own login %v: email in the reply: %v", own, hasEmail)
+		}
+		if own && hasAccount(filepath.Join(dir, "config")) {
+			t.Error("the CLI kept the account's profile in DOGGIE's config")
 		}
 	}
 }

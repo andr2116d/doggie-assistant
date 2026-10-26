@@ -39,14 +39,19 @@ type proc struct {
 	// taken is closed when a warm process is taken for a turn (or
 	// discarded), so its watcher stops. Nil for other processes.
 	taken chan struct{}
+	// backup is set when the process runs on the backup login.
+	backup bool
+	// said is set once the turn gave out something.
+	said bool
 
 	stopOnce sync.Once
 }
 
-// spawn starts a claude process with its own MCP client. It is ready for its
+// spawn starts a claude process with its own MCP client, on the owner's
+// login or the backup one. It is ready for its
 // turn as soon as it returns: the CLI connects to the tools while it waits
 // for input.
-func (p *Provider) spawn() (*proc, error) {
+func (p *Provider) spawn(backup bool) (*proc, error) {
 	client, err := p.opts.Tools.NewClient()
 	if err != nil {
 		return nil, err
@@ -58,11 +63,15 @@ func (p *Provider) spawn() (*proc, error) {
 	}
 	cmd := exec.Command(p.opts.Command, p.args(cfgFile)...)
 	cmd.Dir = p.cwd
-	cmd.Env = childEnv(os.Environ())
+	token := ""
+	if backup {
+		token = p.opts.Token
+	}
+	cmd.Env = childEnv(os.Environ(), token, p.configDir)
 	setProcessGroup(cmd)
 	pr := &proc{
 		cmd: cmd, lines: make(chan []byte, 64), exited: make(chan struct{}),
-		stderr: &tail{max: stderrTail}, client: client, cfgFile: cfgFile,
+		stderr: &tail{max: stderrTail}, client: client, cfgFile: cfgFile, backup: backup,
 	}
 	cmd.Stderr = pr.stderr
 	if pr.stdin, err = cmd.StdinPipe(); err != nil {
@@ -106,20 +115,27 @@ func (p *Provider) args(cfgFile string) []string {
 	}
 }
 
-// childEnv is the environment for claude. Without API keys the CLI uses the
-// subscription login, which is what DOGGIE is meant to use. Nothing else of
-// the CLI's own reaches it but that login: started from a Claude Code
-// session, DOGGIE would pass on that session's variables, and the CLI would
-// take itself for part of it.
-func childEnv(env []string) []string {
-	out := make([]string, 0, len(env))
+// childEnv is the environment for claude. Without API keys the CLI uses a
+// subscription login, which is what DOGGIE is meant to use: the owner's,
+// or with a token, the backup login and its own config directory.
+// Nothing else of the CLI's own reaches it: started from a Claude Code
+// session, DOGGIE would pass on that session's variables, and the CLI
+// would take itself for part of it.
+func childEnv(env []string, token, configDir string) []string {
+	out := make([]string, 0, len(env)+2)
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		login := name == "CLAUDE_CODE_OAUTH_TOKEN" || name == "CLAUDE_CONFIG_DIR"
-		if name == "ANTHROPIC_API_KEY" || name == "ANTHROPIC_AUTH_TOKEN" || (strings.HasPrefix(name, "CLAUDE") && !login) {
+		ownersLogin := name == "CLAUDE_CODE_OAUTH_TOKEN" || name == "CLAUDE_CONFIG_DIR"
+		switch {
+		case name == "ANTHROPIC_API_KEY" || name == "ANTHROPIC_AUTH_TOKEN":
+			continue
+		case strings.HasPrefix(name, "CLAUDE") && (token != "" || !ownersLogin):
 			continue
 		}
 		out = append(out, kv)
+	}
+	if token != "" {
+		out = append(out, "CLAUDE_CODE_OAUTH_TOKEN="+token, "CLAUDE_CONFIG_DIR="+configDir)
 	}
 	return out
 }

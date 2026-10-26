@@ -21,3 +21,12 @@ func (pr *proc) kill() {
 		syscall.Kill(-p.Pid, syscall.SIGKILL)
 	}
 }
+
+// killGroup stops cmd's process group, for a cmd started with
+// setProcessGroup that may not have been reaped yet.
+func killGroup(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+}

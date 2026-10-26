@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -150,6 +149,15 @@ func newBrain(d deps) (supervisor.Component, error) {
 		return nil, err
 	}
 	bc := d.cfg.Brain
+	dir := claudeDir(d.cfg)
+	token, err := claudecode.LoadToken(dir)
+	switch {
+	case err == nil:
+		d.log.Info("the LLM has a backup login, for when your claude login's usage limit is spent")
+	case errors.Is(err, claudecode.ErrNoToken):
+	default:
+		return nil, fmt.Errorf("%w (run \"doggie login\" again, or \"doggie logout\")", err)
+	}
 	return brain.New(d.conn, d.log, brain.Options{
 		HistoryTurns: bc.HistoryTurns,
 		Language:     d.cfg.Language,
@@ -159,7 +167,8 @@ func newBrain(d deps) (supervisor.Component, error) {
 				Model:       bc.Model,
 				System:      system,
 				TurnTimeout: bc.TurnTimeout,
-				Dir:         filepath.Join(d.cfg.DataDir, "brain", "claudecode"),
+				Dir:         dir,
+				Token:       token,
 				Tools:       tools,
 				Log:         d.log,
 				Warm:        1,

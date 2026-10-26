@@ -45,7 +45,9 @@ const (
 	FailureTimeout    = "timeout"
 	// FailureNoTools: the LLM could not reach DOGGIE's tools.
 	FailureNoTools = "tools_unavailable"
-	FailureOther   = "other"
+	// FailureNotLoggedIn: the LLM has no valid login.
+	FailureNotLoggedIn = "not_logged_in"
+	FailureOther       = "other"
 )
 
 // UsageWindow is one of the LLM's usage windows, e.g. "five_hour" or

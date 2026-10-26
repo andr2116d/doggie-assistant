@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/brain/llm"
@@ -56,6 +57,10 @@ type Options struct {
 	// MaxWarmAge is how long a warm process may wait before it is replaced
 	// by a fresh one. Zero means 10 minutes.
 	MaxWarmAge time.Duration
+	// Token is a backup login (see SaveToken), maybe of another account.
+	// Turns run on the owner's claude login, and on this one only while the
+	// owner's usage limit is spent. Empty means there is none.
+	Token string
 }
 
 // Provider runs turns on claude processes.
@@ -63,14 +68,22 @@ type Provider struct {
 	opts       Options
 	systemFile string
 	cwd        string
+	// configDir is the CLI's own config directory, with Token.
+	configDir string
+	// accountSeen is set once the CLI was found keeping an account
+	// profile in configDir, so it is told only once.
+	accountSeen atomic.Bool
 
-	mu       sync.Mutex
-	closed   bool
-	done     chan struct{} // closed by Close
-	warm     []*proc
-	procs    map[*proc]bool // every running process, to kill on Close
-	spawning int
-	wg       sync.WaitGroup // turns, warm-up spawns and warm watchers
+	mu     sync.Mutex
+	closed bool
+	// ownerSpentUntil is until when the owner's login has its usage limit
+	// spent, so turns run on the backup login.
+	ownerSpentUntil time.Time
+	done            chan struct{} // closed by Close
+	warm            []*proc
+	procs           map[*proc]bool // every running process, to kill on Close
+	spawning        int
+	wg              sync.WaitGroup // turns, warm-up spawns and warm watchers
 }
 
 // New prepares the provider's directory and starts the warm processes.
@@ -101,6 +114,7 @@ func New(opts Options) (*Provider, error) {
 		opts:       opts,
 		systemFile: filepath.Join(opts.Dir, "system.md"),
 		cwd:        filepath.Join(opts.Dir, "cwd"),
+		configDir:  filepath.Join(opts.Dir, "config"),
 		done:       make(chan struct{}),
 		procs:      make(map[*proc]bool),
 	}
@@ -135,6 +149,16 @@ func (p *Provider) prepareDir() error {
 	os.Remove(p.systemFile) // WriteFile keeps the mode of an existing file
 	if err := os.WriteFile(p.systemFile, []byte(p.opts.System), 0o600); err != nil {
 		return fmt.Errorf("claudecode: system prompt: %w", err)
+	}
+	if p.opts.Token == "" {
+		return nil
+	}
+	if err := os.MkdirAll(p.configDir, 0o700); err != nil {
+		return fmt.Errorf("claudecode: %w", err)
+	}
+	// No process runs yet, so nothing writes the file meanwhile.
+	if err := scrubAccount(p.configDir); err != nil {
+		return fmt.Errorf("claudecode: clear the CLI's account profile: %w", err)
 	}
 	return nil
 }
@@ -179,11 +203,12 @@ func (p *Provider) take() (*proc, error) {
 		return nil, ErrClosed
 	}
 	p.wg.Add(1)
+	backup := p.backupLocked()
 	for len(p.warm) > 0 {
 		pr := p.warm[0]
 		p.warm = p.warm[1:]
 		close(pr.taken)
-		if pr.alive() && time.Since(pr.started) < p.opts.MaxWarmAge {
+		if pr.alive() && pr.backup == backup && time.Since(pr.started) < p.opts.MaxWarmAge {
 			p.mu.Unlock()
 			return pr, nil
 		}
@@ -195,7 +220,7 @@ func (p *Provider) take() (*proc, error) {
 	}
 	p.mu.Unlock()
 
-	pr, err := p.spawnTracked()
+	pr, err := p.spawnTracked(backup)
 	if err != nil {
 		p.wg.Done()
 		return nil, err
@@ -205,8 +230,8 @@ func (p *Provider) take() (*proc, error) {
 
 // spawnTracked starts a process and records it, unless the provider closed
 // meanwhile.
-func (p *Provider) spawnTracked() (*proc, error) {
-	pr, err := p.spawn()
+func (p *Provider) spawnTracked(backup bool) (*proc, error) {
+	pr, err := p.spawn(backup)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +265,10 @@ func (p *Provider) fill() {
 
 func (p *Provider) warmUp() {
 	defer p.wg.Done()
-	pr, err := p.spawn()
+	p.mu.Lock()
+	backup := p.backupLocked()
+	p.mu.Unlock()
+	pr, err := p.spawn(backup)
 	p.mu.Lock()
 	p.spawning--
 	if err != nil {
@@ -307,26 +335,95 @@ func (p *Provider) discard(pr *proc) {
 	p.mu.Lock()
 	delete(p.procs, pr)
 	p.mu.Unlock()
+	// The profile holds the account's email; it is cleared on the next start.
+	if p.opts.Token != "" && !p.accountSeen.Load() && hasAccount(p.configDir) && p.accountSeen.CompareAndSwap(false, true) {
+		p.opts.Log.Warn("claudecode: the CLI kept the account's profile in its config; it is cleared when DOGGIE starts again")
+	}
 }
 
 // runTurn serves req on pr. If the process failed before the turn really
 // started (it died first, e.g. a warm process that exited just as it was
 // taken, or it could not reach DOGGIE's tools), it retries once on a fresh
-// process.
+// process. If the owner's usage limit is spent and there is a backup login,
+// it runs the turn again there: the limit stops a turn before the model
+// acts, so nothing can happen twice.
 func (p *Provider) runTurn(ctx context.Context, pr *proc, req llm.Request, out chan<- llm.Output) *llm.Done {
-	// One deadline for the whole turn, retry included.
+	// One deadline for the whole turn, retries included.
 	tctx, cancel := context.WithTimeout(ctx, p.opts.TurnTimeout)
 	defer cancel()
 	d, retry := p.serve(ctx, tctx, pr, req, out)
 	if retry && tctx.Err() == nil {
 		p.opts.Log.Warn("claudecode: claude failed before the turn started, retrying on a new process", "err", d.Err)
-		pr, err := p.spawnTracked()
+		next, err := p.spawnTracked(pr.backup)
 		if err != nil {
 			return &llm.Done{Err: err}
 		}
+		pr = next
 		d, _ = p.serve(ctx, tctx, pr, req, out)
 	}
+	var spent *llm.UsageLimitError
+	if !errors.As(d.Err, &spent) {
+		return d
+	}
+	if !pr.backup && p.ownerSpent(spent.Renews) && !pr.said && tctx.Err() == nil {
+		p.opts.Log.Info("claudecode: the usage limit of the owner's login is spent; turns run on the backup login meanwhile", "renews", spent.Renews)
+		next, err := p.spawnTracked(true)
+		if err != nil {
+			return &llm.Done{Err: err}
+		}
+		pr = next
+		if d, _ = p.serve(ctx, tctx, pr, req, out); !errors.As(d.Err, &spent) {
+			return d
+		}
+	}
+	if pr.backup {
+		// Spent on both: DOGGIE can think again when the first renews.
+		spent.Renews = p.firstRenewal(spent.Renews)
+	}
 	return d
+}
+
+// backupLocked reports whether turns run on the backup login now. The
+// caller holds p.mu.
+func (p *Provider) backupLocked() bool {
+	return p.opts.Token != "" && time.Now().Before(p.ownerSpentUntil)
+}
+
+// unknownRenewal is how long the owner's login counts as spent when the
+// CLI doesn't say when it renews.
+const unknownRenewal = 30 * time.Minute
+
+// ownerSpent records that the owner's usage limit is spent until renews,
+// and reports whether there is a backup login to run on meanwhile.
+func (p *Provider) ownerSpent(renews time.Time) bool {
+	if p.opts.Token == "" {
+		return false
+	}
+	now := time.Now()
+	if !renews.After(now) {
+		renews = now.Add(unknownRenewal)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if renews.After(p.ownerSpentUntil) {
+		p.ownerSpentUntil = renews
+	}
+	return true
+}
+
+// firstRenewal is the earlier of backup, when the backup login's limit
+// renews (zero if unknown), and when the owner's does.
+func (p *Provider) firstRenewal(backup time.Time) time.Time {
+	p.mu.Lock()
+	owner := p.ownerSpentUntil
+	p.mu.Unlock()
+	switch {
+	case !owner.After(time.Now()):
+		return backup
+	case backup.IsZero() || owner.Before(backup):
+		return owner
+	}
+	return backup
 }
 
 // serve runs one turn on pr, until tctx (the turn's deadline, derived from
@@ -363,6 +460,7 @@ func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, o
 		select {
 		case out <- o:
 			said = true
+			pr.said = true
 			return true
 		case <-tctx.Done():
 			return false
@@ -389,6 +487,9 @@ func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, o
 		case line, ok := <-pr.lines:
 			if !ok {
 				d.Err = pr.exitError()
+				if needsLogin(d.Err.Error()) {
+					d.Err = fmt.Errorf("%w: %w", d.Err, llm.ErrNotLoggedIn)
+				}
 				if p.isClosed() {
 					return &llm.Done{Err: ErrClosed}, false
 				}
@@ -451,8 +552,11 @@ func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, o
 					d.Err = fmt.Errorf("claudecode: %s", f)
 					// A 429 the CLI gives up on is the usage limit, even
 					// when it said nothing about the limits first.
-					if spent, renews := limit.spent(); spent || ev.apiStatus() == 429 {
+					switch spent, renews := limit.spent(); {
+					case spent || ev.apiStatus() == 429:
 						d.Err = &llm.UsageLimitError{Renews: renews, Detail: f}
+					case ev.apiStatus() == 401 || needsLogin(f):
+						d.Err = fmt.Errorf("claudecode: %s: %w", f, llm.ErrNotLoggedIn)
 					}
 				}
 				return d, false

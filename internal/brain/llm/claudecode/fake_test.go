@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -58,8 +59,15 @@ type step struct {
 	Rate     []float64       `json:"rate,omitempty"` // five_hour, seven_day
 	Error    string          `json:"error,omitempty"`
 	Hang     bool            `json:"hang,omitempty"`
-	Child    bool            `json:"child,omitempty"` // start a child process and report its PID
-	Raw      json.RawMessage `json:"raw,omitempty"`   // a line as is; a result ends the turn
+	Child    bool            `json:"child,omitempty"`   // start a child process and report its PID
+	Raw      json.RawMessage `json:"raw,omitempty"`     // a line as is; a result ends the turn
+	Account  bool            `json:"account,omitempty"` // keep an account profile in $CLAUDE_CONFIG_DIR
+	// Spent ends the turn as the CLI does once the usage limit is spent, on
+	// the "owner" login, the "backup" one or "both". Renews and
+	// BackupRenews are when each renews (Unix seconds, 0 for unknown).
+	Spent        string `json:"spent,omitempty"`
+	Renews       int64  `json:"renews,omitempty"`
+	BackupRenews int64  `json:"backup_renews,omitempty"`
 }
 
 // report is what the fake tells about itself.
@@ -99,6 +107,9 @@ func fakeMain() {
 		os.Exit(0) // stdin closed before any input
 	}
 	inputAt := time.Now()
+	if f := os.Getenv("DOGGIE_FAKE_ENVLOG"); f != "" {
+		appendLine(f, strings.Join(os.Environ(), "\n"))
+	}
 	if f := os.Getenv("DOGGIE_FAKE_INPUTLOG"); f != "" {
 		appendLine(f, fmt.Sprint(os.Getpid()))
 	}
@@ -152,6 +163,9 @@ func fakeMain() {
 			cmd.Env = append(os.Environ(), "DOGGIE_FAKE_CHILD=1", "DOGGIE_FAKE_CLAUDE=")
 			cmd.Start()
 			childPID = cmd.Process.Pid
+			if f := os.Getenv("DOGGIE_FAKE_CHILDLOG"); f != "" {
+				appendLine(f, fmt.Sprint(childPID))
+			}
 		case s.SleepMS > 0:
 			time.Sleep(time.Duration(s.SleepMS) * time.Millisecond)
 		case s.Exit != nil:
@@ -170,6 +184,21 @@ func fakeMain() {
 		case s.Error != "":
 			emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": s.Error})
 			return
+		case s.Spent != "":
+			backup := strings.HasSuffix(os.Getenv("CLAUDE_CONFIG_DIR"), filepath.Join("claudecode", "config"))
+			renews := s.Renews
+			if backup {
+				renews = s.BackupRenews
+			}
+			if s.Spent == "both" || (s.Spent == "backup") == backup {
+				emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "resetsAt": renews}})
+				emit(map[string]any{"type": "assistant", "message": map[string]any{"model": "<synthetic>", "content": []any{map[string]any{"type": "text", "text": "You've hit your session limit"}}}})
+				emit(map[string]any{"type": "result", "subtype": "success", "is_error": true, "api_error_status": 429, "result": "You've hit your session limit"})
+				return
+			}
+		case s.Account:
+			os.WriteFile(filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), ".claude.json"),
+				[]byte(`{"numStartups":3,"oauthAccount":{"emailAddress":"someone@example.com"}}`), 0o600)
 		case s.Raw != nil:
 			out.Write(append(append([]byte(nil), s.Raw...), '\n'))
 			out.Flush()

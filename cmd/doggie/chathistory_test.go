@@ -183,6 +183,7 @@ func TestFailureNotes(t *testing.T) {
 		{events.BrainTurnData{Error: "llm: usage limit reached: You've hit your session limit", Failure: events.FailureUsageLimit}, ""},
 		{events.BrainTurnData{Error: "llm: turn timed out", Failure: events.FailureTimeout}, "it took too long"},
 		{events.BrainTurnData{Error: "llm: tools", Failure: events.FailureNoTools}, "DOGGIE's tools didn't answer"},
+		{events.BrainTurnData{Error: "claudecode: Please run /login", Failure: events.FailureNotLoggedIn}, `its LLM isn't logged in; log in with claude, or run "doggie login" for the backup`},
 		{events.BrainTurnData{Error: "claudecode: Please run /login", Failure: events.FailureOther}, "claudecode: Please run /login"},
 		{events.BrainTurnData{Error: "logged before failures had kinds"}, "logged before failures had kinds"},
 	} {

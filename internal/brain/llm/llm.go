@@ -18,6 +18,10 @@ var ErrToolsUnavailable = errors.New("llm: DOGGIE's tools are not available to t
 // ErrTurnTimeout means the turn took longer than allowed.
 var ErrTurnTimeout = errors.New("llm: turn timed out")
 
+// ErrNotLoggedIn means the provider has no valid login: the owner has to
+// log in again.
+var ErrNotLoggedIn = errors.New("llm: not logged in")
+
 // UsageLimitError means the provider's usage limit is spent: it can't
 // answer until the limit renews.
 type UsageLimitError struct {

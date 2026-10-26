@@ -179,6 +179,8 @@ func failure(t events.BrainTurnData) string {
 		return "it took too long"
 	case t.Failure == events.FailureNoTools:
 		return "DOGGIE's tools didn't answer"
+	case t.Failure == events.FailureNotLoggedIn:
+		return `its LLM isn't logged in; log in with claude, or run "doggie login" for the backup`
 	}
 	return t.Error
 }

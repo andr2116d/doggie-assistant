@@ -38,6 +38,8 @@ Usage:
   doggie chat [flags]     talk with DOGGIE, starting it if needed (see "doggie chat -h")
   doggie say <text>       say something to DOGGIE and print its replies (see "doggie say -h")
   doggie satellite <cmd>  add, list or remove satellites (see "doggie satellite help")
+  doggie login            give DOGGIE a backup Claude login (see "doggie login -h")
+  doggie logout           forget it
   doggie version          print the version
 `
 
@@ -68,6 +70,8 @@ func run(args []string, stdout io.Writer) error {
 		return chatCmd(args[1:])
 	case "satellite":
 		return satelliteCmd(args[1:], stdout)
+	case "login", "logout":
+		return loginCmd(args[0], args[1:], os.Stdin, stdout, os.Stderr, realLogin)
 	case "version":
 		fmt.Fprintln(stdout, versionString())
 		return nil

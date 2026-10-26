@@ -167,7 +167,7 @@ func (s *Server) ensureEventLog(ctx context.Context, maxAge time.Duration, maxBy
 // Connect opens an in-process connection for the named component. Events it
 // publishes carry that name as their source.
 func (s *Server) Connect(name string) (*Conn, error) {
-	return newConn(name, s.log, connHooks{}, func(opts ...nats.Option) (*nats.Conn, error) {
+	return newConn(name, name, s.log, connHooks{}, func(opts ...nats.Option) (*nats.Conn, error) {
 		return s.dial(name, opts...)
 	})
 }
@@ -276,7 +276,7 @@ func Dial(url string, opts DialOptions) (*Conn, error) {
 		natsOpts = append(natsOpts, nats.RootCAs(opts.CAFile))
 	}
 	hooks := connHooks{onDisconnect: opts.OnDisconnect, onReconnect: opts.OnReconnect, onClosed: opts.OnClosed}
-	return newConn(opts.Name, opts.Log, hooks, func(extra ...nats.Option) (*nats.Conn, error) {
+	return newConn(opts.Name, opts.User, opts.Log, hooks, func(extra ...nats.Option) (*nats.Conn, error) {
 		nc, err := nats.Connect(url, append(natsOpts, extra...)...)
 		if errors.Is(err, nats.ErrNoServers) {
 			return nil, fmt.Errorf("bus: no server at %s (is doggie running?): %w", url, err)

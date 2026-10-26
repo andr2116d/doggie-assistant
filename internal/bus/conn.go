@@ -19,8 +19,10 @@ type Conn struct {
 	nc     *nats.Conn
 	js     jetstream.JetStream
 	source string
-	log    *slog.Logger
-	closed chan struct{}
+	// identity is who the bus vouches the connection is (see Identity).
+	identity string
+	log      *slog.Logger
+	closed   chan struct{}
 	// closing is set by Close, so ending the connection on purpose isn't
 	// reported as losing it.
 	closing atomic.Bool
@@ -36,8 +38,8 @@ type connHooks struct {
 // newConn opens a connection with connect, passing it the options that track
 // its state. The Conn exists before connecting, so every callback sees
 // whether Close was called.
-func newConn(source string, log *slog.Logger, h connHooks, connect func(...nats.Option) (*nats.Conn, error)) (*Conn, error) {
-	c := &Conn{source: source, log: log, closed: make(chan struct{})}
+func newConn(source, identity string, log *slog.Logger, h connHooks, connect func(...nats.Option) (*nats.Conn, error)) (*Conn, error) {
+	c := &Conn{source: source, identity: identity, log: log, closed: make(chan struct{})}
 	opts := []nats.Option{nats.ClosedHandler(func(nc *nats.Conn) {
 		close(c.closed)
 		if h.onClosed != nil && !c.closing.Load() {
@@ -73,6 +75,13 @@ func newConn(source string, log *slog.Logger, h connHooks, connect func(...nats.
 
 // Name returns the connection name, which is the source of its events.
 func (c *Conn) Name() string { return c.source }
+
+// Identity is who the bus vouches the connection is: a named satellite's
+// name, or the connection name of DOGGIE's own components, which may use
+// any. It is empty for the shared satellite token, which vouches for no one.
+// Subjects that carry a name, such as a worker's reports, are only open to
+// that identity.
+func (c *Conn) Identity() string { return c.identity }
 
 // Close flushes pending publishes, waits until they reach the server and
 // closes the connection. Calling it again is a no-op.

@@ -295,3 +295,22 @@ func TestSetSatellitesWhileSatellitesConnect(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+// A connection's identity is what the bus vouches for: a named satellite's
+// name, a component's name, and nobody for the shared token.
+func TestConnIdentity(t *testing.T) {
+	s, token := startNamed(t)
+	named, err := dialAs(t, s, "voice-room", token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := dialAs(t, s, "", "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for c, want := range map[*Conn]string{named: "voice-room", shared: "", connect(t, s, "tasks"): "tasks"} {
+		if got := c.Identity(); got != want {
+			t.Errorf("%s: Identity = %q, want %q", c.Name(), got, want)
+		}
+	}
+}

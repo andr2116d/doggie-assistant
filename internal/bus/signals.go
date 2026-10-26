@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/nats-io/nats.go"
 )
@@ -28,6 +29,12 @@ func NewSignal[T any](name string) Signal[T] {
 // Wire returns the NATS subject of the signal.
 func (s Signal[T]) Wire() string { return signalPrefix + s.name }
 
+// With returns the signal under s named by tokens, e.g. a worker's
+// "task.alive.<worker>". It panics on invalid tokens.
+func (s Signal[T]) With(tokens ...string) Signal[T] {
+	return NewSignal[T](s.name + "." + strings.Join(tokens, "."))
+}
+
 // Emit sends a signal, fire and forget.
 func Emit[T any](c *Conn, s Signal[T], data T) error {
 	payload, err := json.Marshal(data)
@@ -46,6 +53,25 @@ func SubscribeSignal[T any](ctx context.Context, c *Conn, s Signal[T]) (<-chan T
 	out, err := subscribeChan(ctx, c, s.Wire(), "", func(m *nats.Msg) (T, bool) {
 		var v T
 		return v, json.Unmarshal(m.Data, &v) == nil
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bus: subscribe signal %s: %w", s.name, err)
+	}
+	return out, nil
+}
+
+// SignalUnder is a signal sent under a signal, and the token it came under.
+type SignalUnder[T any] struct {
+	Under string
+	Data  T
+}
+
+// SubscribeSignalUnder delivers the signals sent to s.With(token), for any
+// one token, until ctx is cancelled. Undecodable signals are dropped.
+func SubscribeSignalUnder[T any](ctx context.Context, c *Conn, s Signal[T]) (<-chan SignalUnder[T], error) {
+	out, err := subscribeChan(ctx, c, s.Wire()+".*", "", func(m *nats.Msg) (SignalUnder[T], bool) {
+		v := SignalUnder[T]{Under: strings.TrimPrefix(m.Subject, s.Wire()+".")}
+		return v, json.Unmarshal(m.Data, &v.Data) == nil
 	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("bus: subscribe signal %s: %w", s.name, err)

@@ -144,6 +144,7 @@ func newBrain(d deps) (supervisor.Component, error) {
 		OwnerAbout:    d.cfg.Owner.About,
 		Persona:       d.cfg.Assistant.Persona,
 		Language:      d.cfg.Language,
+		Model:         claudecode.ModelName(d.cfg.Brain.Model),
 	})
 	if err != nil {
 		return nil, err

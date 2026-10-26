@@ -34,6 +34,7 @@ func TestSystemFull(t *testing.T) {
 		OwnerAbout:    "  Lives by the sea. Likes sci-fi.\n",
 		Persona:       "A calm butler with a dry sense of humor.",
 		Language:      "es",
+		Model:         " Claude Sonnet, by Anthropic ",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +50,7 @@ func TestSystemMinimal(t *testing.T) {
 	}
 	golden(t, "system_minimal.golden", got)
 	checkClean(t, got)
-	for _, absent := range []string{"# About", "# Your persona", "The owner wrote"} {
+	for _, absent := range []string{"# About", "# Your persona", "The owner wrote", "Right now it is", "right now you think with"} {
 		if strings.Contains(got, absent) {
 			t.Errorf("minimal prompt has %q", absent)
 		}

@@ -25,6 +25,9 @@ type Persona struct {
 	Persona string
 	// Language is a BCP 47 tag, e.g. "es" or "pt-BR".
 	Language string
+	// Model is the language model the assistant thinks with, as it names
+	// it when asked, e.g. "Claude Sonnet, by Anthropic". Optional.
+	Model string
 }
 
 // System returns the system prompt for p.
@@ -41,6 +44,7 @@ func System(p Persona) (string, error) {
 		OwnerAbout:    strings.TrimSpace(p.OwnerAbout),
 		Persona:       strings.TrimSpace(p.Persona),
 		Language:      LanguageName(p.Language),
+		Model:         strings.TrimSpace(p.Model),
 	}
 
 	var b strings.Builder

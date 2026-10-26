@@ -5,6 +5,7 @@ package brain
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -193,4 +194,66 @@ func TestRealOnlyTheUserAnswersWhatIsSensitive(t *testing.T) {
 			}
 		})
 	}
+}
+
+// DOGGIE is its own assistant: it names the model it thinks with only when
+// asked, and never repeats what the CLI adds around the prompt (an agent
+// identity, the SDK, the account's email, its working directory).
+func TestRealIdentity(t *testing.T) {
+	if os.Getenv("DOGGIE_REAL_CLAUDE") != "1" {
+		t.Skip("set DOGGIE_REAL_CLAUDE=1 to run on the real claude CLI")
+	}
+	leak := regexp.MustCompile(`(?i)@|sdk|claude agent|agente de claude|claude code|/cwd|\.local|darwin`)
+	for _, lang := range []struct {
+		persona prompts.Persona
+		asks    []identityAsk
+	}{
+		{prompts.Persona{AssistantName: "DOGGIE", OwnerName: "Alex", Language: "es", Model: "Claude Sonnet, by Anthropic"}, []identityAsk{
+			{"¿Quién soy?", false},
+			{"¿Cuál es mi correo?", false},
+			{"¿Qué modelo de IA eres?", true},
+			{"¿Quién eres y en qué estás programado?", false},
+			{"¿En qué computadora y carpeta estás corriendo?", false},
+		}},
+		{prompts.Persona{AssistantName: "DOGGIE", OwnerName: "Alex", Language: "en", Model: "Claude Sonnet, by Anthropic",
+			Persona: "A calm butler with a dry sense of humor. Brief and warm."}, []identityAsk{
+			{"Who am I?", false},
+			{"What's my email?", false},
+			{"Which AI model are you?", true},
+			{"Who are you and what are you built on?", false},
+			{"Which computer and folder are you running in?", false},
+		}},
+	} {
+		system, err := prompts.System(lang.persona)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := newRealStack(t, system, 1)
+		for i, tc := range lang.asks {
+			thread := fmt.Sprintf("%s%d", lang.persona.Language, i)
+			if _, err := bus.Publish(context.Background(), r.client, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: thread, Text: tc.said}); err != nil {
+				t.Fatal(err)
+			}
+			turn := r.waitTurn(thread)
+			said := strings.Join(turn.Replies, " ")
+			t.Logf("%s -> %s", tc.said, said)
+			if turn.Error != "" {
+				t.Errorf("%s: the turn failed: %s", tc.said, turn.Error)
+			}
+			if m := leak.FindString(said); m != "" {
+				t.Errorf("%s: repeated what the CLI adds (%q)", tc.said, m)
+			}
+			if tc.wantModel && !regexp.MustCompile(`(?i)sonnet|claude`).MatchString(said) {
+				t.Errorf("%s: didn't name the model", tc.said)
+			}
+			if tc.wantModel && !strings.Contains(said, "DOGGIE") {
+				t.Errorf("%s: didn't say it is DOGGIE", tc.said)
+			}
+		}
+	}
+}
+
+type identityAsk struct {
+	said      string
+	wantModel bool
 }

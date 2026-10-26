@@ -742,8 +742,8 @@ func (c *chatState) turn(ev bus.Event[events.BrainTurnData]) bool {
 		}
 	}
 	c.warned = false
-	if ev.Data.Error != "" {
-		c.view.note("· the turn failed: " + ev.Data.Error)
+	if why := failure(ev.Data); why != "" {
+		c.view.note("· the turn failed: " + why)
 	}
 	return true
 }

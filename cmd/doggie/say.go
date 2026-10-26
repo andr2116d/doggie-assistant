@@ -136,8 +136,8 @@ func say(ctx context.Context, conn *bus.Conn, w io.Writer, text string, o sayOpt
 			if ev.Data.ThreadID != o.thread {
 				continue
 			}
-			if ev.Data.Error != "" {
-				fmt.Fprintf(w, "doggie: the turn failed: %s\n", ev.Data.Error)
+			if why := failure(ev.Data); why != "" {
+				fmt.Fprintf(w, "doggie: the turn failed: %s\n", why)
 			}
 			if slices.ContainsFunc(ev.Data.Inputs, func(in events.TurnInput) bool { return in.EventID == meta.ID }) {
 				answered = true

@@ -170,3 +170,24 @@ func TestChatReadsTheHistoryFromTheLog(t *testing.T) {
 		t.Errorf("printed:\n%s", out)
 	}
 }
+
+// A failure DOGGIE told itself needs no note; the others are told in a few
+// words, or with the error when it says something only it can.
+func TestFailureNotes(t *testing.T) {
+	for _, tc := range []struct {
+		turn events.BrainTurnData
+		want string
+	}{
+		{events.BrainTurnData{}, ""},
+		{events.BrainTurnData{Failure: events.FailureOther}, ""},
+		{events.BrainTurnData{Error: "llm: usage limit reached: You've hit your session limit", Failure: events.FailureUsageLimit}, ""},
+		{events.BrainTurnData{Error: "llm: turn timed out", Failure: events.FailureTimeout}, "it took too long"},
+		{events.BrainTurnData{Error: "llm: tools", Failure: events.FailureNoTools}, "DOGGIE's tools didn't answer"},
+		{events.BrainTurnData{Error: "claudecode: Please run /login", Failure: events.FailureOther}, "claudecode: Please run /login"},
+		{events.BrainTurnData{Error: "logged before failures had kinds"}, "logged before failures had kinds"},
+	} {
+		if got := failure(tc.turn); got != tc.want {
+			t.Errorf("failure(%+v) = %q, want %q", tc.turn, got, tc.want)
+		}
+	}
+}

@@ -136,8 +136,8 @@ func (c *chatState) turnLines(t events.BrainTurnData) []string {
 			lines = append(lines, "doggie> "+r)
 		}
 	}
-	if t.Error != "" {
-		lines = append(lines, "· the turn failed: "+t.Error)
+	if why := failure(t); why != "" {
+		lines = append(lines, "· the turn failed: "+why)
 	}
 	return lines
 }
@@ -167,4 +167,18 @@ func ago(d time.Duration) string {
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
 	return age(max(d, 0))
+}
+
+// failure tells why a turn failed, or "" if it didn't or DOGGIE said why
+// itself.
+func failure(t events.BrainTurnData) string {
+	switch {
+	case t.Error == "" || t.Failure == events.FailureUsageLimit:
+		return ""
+	case t.Failure == events.FailureTimeout:
+		return "it took too long"
+	case t.Failure == events.FailureNoTools:
+		return "DOGGIE's tools didn't answer"
+	}
+	return t.Error
 }

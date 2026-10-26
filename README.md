@@ -22,7 +22,8 @@ DOGGIE talks with you, runs many tasks in parallel without blocking the conversa
 - **Locked-down LLM.** The LLM has no shell, files or web. It can only use DOGGIE's tools, and each one declares a risk level that the code enforces, not the prompt.
 - **Event bus.** An embedded NATS server with a persistent event log (7 days by default), TLS from DOGGIE's own CA and token auth. Every component talks only over the bus.
 - **Restarts lose nothing.** Interrupted tasks are reported as failed, and sentences a restart left unanswered are answered after it.
-- **Satellites.** Other processes or machines (a voice satellite, a chat bridge) connect with their own token, and each may only speak for its own channels.
+- **Satellites.** Other processes or machines (a voice satellite, a chat bridge, a box that controls the lights) connect with their own token. Each may only speak for its own channels and run its own kinds of tasks.
+- **Tasks in order.** Workers report to the task manager, which alone publishes task events: they are always in order, and no one can report on a task they don't run.
 
 ## Requirements
 
@@ -149,16 +150,17 @@ doggie events -since 10m
 
 ### Satellites
 
-A satellite gets its own token and may only speak for its channels. The token is shown once and saved for this machine:
+A satellite gets its own token and may only speak for its channels and run its kinds of tasks, as a worker named after it. The token is shown once and saved for this machine:
 
 ```sh
 doggie satellite add -channel voice:kitchen kitchen
+doggie satellite add -kind lights.set -kind lights.off lights
 doggie satellite list
 doggie say -as kitchen -channel voice:kitchen "Hello from the kitchen"
 doggie satellite remove kitchen
 ```
 
-A running DOGGIE applies the changes within seconds, without a restart. The shared token, used by `say`, `task` and `events` by default, may only speak for the `terminal` channel.
+A running DOGGIE applies the changes within seconds, without a restart. The shared token, used by `say`, `task` and `events` by default, may only speak for the `terminal` channel, and runs no tasks.
 
 ### Where things live
 

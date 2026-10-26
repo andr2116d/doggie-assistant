@@ -2,9 +2,11 @@
 // state of every task.
 //
 // It serves the task commands (start, cancel, answer, list, get), dispatches
-// each task to a worker of its kind, follows the workers' events, enforces
-// timeouts and cancels subtasks with their parent. On start it rebuilds its
-// state from the event log and fails the tasks a restart interrupted.
+// each task to a worker of its kind, takes the reports of the worker that
+// accepted it, enforces timeouts and cancels subtasks with their parent. It
+// is the only one that publishes task events, so they are logged in the
+// order it applied them. On start it rebuilds its state from the event log
+// and fails the tasks a restart interrupted.
 //
 // The manager is an actor: all state lives in the Run goroutine. Slow work
 // (round trips to workers) runs in goroutines that send their outcome back to
@@ -13,7 +15,9 @@ package manager
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -79,11 +83,14 @@ type Manager struct {
 	timers    map[string]*time.Timer
 	timeouts  chan string
 	results   chan func()
-	seen      map[string]bool            // event IDs applied during recovery
-	answering map[string]bool            // tasks with an answer being delivered
-	lastBeat  map[string]time.Time       // last sign of life of each active task
-	secrets   map[string]json.RawMessage // results of sensitive tasks, reported before their redacted task.done
+	answering map[string]bool      // tasks with an answer being delivered
+	lastBeat  map[string]time.Time // last sign of life of each active task
+	claims    map[string]string    // what each task being dispatched is accepted with
 }
+
+// maxResult bounds a task's result: the task.done that carries it must fit
+// in one message, with room for the envelope.
+const maxResult = 900 << 10
 
 // withDefaults fills zero fields with the defaults and keeps MaxTimeout
 // within Retention.
@@ -129,10 +136,9 @@ func (m *Manager) reset() {
 	m.tasks = make(map[string]*task.Task)
 	m.next = 0
 	m.timers = make(map[string]*time.Timer)
-	m.seen = make(map[string]bool)
 	m.answering = make(map[string]bool)
 	m.lastBeat = make(map[string]time.Time)
-	m.secrets = make(map[string]json.RawMessage)
+	m.claims = make(map[string]string)
 }
 
 // Name implements supervisor.Component.
@@ -143,11 +149,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	m.reset()
 	defer m.stopTimers()
 
-	// Subscribe before reading the log, so no event falls in between.
-	live, err := bus.SubscribeEnvelopes(ctx, m.conn, "task.>")
-	if err != nil {
-		return err
-	}
+	// Only the manager publishes task events, so the log holds them all.
 	if err := m.recover(ctx); err != nil {
 		return err
 	}
@@ -176,11 +178,28 @@ func (m *Manager) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	reports, err := bus.Serve(ctx, m.conn, events.ReportResult)
+	// Every worker reports under its own name, which the bus enforces.
+	accepts, err := bus.ServeUnder(ctx, m.conn, events.WorkerAccept)
 	if err != nil {
 		return err
 	}
-	beats, err := bus.SubscribeSignal(ctx, m.conn, events.TaskAlive)
+	progresses, err := bus.ServeUnder(ctx, m.conn, events.WorkerProgress)
+	if err != nil {
+		return err
+	}
+	asks, err := bus.ServeUnder(ctx, m.conn, events.WorkerAsk)
+	if err != nil {
+		return err
+	}
+	dones, err := bus.ServeUnder(ctx, m.conn, events.WorkerDone)
+	if err != nil {
+		return err
+	}
+	failures, err := bus.ServeUnder(ctx, m.conn, events.WorkerFailed)
+	if err != nil {
+		return err
+	}
+	beats, err := bus.SubscribeSignalUnder(ctx, m.conn, events.TaskAlive)
 	if err != nil {
 		return err
 	}
@@ -193,11 +212,6 @@ func (m *Manager) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case env, ok := <-live:
-			if !ok {
-				return ctx.Err()
-			}
-			m.onEvent(ctx, env)
 		case in, ok := <-starts:
 			if !ok {
 				return ctx.Err()
@@ -236,16 +250,38 @@ func (m *Manager) Run(ctx context.Context) error {
 			} else {
 				in.Reply(t.Info())
 			}
-		case in, ok := <-reports:
+		case in, ok := <-accepts:
 			if !ok {
 				return ctx.Err()
 			}
-			m.report(in)
+			m.accept(ctx, in)
+		case in, ok := <-progresses:
+			if !ok {
+				return ctx.Err()
+			}
+			m.progress(ctx, in)
+		case in, ok := <-asks:
+			if !ok {
+				return ctx.Err()
+			}
+			m.ask(ctx, in)
+		case in, ok := <-dones:
+			if !ok {
+				return ctx.Err()
+			}
+			m.done(ctx, in)
+		case in, ok := <-failures:
+			if !ok {
+				return ctx.Err()
+			}
+			m.failed(ctx, in)
 		case beat, ok := <-beats:
 			if !ok {
 				return ctx.Err()
 			}
-			m.alive(beat.TaskID)
+			if t, ok := m.tasks[beat.Data.TaskID]; ok && t.Info().Worker == beat.Under {
+				m.alive(t.ID())
+			}
 		case <-liveness.C:
 			m.checkLiveness(ctx)
 		case id := <-m.timeouts:
@@ -266,7 +302,6 @@ func (m *Manager) recover(ctx context.Context) error {
 		return fmt.Errorf("tasks: recover: %w", err)
 	}
 	for _, env := range history {
-		m.seen[env.ID] = true
 		m.apply(env)
 	}
 	// IDs must never be reused, even when the last task is older than the
@@ -293,72 +328,39 @@ func (m *Manager) recover(ctx context.Context) error {
 	return nil
 }
 
-// onEvent applies a live event. The manager's own events were applied when
-// they were published, and events read during recovery were applied then.
-func (m *Manager) onEvent(ctx context.Context, env bus.Envelope) {
-	if env.Source == m.conn.Name() {
-		return
-	}
-	if m.seen[env.ID] {
-		delete(m.seen, env.ID)
-		return
-	}
-	t := m.apply(env)
-	if t == nil {
-		return
-	}
-	m.alive(t.ID())
-	if t.Status().Terminal() {
-		m.finished(ctx, t, "")
-	}
-}
-
-// apply folds one event into the state and returns the task it changed, or
-// nil if it changed nothing.
-func (m *Manager) apply(env bus.Envelope) *task.Task {
+// apply folds one logged event into the state.
+func (m *Manager) apply(env bus.Envelope) {
 	if env.Type == events.TaskCreated.Type() {
 		ev, err := bus.Decode(env, events.TaskCreated)
 		if err != nil {
 			m.log.Warn("ignoring task event", "type", env.Type, "err", err)
-			return nil
+			return
 		}
 		if _, exists := m.tasks[ev.Data.ID]; exists {
-			return nil
+			return
 		}
 		t := task.FromInfo(ev.Data)
 		m.tasks[t.ID()] = t
 		if n, ok := idNumber(t.ID()); ok && n > m.next {
 			m.next = n
 		}
-		return t
+		return
 	}
 
 	id, err := task.EventTaskID(env)
 	if err != nil {
 		m.log.Warn("ignoring task event", "type", env.Type, "err", err)
-		return nil
+		return
 	}
 	t, ok := m.tasks[id]
 	if !ok {
 		m.log.Debug("ignoring event for unknown task", "type", env.Type, "task", id)
-		return nil
+		return
 	}
-	wasTerminal := t.Status().Terminal()
 	if err := t.Apply(env); err != nil {
-		// Typically a late event, e.g. "done" after a cancellation.
+		// An event that doesn't fit the task's state changes nothing.
 		m.log.Debug("ignoring task event", "type", env.Type, "task", id, "err", err)
-		return nil
 	}
-	if env.Type == events.TaskDone.Type() {
-		if result, ok := m.secrets[id]; ok {
-			t.SetResult(result)
-			delete(m.secrets, id)
-		}
-	}
-	if wasTerminal {
-		return nil
-	}
-	return t
 }
 
 func (m *Manager) start(ctx context.Context, in bus.Incoming[events.TaskSpec, events.TaskRef]) {
@@ -404,6 +406,10 @@ func (m *Manager) start(ctx context.Context, in bus.Incoming[events.TaskSpec, ev
 
 	info := t.Info()
 	info.HeartbeatMS = int(m.opts.HeartbeatInterval / time.Millisecond)
+	// Only a worker that got the run request can accept the task: task IDs
+	// are easy to guess.
+	info.Claim = newClaim()
+	m.claims[id] = info.Claim
 	go func() {
 		rctx, cancel := context.WithTimeout(ctx, m.opts.DispatchTimeout)
 		defer cancel()
@@ -412,40 +418,161 @@ func (m *Manager) start(ctx context.Context, in bus.Incoming[events.TaskSpec, ev
 	}()
 }
 
-// dispatched handles the worker's answer to a run request.
+// dispatched handles the worker's answer to a run request. A worker
+// accepts the task (WorkerAccept) before it answers, so by now the task
+// runs, unless it ended meanwhile.
 func (m *Manager) dispatched(ctx context.Context, in bus.Incoming[events.TaskSpec, events.TaskRef], id string, err error) {
+	delete(m.claims, id)
 	t, ok := m.tasks[id]
 	if !ok { // a callback from before a restart
 		in.Fail(fmt.Errorf("unknown task %q", id))
 		return
 	}
-	if err != nil {
-		reason := fmt.Sprintf("dispatch failed: %v", err)
-		if errors.Is(err, bus.ErrNoHandler) {
-			reason = fmt.Sprintf("no worker for task kind %q", t.Info().Kind)
-		} else {
-			// The worker may have accepted the task and only the reply got
-			// lost: make sure it doesn't keep running an orphan.
-			m.controlWorker(ctx, t, events.TaskControl{Action: events.ControlCancel, Reason: reason})
-		}
-		if !t.Status().Terminal() {
-			m.fail(ctx, t, reason)
-		}
-		in.Fail(errors.New(reason))
+	if t.Status().Terminal() {
+		// Cancelled or timed out meanwhile, and so refused to its worker:
+		// it exists, and its events tell how it ended.
+		in.Reply(events.TaskRef{TaskID: id})
 		return
 	}
+	reason := ""
 	switch {
+	case errors.Is(err, bus.ErrNoHandler):
+		reason = fmt.Sprintf("no worker for task kind %q", t.Info().Kind)
+	case err != nil:
+		reason = fmt.Sprintf("dispatch failed: %v", err)
+		// The worker may have accepted the task and only the reply got
+		// lost: make sure it doesn't keep running an orphan.
+		m.controlWorker(ctx, t, events.TaskControl{Action: events.ControlCancel, Reason: reason})
 	case t.Status() == events.StatusPending:
-		if err := t.Start(time.Now().UTC()); err == nil {
-			publish(ctx, m, events.TaskRunning, events.TaskRef{TaskID: id})
-		}
-		m.alive(id)
-	case t.Status().Terminal():
-		// Cancelled or timed out while the worker was accepting it: make
-		// sure the worker stops.
-		m.controlWorker(ctx, t, events.TaskControl{Action: events.ControlCancel, Reason: t.Info().Error})
+		reason = "the worker didn't accept the task"
 	}
-	in.Reply(events.TaskRef{TaskID: id})
+	if reason == "" {
+		in.Reply(events.TaskRef{TaskID: id})
+		return
+	}
+	if !t.Status().Terminal() {
+		m.fail(ctx, t, reason)
+	}
+	in.Fail(errors.New(reason))
+}
+
+// accept gives a task to the worker that received its run request.
+func (m *Manager) accept(ctx context.Context, in bus.Incoming[events.TaskClaim, events.Ack]) {
+	worker := in.Under()
+	t, err := m.lookup(in.Req.TaskID)
+	claim, dispatching := m.claims[in.Req.TaskID]
+	switch {
+	case err != nil:
+		in.Fail(err)
+	case !dispatching || subtle.ConstantTimeCompare([]byte(claim), []byte(in.Req.Claim)) != 1:
+		in.Fail(fmt.Errorf("task %s: no such run request", t.ID()))
+	case t.Status() != events.StatusPending:
+		// Cancelled or timed out meanwhile, or taken by another worker.
+		in.Fail(fmt.Errorf("task %s is %s", t.ID(), t.Status()))
+	default:
+		if err := t.Accept(worker, time.Now().UTC()); err != nil {
+			in.Fail(err)
+			return
+		}
+		delete(m.claims, t.ID())
+		publish(ctx, m, events.TaskRunning, events.TaskRunningData{TaskID: t.ID(), Worker: worker})
+		m.alive(t.ID())
+		in.Reply(events.Ack{})
+	}
+}
+
+// reporting returns the task a worker reports on, if it is the one running
+// it. A report on a task waiting for an answer that is being delivered means
+// the worker got the answer and goes on, though the manager hasn't heard
+// back from it yet: the task runs again.
+func (m *Manager) reporting(ctx context.Context, worker, id string) (*task.Task, error) {
+	t, err := m.lookup(id)
+	switch {
+	case err != nil:
+		return nil, err
+	case t.Info().Worker != worker:
+		return nil, fmt.Errorf("task %s is not run by %s", id, worker)
+	case t.Status().Terminal():
+		return nil, fmt.Errorf("task %s is already %s", id, t.Status())
+	}
+	if t.Status() == events.StatusWaitingInput && m.answering[id] {
+		if err := t.Start(time.Now().UTC()); err == nil {
+			publish(ctx, m, events.TaskRunning, events.TaskRunningData{TaskID: id})
+		}
+	}
+	m.alive(id)
+	return t, nil
+}
+
+func (m *Manager) progress(ctx context.Context, in bus.Incoming[events.TaskProgressData, events.Ack]) {
+	t, err := m.reporting(ctx, in.Under(), in.Req.TaskID)
+	if err == nil {
+		err = t.Progress(in.Req.Message, in.Req.Percent, time.Now().UTC())
+	}
+	if err != nil {
+		in.Fail(err)
+		return
+	}
+	info := t.Info()
+	publish(ctx, m, events.TaskProgress, events.TaskProgressData{TaskID: info.ID, Message: info.Progress, Percent: info.Percent})
+	in.Reply(events.Ack{})
+}
+
+func (m *Manager) ask(ctx context.Context, in bus.Incoming[events.TaskNeedsInputData, events.Ack]) {
+	t, err := m.reporting(ctx, in.Under(), in.Req.TaskID)
+	if err == nil {
+		err = t.Ask(in.Req.Question, in.Req.Options, time.Now().UTC())
+	}
+	if err != nil {
+		in.Fail(err)
+		return
+	}
+	publish(ctx, m, events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: t.ID(), Question: in.Req.Question, Options: in.Req.Options})
+	in.Reply(events.Ack{})
+}
+
+func (m *Manager) done(ctx context.Context, in bus.Incoming[events.TaskDoneData, events.Ack]) {
+	if len(in.Req.Result) > maxResult {
+		in.Fail(fmt.Errorf("result too large: %d bytes, at most %d", len(in.Req.Result), maxResult))
+		return
+	}
+	t, err := m.reporting(ctx, in.Under(), in.Req.TaskID)
+	if err == nil {
+		err = t.Finish(in.Req.Result, time.Now().UTC())
+	}
+	if err != nil {
+		in.Fail(err)
+		return
+	}
+	logged := events.TaskDoneData{TaskID: t.ID(), Result: in.Req.Result}
+	if t.Info().Sensitive {
+		// Kept in memory only, so it is gone after a restart.
+		logged = events.TaskDoneData{TaskID: t.ID(), Redacted: true}
+	}
+	publish(ctx, m, events.TaskDone, logged)
+	m.finished(ctx, t, "")
+	in.Reply(events.Ack{})
+}
+
+func (m *Manager) failed(ctx context.Context, in bus.Incoming[events.TaskFailedData, events.Ack]) {
+	t, err := m.reporting(ctx, in.Under(), in.Req.TaskID)
+	if err != nil {
+		in.Fail(err)
+		return
+	}
+	reason := in.Req.Error
+	if reason == "" {
+		reason = "failed"
+	}
+	m.fail(ctx, t, reason)
+	in.Reply(events.Ack{})
+}
+
+// newClaim returns a secret that can't be guessed.
+func newClaim() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // cancel serves a cancellation. channel is where a person asked for it
@@ -498,11 +625,11 @@ func (m *Manager) answer(ctx context.Context, in bus.Incoming[events.TaskAnswer,
 		return
 	}
 	m.answering[id] = true
-	askedAt := t.Info().UpdatedAt
+	askedAt, worker := t.Info().UpdatedAt, t.Info().Worker
 	go func() {
 		rctx, cancel := context.WithTimeout(ctx, controlTimeout)
 		defer cancel()
-		_, err := bus.Request(rctx, m.conn, events.ControlTask.With(id), events.TaskControl{
+		_, err := bus.Request(rctx, m.conn, events.ControlTask.With(worker, id), events.TaskControl{
 			Action: events.ControlAnswer, Answer: in.Req.Answer,
 		})
 		m.do(ctx, func() { m.answered(ctx, in, id, askedAt, err) })
@@ -534,7 +661,7 @@ func (m *Manager) answered(ctx context.Context, in bus.Incoming[events.TaskAnswe
 		// next one, which must stay visible.
 		if t.Status() == events.StatusWaitingInput && t.Info().UpdatedAt.Equal(askedAt) {
 			if err := t.Start(time.Now().UTC()); err == nil {
-				publish(ctx, m, events.TaskRunning, events.TaskRef{TaskID: id})
+				publish(ctx, m, events.TaskRunning, events.TaskRunningData{TaskID: id})
 			}
 		}
 		in.Reply(events.Ack{})
@@ -559,24 +686,6 @@ func (m *Manager) checkLiveness(ctx context.Context) {
 		}
 		m.fail(ctx, t, fmt.Sprintf("worker stopped responding: no heartbeat for %s", time.Since(last).Round(time.Millisecond)))
 		m.controlWorker(ctx, t, events.TaskControl{Action: events.ControlCancel, Reason: "no heartbeat"})
-	}
-}
-
-// report stores the result of a sensitive task until its redacted
-// task.done arrives.
-func (m *Manager) report(in bus.Incoming[events.TaskDoneData, events.Ack]) {
-	t, err := m.lookup(in.Req.TaskID)
-	switch {
-	case err != nil:
-		in.Fail(err)
-	case !t.Info().Sensitive:
-		in.Fail(fmt.Errorf("task %s is not sensitive: publish its result in task.done", t.ID()))
-	case t.Status().Terminal():
-		in.Fail(fmt.Errorf("task %s is already %s", t.ID(), t.Status()))
-	default:
-		m.secrets[t.ID()] = in.Req.Result
-		m.alive(t.ID())
-		in.Reply(events.Ack{})
 	}
 }
 
@@ -607,7 +716,6 @@ func (m *Manager) finished(ctx context.Context, t *task.Task, channel string) {
 		delete(m.timers, t.ID())
 	}
 	delete(m.lastBeat, t.ID())
-	delete(m.secrets, t.ID())
 	if t.Status() == events.StatusDone {
 		return
 	}
@@ -619,13 +727,17 @@ func (m *Manager) finished(ctx context.Context, t *task.Task, channel string) {
 }
 
 // controlWorker sends a control command to the worker running t without
-// blocking the loop. Missing workers are expected (e.g. after a restart).
+// blocking the loop. Missing workers are expected (e.g. after a restart). A
+// task no worker accepted has nobody to tell.
 func (m *Manager) controlWorker(ctx context.Context, t *task.Task, c events.TaskControl) {
-	id := t.ID()
+	id, worker := t.ID(), t.Info().Worker
+	if worker == "" {
+		return
+	}
 	go func() {
 		rctx, cancel := context.WithTimeout(ctx, controlTimeout)
 		defer cancel()
-		_, err := bus.Request(rctx, m.conn, events.ControlTask.With(id), c)
+		_, err := bus.Request(rctx, m.conn, events.ControlTask.With(worker, id), c)
 		if err != nil && !errors.Is(err, bus.ErrNoHandler) && ctx.Err() == nil {
 			m.log.Debug("control worker", "task", id, "action", c.Action, "err", err)
 		}
@@ -693,10 +805,8 @@ func (m *Manager) list(req events.TaskListRequest) events.TaskList {
 	return out
 }
 
-// prune forgets finished tasks older than the retention period, and the
-// recovery dedup set: duplicates arrive right after recovery, not hours later.
+// prune forgets finished tasks older than the retention period.
 func (m *Manager) prune() {
-	clear(m.seen)
 	cutoff := time.Now().Add(-m.opts.Retention)
 	for id, t := range m.tasks {
 		if t.Status().Terminal() && t.Info().UpdatedAt.Before(cutoff) {

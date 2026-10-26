@@ -31,7 +31,7 @@ func TestSilentWorkerFailsTheTask(t *testing.T) {
 			}
 			c.Reply(events.Ack{})
 		})
-		in.Reply(events.Ack{}) // accepts, then dies: never beats again
+		f.accept(in) // accepts, then dies: never beats again
 	})
 
 	id := h.mustStart(events.TaskSpec{Kind: "test.dies"})
@@ -67,5 +67,31 @@ func TestWaitingTaskStaysAlive(t *testing.T) {
 	time.Sleep(500 * time.Millisecond) // nobody answers for a while
 	if info := h.get(id); info.Status != events.StatusWaitingInput {
 		t.Fatalf("a task waiting for its user was failed: %s (%q)", info.Status, info.Error)
+	}
+}
+
+// Beats from anyone but the task's worker don't keep it alive.
+func TestOthersBeatsDontKeepATaskAlive(t *testing.T) {
+	h := newHarness(t, fastBeats(), nil)
+	f := newFakeWorker(h)
+	f.serveRuns("test.dies", func(in bus.Incoming[events.TaskInfo, events.Ack]) {
+		f.accept(in) // and dies
+	})
+	impostor := connect(t, h.srv, "impostor")
+	id := h.mustStart(events.TaskSpec{Kind: "test.dies"})
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(10 * time.Millisecond):
+				bus.Emit(impostor, events.TaskAlive.With(impostor.Identity()), events.TaskAliveData{TaskID: id})
+			}
+		}
+	}()
+	if info := h.waitStatus(id, events.StatusFailed); !strings.Contains(info.Error, "no heartbeat") {
+		t.Errorf("Error = %q, want a heartbeat failure", info.Error)
 	}
 }

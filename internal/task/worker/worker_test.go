@@ -17,7 +17,7 @@ import (
 func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // setup starts a bus and returns a worker connection and a client connection
-// that plays the task manager.
+// that plays the task manager: it accepts every claim.
 func setup(t *testing.T) (workerConn, client *bus.Conn) {
 	t.Helper()
 	srv, err := bus.Start(context.Background(), bus.Options{
@@ -35,21 +35,46 @@ func setup(t *testing.T) (workerConn, client *bus.Conn) {
 		t.Cleanup(func() { c.Close() })
 		return c
 	}
-	return connect("worker"), connect("manager")
-}
-
-func failures(t *testing.T, ctx context.Context, c *bus.Conn) <-chan bus.Event[events.TaskFailedData] {
-	t.Helper()
-	ch, err := bus.Subscribe(ctx, c, events.TaskFailed)
+	w, m := connect("worker"), connect("manager")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	accepts, err := bus.ServeUnder(ctx, m, events.WorkerAccept)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ch
+	go func() {
+		for in := range accepts {
+			if in.Under() != "worker" || in.Req.Claim != "claim-"+in.Req.TaskID {
+				in.Fail(errors.New("bad claim"))
+				continue
+			}
+			in.Reply(events.Ack{})
+		}
+	}()
+	return w, m
+}
+
+// failures returns the failures workers report to the manager played by c.
+func failures(t *testing.T, ctx context.Context, c *bus.Conn) <-chan events.TaskFailedData {
+	t.Helper()
+	in, err := bus.ServeUnder(ctx, c, events.WorkerFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make(chan events.TaskFailedData, 8)
+	go func() {
+		for r := range in {
+			r.Reply(events.Ack{})
+			out <- r.Req
+		}
+	}()
+	return out
 }
 
 func sendRun(t *testing.T, c *bus.Conn, kind string, info events.TaskInfo) {
 	t.Helper()
 	info.Kind = kind
+	info.Claim = "claim-" + info.ID
 	if _, err := bus.Request(context.Background(), c, events.RunTask.With(kind), info); err != nil {
 		t.Fatalf("run %s: %v", kind, err)
 	}
@@ -84,8 +109,8 @@ func TestStoppingTheWorkerFailsRunningTasks(t *testing.T) {
 
 	select {
 	case ev := <-failed:
-		if ev.Data.TaskID != "t1" || ev.Data.Error != "worker stopped" {
-			t.Errorf("failure = %+v, want t1 worker stopped", ev.Data)
+		if ev.TaskID != "t1" || ev.Error != "worker stopped" {
+			t.Errorf("failure = %+v, want t1 worker stopped", ev)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no failure published for the interrupted task")
@@ -104,8 +129,8 @@ func TestDeadlineFailsAsTimedOut(t *testing.T) {
 	sendRun(t, client, "test.block", events.TaskInfo{ID: "t1", Deadline: time.Now().Add(100 * time.Millisecond)})
 	select {
 	case ev := <-failed:
-		if ev.Data.Error != "timed out" {
-			t.Errorf("Error = %q, want timed out", ev.Data.Error)
+		if ev.Error != "timed out" {
+			t.Errorf("Error = %q, want timed out", ev.Error)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("task past its deadline did not fail")
@@ -121,12 +146,12 @@ func TestAnswerWithoutQuestionIsRejected(t *testing.T) {
 	}
 	sendRun(t, client, "test.block", events.TaskInfo{ID: "t1"})
 
-	_, err := bus.Request(ctx, client, events.ControlTask.With("t1"), events.TaskControl{Action: events.ControlAnswer, Answer: "x"})
+	_, err := bus.Request(ctx, client, events.ControlTask.With("worker", "t1"), events.TaskControl{Action: events.ControlAnswer, Answer: "x"})
 	var remote *bus.RemoteError
 	if !errors.As(err, &remote) || !strings.Contains(remote.Message, "not waiting for input") {
 		t.Fatalf("err = %v, want not waiting for input", err)
 	}
-	_, err = bus.Request(ctx, client, events.ControlTask.With("t1"), events.TaskControl{Action: "explode"})
+	_, err = bus.Request(ctx, client, events.ControlTask.With("worker", "t1"), events.TaskControl{Action: "explode"})
 	if !errors.As(err, &remote) {
 		t.Fatalf("unknown action: err = %v, want a RemoteError", err)
 	}
@@ -151,8 +176,8 @@ func TestInvalidInputFailsTheTask(t *testing.T) {
 	sendRun(t, client, "test.typed", events.TaskInfo{ID: "t1", TaskSpec: events.TaskSpec{Input: json.RawMessage(`{"seconds":"five"}`)}})
 	select {
 	case ev := <-failed:
-		if !strings.Contains(ev.Data.Error, "invalid input for test.typed") {
-			t.Errorf("Error = %q", ev.Data.Error)
+		if !strings.Contains(ev.Error, "invalid input for test.typed") {
+			t.Errorf("Error = %q", ev.Error)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("task with invalid input did not fail")
@@ -175,8 +200,8 @@ func TestOversizedResultFailsTheTask(t *testing.T) {
 	sendRun(t, client, "test.huge", events.TaskInfo{ID: "t1"})
 	select {
 	case ev := <-failed:
-		if !strings.Contains(ev.Data.Error, "publish result") {
-			t.Errorf("Error = %q, want a publish failure", ev.Data.Error)
+		if !strings.Contains(ev.Error, "report the result") {
+			t.Errorf("Error = %q, want a failure to report it", ev.Error)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("task with an oversized result was left running")
@@ -187,7 +212,7 @@ func TestWorkerBeatsWhileTheTaskRuns(t *testing.T) {
 	w, client := setup(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	beats, err := bus.SubscribeSignal(ctx, client, events.TaskAlive)
+	beats, err := bus.SubscribeSignalUnder(ctx, client, events.TaskAlive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,8 +230,8 @@ func TestWorkerBeatsWhileTheTaskRuns(t *testing.T) {
 	for range 3 {
 		select {
 		case b := <-beats:
-			if b.TaskID != "t1" {
-				t.Errorf("beat for %q", b.TaskID)
+			if b.Data.TaskID != "t1" || b.Under != "worker" {
+				t.Errorf("beat %+v, want t1 from worker", b)
 			}
 		case <-time.After(time.Second):
 			t.Fatal("no heartbeat while the task runs")

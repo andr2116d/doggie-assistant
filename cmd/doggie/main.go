@@ -143,7 +143,7 @@ func startBus(ctx context.Context, cfg config.Config, log *slog.Logger) (*bus.Se
 	opts := bus.Options{
 		Listen:               cfg.Bus.Listen,
 		Token:                token,
-		SatellitePermissions: events.SatellitePermissions(sharedChannels...),
+		SatellitePermissions: events.SatellitePermissions("", sharedChannels, nil),
 		Satellites:           busSatellites(satellites),
 		StoreDir:             filepath.Join(cfg.DataDir, "nats"),
 		MaxAge:               cfg.Bus.EventLog.MaxAge,

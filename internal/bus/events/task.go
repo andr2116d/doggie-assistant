@@ -12,6 +12,12 @@ import (
 // state of every task; workers (the components that know how to do things)
 // run them. Requesters get a task ID at once and follow the task through
 // its events.
+//
+// The manager is the only one that publishes task events, so a task's
+// events are in the order it applied them. Workers report to it with
+// commands under their own name (WorkerAccept and the rest), which the bus
+// only lets each worker use for itself: the manager takes a task's reports
+// only from the worker that accepted it.
 
 // TaskStatus is where a task is in its lifecycle.
 type TaskStatus string
@@ -65,9 +71,13 @@ type TaskInfo struct {
 	Options   []string        `json:"options,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
 	Error     string          `json:"error,omitempty"`
-	// HeartbeatMS tells the worker how often to send TaskAlive. It is set on
-	// run requests only.
-	HeartbeatMS int `json:"heartbeat_ms,omitempty"`
+	// Worker is who accepted the task, as the bus knows it.
+	Worker string `json:"worker,omitempty"`
+	// HeartbeatMS tells the worker how often to send TaskAlive, and Claim is
+	// what it accepts the task with (see WorkerAccept). They are set on run
+	// requests only.
+	HeartbeatMS int    `json:"heartbeat_ms,omitempty"`
+	Claim       string `json:"claim,omitempty"`
 }
 
 // TaskRef identifies a task.
@@ -95,7 +105,7 @@ type TaskDoneData struct {
 	TaskID string          `json:"task_id"`
 	Result json.RawMessage `json:"result,omitempty"`
 	// Redacted means the result of a sensitive task was left out of the
-	// event; the manager received it with ReportResult.
+	// event; only the manager keeps it.
 	Redacted bool `json:"redacted,omitempty"`
 }
 
@@ -104,10 +114,18 @@ type TaskAliveData struct {
 	TaskID string `json:"task_id"`
 }
 
-// TaskAlive is sent by workers for every task they run, every HeartbeatMS.
-// The manager fails tasks whose heartbeat stops. It is a signal, so beats
-// don't flood the event log.
+// TaskAlive is sent by workers for every task they run, every HeartbeatMS,
+// under their name: TaskAlive.With(worker). The manager fails tasks whose
+// heartbeat stops. It is a signal, so beats don't flood the event log.
 var TaskAlive = bus.NewSignal[TaskAliveData]("task.alive")
+
+// TaskRunningData says a task runs: its worker accepted it, or its question
+// was answered.
+type TaskRunningData struct {
+	TaskID string `json:"task_id"`
+	// Worker is who runs it, when it was just accepted.
+	Worker string `json:"worker,omitempty"`
+}
 
 // TaskFailedData explains why a task failed.
 type TaskFailedData struct {
@@ -125,12 +143,10 @@ type TaskCancelledData struct {
 	Channel string `json:"channel,omitempty"`
 }
 
-// Task events. The manager publishes created, running, cancelled and failed
-// (timeouts, missing workers, restarts). Workers publish progress,
-// needs_input, done and failed.
+// Task events, all published by the manager.
 var (
 	TaskCreated    = bus.NewSubject[TaskInfo]("task.created")
-	TaskRunning    = bus.NewSubject[TaskRef]("task.running")
+	TaskRunning    = bus.NewSubject[TaskRunningData]("task.running")
 	TaskProgress   = bus.NewSubject[TaskProgressData]("task.progress")
 	TaskNeedsInput = bus.NewSubject[TaskNeedsInputData]("task.needs_input")
 	TaskDone       = bus.NewSubject[TaskDoneData]("task.done")
@@ -175,9 +191,6 @@ var (
 	AnswerTask = bus.NewCommand[TaskAnswer, Ack]("task.answer")
 	ListTasks  = bus.NewCommand[TaskListRequest, TaskList]("task.list")
 	GetTask    = bus.NewCommand[TaskRef, TaskInfo]("task.get")
-	// ReportResult hands the manager the result of a sensitive task, outside
-	// the event log, before the worker publishes a redacted task.done.
-	ReportResult = bus.NewCommand[TaskDoneData, Ack]("task.result")
 	// CancelTaskFrom is CancelTask asked for by a person directly, on a
 	// channel: CancelTaskFrom.With(channel), see CancelTaskOn. The bus only
 	// lets each satellite use its own channels, and CancelTask is for
@@ -210,8 +223,34 @@ type TaskControl struct {
 
 // Commands served by workers. RunTask is served per kind
 // (RunTask.With(kind)), load-balanced across workers. ControlTask is served
-// per task (ControlTask.With(taskID)) by the worker running it.
+// per task by the worker running it: ControlTask.With(worker, taskID).
 var (
 	RunTask     = bus.NewCommand[TaskInfo, Ack]("task.run")
 	ControlTask = bus.NewCommand[TaskControl, Ack]("task.control")
+)
+
+// TaskClaim accepts a task: Claim is the one its run request carried, which
+// only the workers of its kind receive.
+type TaskClaim struct {
+	TaskID string `json:"task_id"`
+	Claim  string `json:"claim"`
+}
+
+// Commands a worker sends the manager about the tasks it runs, under its
+// own name: WorkerAccept.With(worker), and so on. The manager answers with
+// an error when the report no longer fits the task, e.g. it was cancelled:
+// the worker should stop.
+var (
+	// WorkerAccept takes a task the worker received, before it runs it.
+	WorkerAccept = bus.NewCommand[TaskClaim, Ack]("task.accept")
+	// WorkerProgress reports how a task is doing.
+	WorkerProgress = bus.NewCommand[TaskProgressData, Ack]("task.report.progress")
+	// WorkerAsk pauses a task with a question; the answer comes as a
+	// ControlTask.
+	WorkerAsk = bus.NewCommand[TaskNeedsInputData, Ack]("task.report.ask")
+	// WorkerDone finishes a task with its result. The result of a sensitive
+	// task stays out of the event log, in the manager's memory.
+	WorkerDone = bus.NewCommand[TaskDoneData, Ack]("task.report.done")
+	// WorkerFailed fails a task.
+	WorkerFailed = bus.NewCommand[TaskFailedData, Ack]("task.report.failed")
 )

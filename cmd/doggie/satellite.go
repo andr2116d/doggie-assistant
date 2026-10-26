@@ -25,12 +25,14 @@ import (
 )
 
 const satelliteUsage = `Usage:
-  doggie satellite add -channel <channel> [-channel ...] <name>
+  doggie satellite add [-channel <channel> ...] [-kind <kind> ...] <name>
   doggie satellite list
   doggie satellite remove <name>
 
 A satellite (a voice satellite, the WhatsApp bridge...) gets its own token,
-and the bus only lets it speak for its own channels. The token is shown once
+and the bus only lets it speak for its own channels and run its own kinds of
+tasks, as a worker named after it. It needs at least one of the two. The
+token is shown once
 and saved for this machine in $XDG_DATA_HOME/doggie/satellites/<name>.token;
 connect with -as <name> or DOGGIE_BUS_USER=<name> plus DOGGIE_BUS_TOKEN.
 A running DOGGIE applies changes within a few seconds: a removed satellite
@@ -48,10 +50,12 @@ var sharedChannels = []string{"terminal"}
 // satelliteEntry is a satellite in the registry. Only a hash of its token is
 // kept.
 type satelliteEntry struct {
-	Name      string    `json:"name"`
-	TokenHash string    `json:"token_hash"`
-	Channels  []string  `json:"channels"`
-	Added     time.Time `json:"added"`
+	Name      string   `json:"name"`
+	TokenHash string   `json:"token_hash"`
+	Channels  []string `json:"channels,omitempty"`
+	// Kinds are the task kinds it runs as a worker.
+	Kinds []string  `json:"kinds,omitempty"`
+	Added time.Time `json:"added"`
 }
 
 func satellitesFile(cfg config.Config) string {
@@ -82,12 +86,17 @@ func loadSatellites(path string) ([]satelliteEntry, error) {
 			return nil, fmt.Errorf("satellites: invalid or repeated name %q in %s", s.Name, path)
 		}
 		seen[s.Name] = true
-		if len(s.Channels) == 0 {
-			return nil, fmt.Errorf("satellites: %s has no channels", s.Name)
+		if len(s.Channels) == 0 && len(s.Kinds) == 0 {
+			return nil, fmt.Errorf("satellites: %s has no channels or kinds", s.Name)
 		}
 		for _, c := range s.Channels {
 			if !events.ValidChannel(c) {
 				return nil, fmt.Errorf("satellites: %s has an invalid channel %q", s.Name, c)
+			}
+		}
+		for _, k := range s.Kinds {
+			if !bus.ValidName(k) {
+				return nil, fmt.Errorf("satellites: %s has an invalid task kind %q", s.Name, k)
 			}
 		}
 	}
@@ -114,16 +123,31 @@ func saveSatellites(path string, list []satelliteEntry) error {
 func busSatellites(list []satelliteEntry) []bus.Satellite {
 	out := make([]bus.Satellite, 0, len(list))
 	for _, s := range list {
-		out = append(out, bus.Satellite{Name: s.Name, TokenHash: s.TokenHash, Permissions: events.SatellitePermissions(s.Channels...)})
+		out = append(out, bus.Satellite{Name: s.Name, TokenHash: s.TokenHash, Permissions: events.SatellitePermissions(s.Name, s.Channels, s.Kinds)})
 	}
 	return out
 }
 
-// channelFlags collects repeated -channel flags.
-type channelFlags []string
+// listFlags collects a repeated flag.
+type listFlags []string
 
-func (c *channelFlags) String() string     { return strings.Join(*c, ",") }
-func (c *channelFlags) Set(v string) error { *c = append(*c, v); return nil }
+func (c *listFlags) String() string     { return strings.Join(*c, ",") }
+func (c *listFlags) Set(v string) error { *c = append(*c, v); return nil }
+
+// sortedSet is list sorted, without repeats, and nil if empty.
+func sortedSet(list []string) []string {
+	if len(list) == 0 {
+		return nil
+	}
+	return slices.Compact(slices.Sorted(slices.Values(list)))
+}
+
+func orDash(list []string) string {
+	if len(list) == 0 {
+		return "-"
+	}
+	return strings.Join(list, ", ")
+}
 
 func satelliteCmd(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
@@ -136,9 +160,10 @@ func satelliteCmd(args []string, stdout io.Writer) error {
 	sub := args[0]
 	flags := flag.NewFlagSet("satellite "+sub, flag.ContinueOnError)
 	configPath := flags.String("config", "", "config file (default $XDG_CONFIG_HOME/doggie/config.yaml)")
-	var channels channelFlags
+	var channels, kinds listFlags
 	if sub == "add" {
 		flags.Var(&channels, "channel", "a channel the satellite speaks for (repeatable), e.g. voice:living_room")
+		flags.Var(&kinds, "kind", "a task kind the satellite runs as a worker (repeatable), e.g. lights.set")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -147,10 +172,10 @@ func satelliteCmd(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return satelliteSub(cfg, stdout, sub, flags.Args(), channels)
+	return satelliteSub(cfg, stdout, sub, flags.Args(), channels, kinds)
 }
 
-func satelliteSub(cfg config.Config, w io.Writer, sub string, args []string, channels []string) error {
+func satelliteSub(cfg config.Config, w io.Writer, sub string, args []string, channels, kinds []string) error {
 	path := satellitesFile(cfg)
 	list, err := loadSatellites(path)
 	if err != nil {
@@ -162,16 +187,16 @@ func satelliteSub(cfg config.Config, w io.Writer, sub string, args []string, cha
 			return errors.New("usage: doggie satellite list")
 		}
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "NAME\tCHANNELS\tADDED")
-		fmt.Fprintf(tw, "(shared token)\t%s\t\n", strings.Join(sharedChannels, ", "))
+		fmt.Fprintln(tw, "NAME\tCHANNELS\tKINDS\tADDED")
+		fmt.Fprintf(tw, "(shared token)\t%s\t-\t\n", strings.Join(sharedChannels, ", "))
 		for _, s := range list {
-			fmt.Fprintf(tw, "%s\t%s\t%s\n", s.Name, strings.Join(s.Channels, ", "), s.Added.Local().Format("2006-01-02 15:04"))
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", s.Name, orDash(s.Channels), orDash(s.Kinds), s.Added.Local().Format("2006-01-02 15:04"))
 		}
 		return tw.Flush()
 
 	case "add":
 		if len(args) != 1 {
-			return errors.New("usage: doggie satellite add -channel <channel> [-channel ...] <name>")
+			return errors.New("usage: doggie satellite add [-channel <channel> ...] [-kind <kind> ...] <name>")
 		}
 		name := args[0]
 		if !bus.ValidSatelliteName(name) {
@@ -180,12 +205,17 @@ func satelliteSub(cfg config.Config, w io.Writer, sub string, args []string, cha
 		if slices.ContainsFunc(list, func(s satelliteEntry) bool { return s.Name == name }) {
 			return fmt.Errorf("satellite %q already exists: remove it first to issue a new token", name)
 		}
-		if len(channels) == 0 {
-			return errors.New("a satellite needs at least one -channel")
+		if len(channels) == 0 && len(kinds) == 0 {
+			return errors.New("a satellite needs at least one -channel or -kind")
 		}
 		for _, c := range channels {
 			if _, err := events.UtteranceOn(c); err != nil {
 				return err
+			}
+		}
+		for _, k := range kinds {
+			if !bus.ValidName(k) {
+				return fmt.Errorf("invalid task kind %q", k)
 			}
 		}
 		token, err := newToken()
@@ -203,12 +233,12 @@ func satelliteSub(cfg config.Config, w io.Writer, sub string, args []string, cha
 		if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
 			return err
 		}
-		list = append(list, satelliteEntry{Name: name, TokenHash: hash, Channels: slices.Compact(slices.Sorted(slices.Values(channels))), Added: time.Now().UTC()})
+		list = append(list, satelliteEntry{Name: name, TokenHash: hash, Channels: sortedSet(channels), Kinds: sortedSet(kinds), Added: time.Now().UTC()})
 		if err := saveSatellites(path, list); err != nil {
 			os.Remove(tokenFile)
 			return err
 		}
-		fmt.Fprintf(w, "added satellite %s for %s\ntoken: %s\nsaved in %s\na running doggie applies it within a few seconds\n", name, strings.Join(channels, ", "), token, tokenFile)
+		fmt.Fprintf(w, "added satellite %s (channels: %s; task kinds: %s)\ntoken: %s\nsaved in %s\na running doggie applies it within a few seconds\n", name, orDash(sortedSet(channels)), orDash(sortedSet(kinds)), token, tokenFile)
 		return nil
 
 	case "remove":

@@ -3,7 +3,9 @@
 // A component registers a Func per task kind and calls Serve from its Run.
 // The package takes care of the protocol: accepting run requests
 // (load-balanced across workers of the same kind), reporting progress,
-// asking questions, honoring cancellation and publishing the result.
+// asking questions, honoring cancellation and reporting the result. Every
+// report goes to the task manager under the worker's bus identity, which
+// the bus vouches for: the manager publishes the task's events.
 package worker
 
 import (
@@ -12,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,9 +26,10 @@ import (
 // queueGroup load-balances run requests across workers of the same kind.
 const queueGroup = "task-workers"
 
-// publishTimeout bounds the final done/failed publish, which must happen even
-// when the task's own context is already cancelled.
-const publishTimeout = 5 * time.Second
+// reportTimeout bounds accepting a task and its final done or failed
+// report, which must happen even when the task's own context is already
+// cancelled.
+const reportTimeout = 5 * time.Second
 
 // Func runs one task. It must return soon after ctx is cancelled (the task
 // was cancelled, timed out, or DOGGIE is stopping). Its result is encoded as
@@ -35,7 +39,9 @@ type Func func(ctx context.Context, t *Task) (any, error)
 // Task is the task being run, with the means to report on it.
 type Task struct {
 	events.TaskInfo
-	conn    *bus.Conn
+	conn *bus.Conn
+	// worker is the worker's name on the bus.
+	worker  string
 	answers chan string
 	asking  atomic.Bool
 }
@@ -52,8 +58,9 @@ func (t *Task) Input(v any) error {
 }
 
 // Progress reports how the task is doing. percent is 0-100, or 0 if unknown.
+// It fails if the task is over, e.g. cancelled.
 func (t *Task) Progress(ctx context.Context, message string, percent int) error {
-	_, err := bus.Publish(ctx, t.conn, events.TaskProgress, events.TaskProgressData{
+	_, err := bus.Request(ctx, t.conn, events.WorkerProgress.With(t.worker), events.TaskProgressData{
 		TaskID: t.ID, Message: message, Percent: percent,
 	})
 	return err
@@ -64,7 +71,7 @@ func (t *Task) Progress(ctx context.Context, message string, percent int) error 
 func (t *Task) Ask(ctx context.Context, question string, options ...string) (string, error) {
 	t.asking.Store(true)
 	defer t.asking.Store(false)
-	if _, err := bus.Publish(ctx, t.conn, events.TaskNeedsInput, events.TaskNeedsInputData{
+	if _, err := bus.Request(ctx, t.conn, events.WorkerAsk.With(t.worker), events.TaskNeedsInputData{
 		TaskID: t.ID, Question: question, Options: options,
 	}); err != nil {
 		return "", err
@@ -116,8 +123,13 @@ func Serve(ctx context.Context, conn *bus.Conn, log *slog.Logger, funcs map[stri
 
 // Start is Serve without blocking: it returns once every kind is being
 // served, with a func that waits for the worker to stop after ctx is
-// cancelled.
+// cancelled. conn must have an identity (see bus.Conn.Identity): a named
+// satellite, or one of DOGGIE's own components.
 func Start(ctx context.Context, conn *bus.Conn, log *slog.Logger, funcs map[string]Func) (wait func(), err error) {
+	worker := conn.Identity()
+	if !bus.ValidName(worker) || strings.Contains(worker, ".") {
+		return nil, fmt.Errorf("worker: the connection has no name the bus vouches for (%q): connect as a named satellite", worker)
+	}
 	for kind := range funcs {
 		if !bus.ValidName(kind) {
 			return nil, fmt.Errorf("worker: invalid task kind %q", kind)
@@ -131,7 +143,7 @@ func Start(ctx context.Context, conn *bus.Conn, log *slog.Logger, funcs map[stri
 		}
 		wg.Go(func() {
 			for in := range runs {
-				wg.Go(func() { run(ctx, conn, log, in, fn) })
+				wg.Go(func() { run(ctx, conn, worker, log, in, fn) })
 			}
 		})
 	}
@@ -139,8 +151,8 @@ func Start(ctx context.Context, conn *bus.Conn, log *slog.Logger, funcs map[stri
 }
 
 // run executes one task: it serves the task's control command (cancel,
-// answer), accepts the run request, calls fn and publishes the outcome.
-func run(ctx context.Context, conn *bus.Conn, log *slog.Logger, in bus.Incoming[events.TaskInfo, events.Ack], fn Func) {
+// answer), accepts the task, calls fn and reports the outcome.
+func run(ctx context.Context, conn *bus.Conn, worker string, log *slog.Logger, in bus.Incoming[events.TaskInfo, events.Ack], fn Func) {
 	info := in.Req
 	log = log.With("task", info.ID, "kind", info.Kind)
 
@@ -152,8 +164,10 @@ func run(ctx context.Context, conn *bus.Conn, log *slog.Logger, in bus.Incoming[
 		defer cancelDeadline()
 	}
 
-	t := &Task{TaskInfo: info, conn: conn, answers: make(chan string, 1)}
-	controls, err := bus.Serve(taskCtx, conn, events.ControlTask.With(info.ID))
+	t := &Task{TaskInfo: info, conn: conn, worker: worker, answers: make(chan string, 1)}
+	t.Claim = ""
+	// Served before accepting, so a cancellation right after can't be lost.
+	controls, err := bus.Serve(taskCtx, conn, events.ControlTask.With(worker, info.ID))
 	if err != nil {
 		in.Fail(err)
 		return
@@ -178,20 +192,28 @@ func run(ctx context.Context, conn *bus.Conn, log *slog.Logger, in bus.Incoming[
 		}
 	}()
 
-	if err := in.Reply(events.Ack{}); err != nil {
-		log.Warn("accept task", "err", err)
+	actx, cancelAccept := context.WithTimeout(taskCtx, reportTimeout)
+	_, err = bus.Request(actx, conn, events.WorkerAccept.With(worker), events.TaskClaim{TaskID: info.ID, Claim: info.Claim})
+	cancelAccept()
+	if err != nil {
+		// E.g. cancelled meanwhile, or taken by another worker.
+		log.Debug("task not accepted", "err", err)
+		in.Fail(err)
 		return
+	}
+	if err := in.Reply(events.Ack{}); err != nil {
+		log.Warn("answer the run request", "err", err)
 	}
 	log.Debug("task accepted")
 	if info.HeartbeatMS > 0 {
-		go heartbeat(taskCtx, conn, info.ID, time.Duration(info.HeartbeatMS)*time.Millisecond)
+		go heartbeat(taskCtx, conn, worker, info.ID, time.Duration(info.HeartbeatMS)*time.Millisecond)
 	}
 
 	result, err := safeCall(taskCtx, t, fn)
-	cancel() // stops the heartbeat before the outcome is published
+	cancel() // stops the heartbeat before the outcome is reported
 
-	pubCtx, cancelPub := context.WithTimeout(context.Background(), publishTimeout)
-	defer cancelPub()
+	rctx, cancelReport := context.WithTimeout(context.Background(), reportTimeout)
+	defer cancelReport()
 	switch {
 	case cancelled.Load():
 		// The manager already recorded the cancellation.
@@ -204,35 +226,25 @@ func run(ctx context.Context, conn *bus.Conn, log *slog.Logger, in bus.Incoming[
 		case errors.Is(taskCtx.Err(), context.DeadlineExceeded):
 			reason = "timed out"
 		}
-		publishFailed(pubCtx, conn, log, info.ID, reason)
+		reportFailed(rctx, conn, worker, log, info.ID, reason)
 	default:
 		raw, err := json.Marshal(result)
 		if err != nil {
-			publishFailed(pubCtx, conn, log, info.ID, fmt.Sprintf("encode result: %v", err))
+			reportFailed(rctx, conn, worker, log, info.ID, fmt.Sprintf("encode result: %v", err))
 			return
 		}
-		done := events.TaskDoneData{TaskID: info.ID, Result: raw}
-		if info.Sensitive {
-			// The result goes to the manager in a command, outside the event
-			// log; the logged event only says the task is done.
-			if _, err := bus.Request(pubCtx, conn, events.ReportResult, done); err != nil {
-				publishFailed(pubCtx, conn, log, info.ID, fmt.Sprintf("deliver result: %v", err))
-				return
-			}
-			done = events.TaskDoneData{TaskID: info.ID, Redacted: true}
-		}
-		if _, err := bus.Publish(pubCtx, conn, events.TaskDone, done); err != nil {
-			// E.g. a result above the bus's max message size: fail the task
-			// instead of leaving it running until its timeout.
-			log.Warn("publish task done", "err", err)
-			publishFailed(pubCtx, conn, log, info.ID, fmt.Sprintf("publish result (%d bytes): %v", len(raw), err))
+		if _, err := bus.Request(rctx, conn, events.WorkerDone.With(worker), events.TaskDoneData{TaskID: info.ID, Result: raw}); err != nil {
+			// E.g. a result too large: fail the task instead of leaving it
+			// running until its timeout. If it is over, this fails too.
+			log.Warn("report task done", "err", err)
+			reportFailed(rctx, conn, worker, log, info.ID, fmt.Sprintf("report the result (%d bytes): %v", len(raw), err))
 		}
 	}
 }
 
 // heartbeat tells the manager the task is still being worked on, until ctx
 // is cancelled.
-func heartbeat(ctx context.Context, conn *bus.Conn, id string, every time.Duration) {
+func heartbeat(ctx context.Context, conn *bus.Conn, worker, id string, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -240,7 +252,7 @@ func heartbeat(ctx context.Context, conn *bus.Conn, id string, every time.Durati
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			bus.Emit(conn, events.TaskAlive, events.TaskAliveData{TaskID: id})
+			bus.Emit(conn, events.TaskAlive.With(worker), events.TaskAliveData{TaskID: id})
 		}
 	}
 }
@@ -256,8 +268,8 @@ func safeCall(ctx context.Context, t *Task, fn Func) (result any, err error) {
 	return fn(ctx, t)
 }
 
-func publishFailed(ctx context.Context, conn *bus.Conn, log *slog.Logger, id, reason string) {
-	if _, err := bus.Publish(ctx, conn, events.TaskFailed, events.TaskFailedData{TaskID: id, Error: reason}); err != nil {
-		log.Warn("publish task failed", "err", err)
+func reportFailed(ctx context.Context, conn *bus.Conn, worker string, log *slog.Logger, id, reason string) {
+	if _, err := bus.Request(ctx, conn, events.WorkerFailed.With(worker), events.TaskFailedData{TaskID: id, Error: reason}); err != nil {
+		log.Warn("report task failed", "err", err)
 	}
 }

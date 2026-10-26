@@ -33,7 +33,7 @@ func TestBoardFollowsATask(t *testing.T) {
 	if got := b.status(); got != "· t3 Esperar un rato" {
 		t.Errorf("status = %q", got)
 	}
-	b.event(env(events.TaskRunning, events.TaskRef{TaskID: "t3"}))
+	b.event(env(events.TaskRunning, events.TaskRunningData{TaskID: "t3"}))
 	b.event(progress("t3", "3/30 s", 10))
 	if got := b.status(); got != "· t3 Esperar un rato: 3/30 s (10%)" {
 		t.Errorf("status = %q", got)
@@ -47,7 +47,7 @@ func TestBoardFollowsATask(t *testing.T) {
 		t.Errorf("status after the end = %q", got)
 	}
 	// Late events don't bring it back.
-	for _, late := range []bus.Envelope{env(events.TaskRunning, events.TaskRef{TaskID: "t3"}), progress("t3", "4/30 s", 13), created("t3", "terminal", "x")} {
+	for _, late := range []bus.Envelope{env(events.TaskRunning, events.TaskRunningData{TaskID: "t3"}), progress("t3", "4/30 s", 13), created("t3", "terminal", "x")} {
 		if q, lookup := b.event(late); q != "" || lookup != "" {
 			t.Errorf("late %s: question %q, lookup %q", late.Type, q, lookup)
 		}
@@ -86,11 +86,11 @@ func TestBoardAsksTheManagerWhatRunningMeans(t *testing.T) {
 	b := newTaskBoard("terminal")
 	b.event(created("t1", "terminal", ""))
 	b.event(env(events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: "t1", Question: "¿Sigo?"}))
-	_, lookup := b.event(env(events.TaskRunning, events.TaskRef{TaskID: "t1"}))
+	_, lookup := b.event(env(events.TaskRunning, events.TaskRunningData{TaskID: "t1"}))
 	if lookup != "t1" {
 		t.Fatalf("lookup = %q, want t1", lookup)
 	}
-	if _, again := b.event(env(events.TaskRunning, events.TaskRef{TaskID: "t1"})); again != "" {
+	if _, again := b.event(env(events.TaskRunning, events.TaskRunningData{TaskID: "t1"})); again != "" {
 		t.Errorf("looked up twice")
 	}
 	// It was the start: the question still waits.
@@ -99,7 +99,7 @@ func TestBoardAsksTheManagerWhatRunningMeans(t *testing.T) {
 		t.Errorf("status = %q", got)
 	}
 	// The manager hadn't heard of the question yet: look again, which tells.
-	_, lookup = b.event(env(events.TaskRunning, events.TaskRef{TaskID: "t1"}))
+	_, lookup = b.event(env(events.TaskRunning, events.TaskRunningData{TaskID: "t1"}))
 	running := boardLookup{id: lookup, info: events.TaskInfo{ID: "t1", Status: events.StatusRunning, Progress: "2/3"}}
 	if _, again := b.looked(running); again != "t1" {
 		t.Fatalf("again = %q, want t1", again)
@@ -112,7 +112,7 @@ func TestBoardAsksTheManagerWhatRunningMeans(t *testing.T) {
 		t.Errorf("status = %q", got)
 	}
 	// It was the answer: the second look says so too.
-	b.event(env(events.TaskRunning, events.TaskRef{TaskID: "t1"}))
+	b.event(env(events.TaskRunning, events.TaskRunningData{TaskID: "t1"}))
 	if _, again := b.looked(running); again != "t1" {
 		t.Fatalf("again = %q, want t1", again)
 	}
@@ -124,7 +124,7 @@ func TestBoardAsksTheManagerWhatRunningMeans(t *testing.T) {
 	}
 	// It ended meanwhile.
 	b.event(env(events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: "t1", Question: "¿Y ahora?"}))
-	_, lookup = b.event(env(events.TaskRunning, events.TaskRef{TaskID: "t1"}))
+	_, lookup = b.event(env(events.TaskRunning, events.TaskRunningData{TaskID: "t1"}))
 	b.looked(boardLookup{id: lookup, info: events.TaskInfo{ID: "t1", Status: events.StatusDone}})
 	if got := b.status(); got != "" {
 		t.Errorf("status = %q", got)

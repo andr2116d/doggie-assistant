@@ -71,6 +71,15 @@ func (t *Task) transition(to events.TaskStatus, now time.Time, from ...events.Ta
 	return nil
 }
 
+// Accept marks a pending task running on worker.
+func (t *Task) Accept(worker string, now time.Time) error {
+	if err := t.transition(events.StatusRunning, now, events.StatusPending); err != nil {
+		return err
+	}
+	t.info.Worker = worker
+	return nil
+}
+
 // Start marks the task running: a worker accepted it, or its question was
 // answered.
 func (t *Task) Start(now time.Time) error {
@@ -127,14 +136,6 @@ func (t *Task) Cancel(reason string, now time.Time) error {
 	return nil
 }
 
-// SetResult restores the result of a done sensitive task, which its
-// task.done event leaves out (it only reaches the manager in memory).
-func (t *Task) SetResult(result json.RawMessage) {
-	if t.info.Status == events.StatusDone {
-		t.info.Result = result
-	}
-}
-
 // Apply applies a task event other than task.created, using the event's time.
 // EventTaskID tells which task an event is about.
 //
@@ -153,6 +154,13 @@ func (t *Task) Apply(env bus.Envelope) error {
 	}
 	switch env.Type {
 	case events.TaskRunning.Type():
+		ev, err := bus.Decode(env, events.TaskRunning)
+		if err != nil {
+			return err
+		}
+		if ev.Data.Worker != "" && t.info.Status == events.StatusPending {
+			return t.Accept(ev.Data.Worker, now)
+		}
 		return t.Start(now)
 	case events.TaskProgress.Type():
 		ev, err := bus.Decode(env, events.TaskProgress)

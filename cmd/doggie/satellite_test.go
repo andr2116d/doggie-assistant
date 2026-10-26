@@ -15,7 +15,7 @@ import (
 func TestSatelliteAddListRemove(t *testing.T) {
 	cfg := testConfig(t, "")
 	var out strings.Builder
-	if err := satelliteSub(cfg, &out, "add", []string{"voice-room"}, []string{"voice:living_room", "voice:kitchen", "voice:living_room"}); err != nil {
+	if err := satelliteSub(cfg, &out, "add", []string{"voice-room"}, []string{"voice:living_room", "voice:kitchen", "voice:living_room"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	list, err := loadSatellites(satellitesFile(cfg))
@@ -39,14 +39,14 @@ func TestSatelliteAddListRemove(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := satelliteSub(cfg, &out, "list", nil, nil); err != nil {
+	if err := satelliteSub(cfg, &out, "list", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "(shared token)  terminal") || !strings.Contains(out.String(), "voice-room") || strings.Contains(out.String(), "$2") {
 		t.Errorf("list:\n%s", out.String())
 	}
 
-	if err := satelliteSub(cfg, io.Discard, "remove", []string{"voice-room"}, nil); err != nil {
+	if err := satelliteSub(cfg, io.Discard, "remove", []string{"voice-room"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := loadSatellites(satellitesFile(cfg)); len(list) != 0 {
@@ -59,7 +59,7 @@ func TestSatelliteAddListRemove(t *testing.T) {
 
 func TestSatelliteAddRejects(t *testing.T) {
 	cfg := testConfig(t, "")
-	if err := satelliteSub(cfg, io.Discard, "add", []string{"voice-room"}, []string{"voice:room"}); err != nil {
+	if err := satelliteSub(cfg, io.Discard, "add", []string{"voice-room"}, []string{"voice:room"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	for name, c := range map[string]struct {
@@ -81,17 +81,17 @@ func TestSatelliteAddRejects(t *testing.T) {
 		"long channel":    {[]string{"voice-y"}, []string{strings.Repeat("c", 65)}},
 		"one bad channel": {[]string{"voice-y"}, []string{"ok", "bad channel"}},
 	} {
-		if err := satelliteSub(cfg, io.Discard, "add", c.args, c.channels); err == nil {
+		if err := satelliteSub(cfg, io.Discard, "add", c.args, c.channels, nil); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	if list, _ := loadSatellites(satellitesFile(cfg)); len(list) != 1 {
 		t.Errorf("rejected adds changed the registry: %+v", list)
 	}
-	if err := satelliteSub(cfg, io.Discard, "remove", []string{"nobody"}, nil); err == nil {
+	if err := satelliteSub(cfg, io.Discard, "remove", []string{"nobody"}, nil, nil); err == nil {
 		t.Error("removed a satellite that doesn't exist")
 	}
-	if err := satelliteSub(cfg, io.Discard, "fly", nil, nil); err == nil {
+	if err := satelliteSub(cfg, io.Discard, "fly", nil, nil, nil); err == nil {
 		t.Error("unknown subcommand accepted")
 	}
 }
@@ -206,7 +206,8 @@ func TestRegistryChangesApplyWhileRunning(t *testing.T) {
 	if connects("no-token-yet") {
 		t.Fatal("connected before being added")
 	}
-	satelliteSub(cfg, io.Discard, "add", []string{"voice-room"}, []string{"voice:living_room"})
+	satelliteSub(cfg, io.Discard, "add", []string{"voice-room"}, []string{"voice:living_room"}, nil)
+
 	r.wait(t, r.applied, "applied")
 	token, err := bus.LoadToken(satelliteTokenFile(cfg, "voice-room"))
 	if err != nil {
@@ -231,7 +232,7 @@ func TestRegistryChangesApplyWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	satelliteSub(cfg, io.Discard, "remove", []string{"voice-room"}, nil)
+	satelliteSub(cfg, io.Discard, "remove", []string{"voice-room"}, nil, nil)
 	r.wait(t, r.applied, "applied without it")
 	if connects(token) {
 		t.Error("removed satellite connected")
@@ -245,4 +246,46 @@ func TestRegistryChangesApplyWhileRunning(t *testing.T) {
 	// A deleted registry means no named satellites.
 	os.Remove(satellitesFile(cfg))
 	r.wait(t, r.applied, "applied once deleted")
+}
+
+// A satellite may only run tasks, with kinds and no channels.
+func TestSatelliteWithKinds(t *testing.T) {
+	cfg := testConfig(t, "")
+	var out strings.Builder
+	if err := satelliteSub(cfg, &out, "add", []string{"lights"}, nil, []string{"lights.set", "lights.off", "lights.set"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "task kinds: lights.off, lights.set") {
+		t.Errorf("add said:\n%s", out.String())
+	}
+	list, err := loadSatellites(satellitesFile(cfg))
+	if err != nil || len(list) != 1 || strings.Join(list[0].Kinds, ",") != "lights.off,lights.set" || len(list[0].Channels) != 0 {
+		t.Fatalf("registry = %+v, %v", list, err)
+	}
+	out.Reset()
+	if err := satelliteSub(cfg, &out, "list", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "lights          -         lights.off, lights.set") {
+		t.Errorf("list:\n%s", out.String())
+	}
+	for name, kinds := range map[string][]string{
+		"none":        nil,
+		"spaced kind": {"lights set"},
+		"wildcard":    {"lights.*"},
+		"empty kind":  {""},
+	} {
+		if err := satelliteSub(cfg, io.Discard, "add", []string{"x-" + strings.ReplaceAll(name, " ", "-")}, nil, kinds); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// A registry edited by hand is checked too.
+	os.WriteFile(satellitesFile(cfg), []byte(`[{"name":"x","token_hash":"$2a$x","kinds":["a b"]}]`), 0o600)
+	if _, err := loadSatellites(satellitesFile(cfg)); err == nil || !strings.Contains(err.Error(), "invalid task kind") {
+		t.Errorf("hand-edited kind: %v", err)
+	}
+	os.WriteFile(satellitesFile(cfg), []byte(`[{"name":"x","token_hash":"$2a$x"}]`), 0o600)
+	if _, err := loadSatellites(satellitesFile(cfg)); err == nil || !strings.Contains(err.Error(), "no channels or kinds") {
+		t.Errorf("entry with nothing: %v", err)
+	}
 }

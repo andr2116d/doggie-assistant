@@ -13,6 +13,8 @@ import (
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
 	"github.com/andr2116d/doggie-assistant/internal/config"
+	"github.com/andr2116d/doggie-assistant/internal/task/manager"
+	"github.com/andr2116d/doggie-assistant/internal/task/worker"
 )
 
 func testConfig(t *testing.T, listen string) config.Config {
@@ -82,11 +84,14 @@ func TestStartBusRestrictsSatellites(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// A satellite may run tasks as a worker...
-	if _, err := bus.Serve(ctx, sat, events.RunTask.With("reminder.set")); err != nil {
-		t.Errorf("satellite cannot serve as a worker: %v", err)
+	// The shared token runs no tasks, forges no task events and can't
+	// impersonate the task manager.
+	if _, err := bus.Serve(ctx, sat, events.RunTask.With("reminder.set")); err == nil {
+		t.Error("the shared token could serve as a worker")
 	}
-	// ...but not impersonate the task manager.
+	if published(sat, events.TaskDone, events.TaskDoneData{TaskID: "t1"}) {
+		t.Error("satellite could publish task.done")
+	}
 	if _, err := bus.Serve(ctx, sat, events.StartTask); err == nil {
 		t.Error("satellite could impersonate the task manager")
 	}
@@ -165,7 +170,7 @@ func TestStartBusRestrictsSatellites(t *testing.T) {
 func TestRegisteredSatelliteSpeaksForItsChannels(t *testing.T) {
 	cfg := testConfig(t, "127.0.0.1:-1")
 	var out strings.Builder
-	if err := satelliteSub(cfg, &out, "add", []string{"voice-room"}, []string{"voice:living_room"}); err != nil {
+	if err := satelliteSub(cfg, &out, "add", []string{"voice-room"}, []string{"voice:living_room"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -252,5 +257,97 @@ func TestBuildVersion(t *testing.T) {
 		if got := buildVersion(&tt.info); got != tt.want {
 			t.Errorf("buildVersion(%+v) = %q, want %q", tt.info, got, tt.want)
 		}
+	}
+}
+
+// A satellite with task kinds runs those kinds, and only those, as a worker
+// named after it, through the real task manager.
+func TestWorkerSatelliteRunsOnlyItsKinds(t *testing.T) {
+	cfg := testConfig(t, "127.0.0.1:-1")
+	for name, kinds := range map[string][]string{"lights": {"lights.set"}, "other": {"other.do"}} {
+		if err := satelliteSub(cfg, io.Discard, "add", []string{name}, nil, kinds); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := startBus(context.Background(), cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+	dial := func(name string) *bus.Conn {
+		token, err := bus.LoadToken(satelliteTokenFile(cfg, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := bus.Dial(srv.ClientURL(), bus.DialOptions{Name: name, User: name, Token: token, CAFile: caFile("", cfg), Log: log})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	lights, other := dial("lights"), dial("other")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	core, err := srv.Connect("tasks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Close()
+	go manager.New(core, log, manager.Options{}).Run(ctx)
+	wait, err := worker.Start(ctx, lights, log, map[string]worker.Func{
+		"lights.set": func(ctx context.Context, task *worker.Task) (any, error) {
+			if err := task.Progress(ctx, "dimming", 50); err != nil {
+				return nil, err
+			}
+			return map[string]bool{"on": true}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("the satellite can't serve its kind: %v", err)
+	}
+	defer func() { cancel(); wait() }()
+
+	client, err := srv.Connect("client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var ref events.TaskRef
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if ref, err = bus.Request(ctx, client, events.StartTask, events.TaskSpec{Kind: "lights.set"}); err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond) // the manager may not serve yet
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info events.TaskInfo
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if info, _ = bus.Request(ctx, client, events.GetTask, ref); info.Status == events.StatusDone {
+			break
+		}
+	}
+	if info.Status != events.StatusDone || info.Worker != "lights" || string(info.Result) != `{"on":true}` || info.Progress != "dimming" {
+		t.Fatalf("task = %+v, want done by lights", info)
+	}
+
+	// Another satellite can't take its kind, its controls or its reports.
+	if _, err := bus.Serve(ctx, other, events.RunTask.With("lights.set")); err == nil {
+		t.Error("a satellite served another's kind")
+	}
+	if _, err := bus.Serve(ctx, other, events.ControlTask.With("lights", ref.TaskID)); err == nil {
+		t.Error("a satellite served another worker's controls")
+	}
+	rctx, rcancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer rcancel()
+	if _, err := bus.Request(rctx, other, events.WorkerDone.With("lights"), events.TaskDoneData{TaskID: ref.TaskID}); err == nil {
+		t.Error("a satellite reported as another worker")
+	}
+	if published(other, events.TaskDone, events.TaskDoneData{TaskID: ref.TaskID}) {
+		t.Error("a worker satellite could publish task.done")
 	}
 }

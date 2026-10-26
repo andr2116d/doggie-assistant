@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,19 +33,16 @@ func TestSensitiveTaskStaysOutOfTheLog(t *testing.T) {
 			t.Errorf("sensitive data in the event log: %s %s", env.Type, env.Data)
 		}
 	}
-	// Look the task.done up by type: it is not always the last event, since
-	// the worker can finish before the manager logs task.running.
-	var dones int
+	// The manager logs every event of the task, in order.
+	var types []string
 	for _, env := range logged {
-		if env.Type == events.TaskDone.Type() {
-			dones++
-			if !strings.Contains(string(env.Data), `"redacted":true`) {
-				t.Errorf("task.done is not redacted: %s", env.Data)
-			}
-		}
+		types = append(types, env.Type)
 	}
-	if dones != 1 {
-		t.Errorf("%d task.done events in the log, want 1", dones)
+	if want := []string{events.TaskCreated.Type(), events.TaskRunning.Type(), events.TaskDone.Type()}; !slices.Equal(types, want) {
+		t.Errorf("logged %q, want %q", types, want)
+	}
+	if done := logged[len(logged)-1]; !strings.Contains(string(done.Data), `"redacted":true`) {
+		t.Errorf("task.done is not redacted: %s", done.Data)
 	}
 
 	// After a restart nothing sensitive survives: it only lived in memory.
@@ -55,13 +53,67 @@ func TestSensitiveTaskStaysOutOfTheLog(t *testing.T) {
 	}
 }
 
-func TestReportResultIsOnlyForSensitiveTasks(t *testing.T) {
+// Reports are taken only from the worker that accepted the task, and a
+// task is only accepted with the claim of its run request.
+func TestOnlyTheTasksWorkerReportsOnIt(t *testing.T) {
 	b := newBlocker()
 	h := newHarness(t, testOptions(), map[string]worker.Func{"test.block": b.run})
 	id := h.mustStart(events.TaskSpec{Kind: "test.block"})
 	recv(t, b.started, "task start")
-	_, err := bus.Request(context.Background(), h.client, events.ReportResult, events.TaskDoneData{TaskID: id, Result: json.RawMessage(`1`)})
-	if err == nil || !strings.Contains(err.Error(), "not sensitive") {
-		t.Errorf("err = %v, want not sensitive", err)
+	ctx := context.Background()
+	impostor := connect(t, h.srv, "impostor")
+	as := impostor.Identity()
+
+	for name, call := range map[string]func() error{
+		"done": func() error {
+			_, err := bus.Request(ctx, impostor, events.WorkerDone.With(as), events.TaskDoneData{TaskID: id, Result: json.RawMessage("1")})
+			return err
+		},
+		"failed": func() error {
+			_, err := bus.Request(ctx, impostor, events.WorkerFailed.With(as), events.TaskFailedData{TaskID: id, Error: "x"})
+			return err
+		},
+		"progress": func() error {
+			_, err := bus.Request(ctx, impostor, events.WorkerProgress.With(as), events.TaskProgressData{TaskID: id, Message: "x"})
+			return err
+		},
+		"ask": func() error {
+			_, err := bus.Request(ctx, impostor, events.WorkerAsk.With(as), events.TaskNeedsInputData{TaskID: id, Question: "x"})
+			return err
+		},
+	} {
+		if err := call(); err == nil || !strings.Contains(err.Error(), "not run by impostor") {
+			t.Errorf("%s from another worker: err = %v", name, err)
+		}
+	}
+	// Accepting a task already taken, or without its claim, fails too.
+	if _, err := bus.Request(ctx, impostor, events.WorkerAccept.With(as), events.TaskClaim{TaskID: id}); err == nil {
+		t.Error("accepted a running task again")
+	}
+	if info := h.get(id); info.Status != events.StatusRunning || info.Worker != "worker" {
+		t.Errorf("task = %s by %q, want running by worker", info.Status, info.Worker)
+	}
+}
+
+// A task is taken by whoever has its claim, not by whoever guesses its ID
+// first.
+func TestATaskIsAcceptedOnlyWithItsClaim(t *testing.T) {
+	opts := testOptions()
+	opts.DispatchTimeout = 300 * time.Millisecond
+	h := newHarness(t, opts, nil)
+	f := newFakeWorker(h)
+	tried := make(chan error, 1)
+	f.serveRuns("test.guess", func(in bus.Incoming[events.TaskInfo, events.Ack]) {
+		_, err := bus.Request(f.ctx, f.conn, events.WorkerAccept.With(f.conn.Identity()), events.TaskClaim{TaskID: in.Req.ID, Claim: "guess"})
+		tried <- err
+	})
+	if _, err := h.start(events.TaskSpec{Kind: "test.guess"}); err == nil {
+		t.Error("the task started without being accepted")
+	}
+	if err := <-tried; err == nil || !strings.Contains(err.Error(), "no such run request") {
+		t.Errorf("accept with a wrong claim: err = %v", err)
+	}
+	if info := h.get("t1"); info.Status != events.StatusFailed || info.Worker != "" {
+		t.Errorf("task = %s by %q, want failed by nobody", info.Status, info.Worker)
 	}
 }

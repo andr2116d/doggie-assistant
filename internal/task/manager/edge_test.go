@@ -44,7 +44,7 @@ func (f *fakeWorker) serveRuns(kind string, onRun func(in bus.Incoming[events.Ta
 // serveControl calls onControl for every control request of a task.
 func (f *fakeWorker) serveControl(id string, onControl func(in bus.Incoming[events.TaskControl, events.Ack])) {
 	f.t.Helper()
-	ctl, err := bus.Serve(f.ctx, f.conn, events.ControlTask.With(id))
+	ctl, err := bus.Serve(f.ctx, f.conn, events.ControlTask.With(f.conn.Identity(), id))
 	if err != nil {
 		f.t.Error(err)
 		return
@@ -57,9 +57,22 @@ func (f *fakeWorker) serveControl(id string, onControl func(in bus.Incoming[even
 }
 
 func (f *fakeWorker) ask(id, question string) {
-	if _, err := bus.Publish(f.ctx, f.conn, events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: id, Question: question}); err != nil {
+	if _, err := bus.Request(f.ctx, f.conn, events.WorkerAsk.With(f.conn.Identity()), events.TaskNeedsInputData{TaskID: id, Question: question}); err != nil {
 		f.t.Error(err)
 	}
+}
+
+// claim accepts the task of a run request, without answering the request.
+func (f *fakeWorker) claim(in bus.Incoming[events.TaskInfo, events.Ack]) {
+	if _, err := bus.Request(f.ctx, f.conn, events.WorkerAccept.With(f.conn.Identity()), events.TaskClaim{TaskID: in.Req.ID, Claim: in.Req.Claim}); err != nil {
+		f.t.Error(err)
+	}
+}
+
+// accept accepts the task of a run request, as a worker does.
+func (f *fakeWorker) accept(in bus.Incoming[events.TaskInfo, events.Ack]) {
+	f.claim(in)
+	in.Reply(events.Ack{})
 }
 
 // waitQuestion polls the manager until task id waits on question.
@@ -163,7 +176,7 @@ func TestAnsweringKeepsTheNextQuestion(t *testing.T) {
 			h.waitQuestion(id, "Q2")
 			c.Reply(events.Ack{})
 		})
-		in.Reply(events.Ack{})
+		f.accept(in)
 		f.ask(id, "Q1")
 	})
 
@@ -189,7 +202,7 @@ func TestConcurrentAnswersAreRejected(t *testing.T) {
 			time.Sleep(300 * time.Millisecond) // keep the first answer in flight
 			c.Reply(events.Ack{})
 		})
-		in.Reply(events.Ack{})
+		f.accept(in)
 		f.ask(id, "Q1")
 	})
 
@@ -214,7 +227,7 @@ func TestAnswerToAGoneWorkerFailsTheTask(t *testing.T) {
 	h := newHarness(t, testOptions(), nil)
 	f := newFakeWorker(h)
 	f.serveRuns("test.vanish", func(in bus.Incoming[events.TaskInfo, events.Ack]) {
-		in.Reply(events.Ack{})
+		f.accept(in)
 		f.ask(in.Req.ID, "Q1") // ...and never serves control: the worker is gone
 	})
 
@@ -243,6 +256,7 @@ func TestLostDispatchReplyStopsTheWorker(t *testing.T) {
 			}
 			c.Reply(events.Ack{})
 		})
+		f.claim(in)
 	})
 
 	_, err := h.start(events.TaskSpec{Kind: "test.mute"})
@@ -267,7 +281,7 @@ func TestAnswerRacingATimeoutIsRejected(t *testing.T) {
 			time.Sleep(400 * time.Millisecond) // the task times out meanwhile
 			c.Reply(events.Ack{})
 		})
-		in.Reply(events.Ack{})
+		f.accept(in)
 		f.ask(in.Req.ID, "Q1")
 	})
 
@@ -317,11 +331,11 @@ func TestAnswerThatFinishesTheTaskSucceeds(t *testing.T) {
 	f.serveRuns("test.quick", func(in bus.Incoming[events.TaskInfo, events.Ack]) {
 		id := in.Req.ID
 		f.serveControl(id, func(c bus.Incoming[events.TaskControl, events.Ack]) {
-			bus.Publish(f.ctx, f.conn, events.TaskDone, events.TaskDoneData{TaskID: id})
+			bus.Request(f.ctx, f.conn, events.WorkerDone.With(f.conn.Identity()), events.TaskDoneData{TaskID: id})
 			h.waitStatus(id, events.StatusDone) // done is recorded first...
 			c.Reply(events.Ack{})               // ...then the delivery is confirmed
 		})
-		in.Reply(events.Ack{})
+		f.accept(in)
 		f.ask(id, "Q1")
 	})
 
@@ -329,5 +343,38 @@ func TestAnswerThatFinishesTheTaskSucceeds(t *testing.T) {
 	h.waitQuestion(id, "Q1")
 	if err := h.answer(id, "A1"); err != nil {
 		t.Fatalf("answer that finished the task was reported as failed: %v", err)
+	}
+}
+
+// A task cancelled while its worker is about to accept it: the requester
+// still gets its ID, the worker can't take it and never runs it.
+func TestCancelledBeforeItsAccepted(t *testing.T) {
+	h := newHarness(t, testOptions(), nil)
+	f := newFakeWorker(h)
+	refused, got := make(chan error, 1), make(chan string, 1)
+	f.serveRuns("test.hesitant", func(in bus.Incoming[events.TaskInfo, events.Ack]) {
+		got <- in.Req.ID
+		h.waitStatus(in.Req.ID, events.StatusCancelled)
+		_, err := bus.Request(f.ctx, f.conn, events.WorkerAccept.With(f.conn.Identity()), events.TaskClaim{TaskID: in.Req.ID, Claim: in.Req.Claim})
+		refused <- err
+		in.Fail(err)
+	})
+	started := make(chan error, 1)
+	go func() {
+		_, err := h.start(events.TaskSpec{Kind: "test.hesitant"})
+		started <- err
+	}()
+	id := recv(t, got, "the run request")
+	if _, err := bus.Request(context.Background(), h.client, events.CancelTask, events.TaskCancelRequest{TaskID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-refused; err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("the worker took a cancelled task: %v", err)
+	}
+	if err := <-started; err != nil {
+		t.Errorf("start failed for a task that exists: %v", err)
+	}
+	if info := h.get(id); info.Status != events.StatusCancelled || info.Worker != "" {
+		t.Errorf("task = %s by %q", info.Status, info.Worker)
 	}
 }

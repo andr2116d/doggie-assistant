@@ -35,36 +35,46 @@ var SystemStopping = bus.NewSubject[StoppingData]("system.stopping")
 // SatellitePermissions is what a satellite or tool connecting over TCP may
 // do: watch events, pass on what people say on its own channels
 // (user.utterance.<channel>), use the task manager's commands, cancelling
-// only from its own channels (task.cancel.from.<channel>), and run tasks
-// as workers (report on them, beat, spawn subtasks). It cannot speak for
-// other channels, forge the manager's events (task.created, running,
-// cancelled), the brain's (out.speak, brain.turn) or the core's (system.*),
-// impersonate the manager, dispatch tasks to workers, or alter the event
-// log. It may follow what DOGGIE says as it is written (out.speak.delta),
-// and ask the brain for a conversation's last turns (brain.history).
-// Invalid channels are left out.
-func SatellitePermissions(channels ...string) bus.Permissions {
-	var byChannel []string
+// only from its own channels (task.cancel.from.<channel>), follow what
+// DOGGIE says as it is written (out.speak.delta), and ask the brain for a
+// conversation's last turns (brain.history).
+//
+// With kinds, it also runs those kinds of tasks as a worker named name: it
+// gets their run requests and the controls of the tasks it accepts, and
+// reports on them, all under its name. It cannot run other kinds, report
+// as another worker, forge the manager's events (only the manager publishes
+// task events), the brain's (out.speak, brain.turn) or the core's
+// (system.*), impersonate the manager, dispatch tasks to workers, or alter
+// the event log. Invalid channels and kinds are left out, and without a
+// valid name it runs no tasks.
+func SatellitePermissions(name string, channels, kinds []string) bus.Permissions {
+	var publish, subscribe []string
 	for _, c := range channels {
 		if s, err := UtteranceOn(c); err == nil {
-			byChannel = append(byChannel, s.Wire())
+			publish = append(publish, s.Wire())
 		}
 		if cmd, err := CancelTaskOn(c); err == nil {
-			byChannel = append(byChannel, cmd.Wire())
+			publish = append(publish, cmd.Wire())
 		}
 	}
+	if bus.ValidSatelliteName(name) {
+		for _, k := range kinds {
+			if bus.ValidName(k) {
+				subscribe = append(subscribe, RunTask.With(k).Wire())
+			}
+		}
+	}
+	if len(subscribe) > 0 {
+		publish = append(publish,
+			WorkerAccept.With(name).Wire(), WorkerProgress.With(name).Wire(), WorkerAsk.With(name).Wire(),
+			WorkerDone.With(name).Wire(), WorkerFailed.With(name).Wire(), TaskAlive.With(name).Wire(),
+		)
+		subscribe = append(subscribe, ControlTask.With(name).Wire()+".>")
+	}
 	return bus.Permissions{
-		Publish: append(byChannel,
-			TaskProgress.Wire(), TaskNeedsInput.Wire(), TaskDone.Wire(), TaskFailed.Wire(),
-			TaskAlive.Wire(),
+		Publish: append(publish,
 			StartTask.Wire(), AnswerTask.Wire(), ListTasks.Wire(), GetTask.Wire(), BrainHistory.Wire(),
-			ReportResult.Wire(),
 		),
-		Subscribe: []string{
-			bus.AllEvents,
-			OutSpeakDelta.Wire(),
-			RunTask.Wire() + ".>",
-			ControlTask.Wire() + ".>",
-		},
+		Subscribe: append(subscribe, bus.AllEvents, OutSpeakDelta.Wire()),
 	}
 }

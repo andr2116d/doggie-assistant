@@ -28,8 +28,8 @@ func TestSpentUsageIsToldByDOGGIE(t *testing.T) {
 	id := h.say("th", "terminal", "¿Qué hora es?")
 	s := h.nextSpeak()
 	want := "Ahora no puedo pensar: se me acabó la cuota y se renueva "
-	if !strings.HasPrefix(s.Data.Text, want) || !strings.Contains(s.Data.Text, renews.In(lima).Format("15:04")) || s.CausedBy != id || s.Data.Block != 0 {
-		t.Errorf("said %+v, want %q... at %s", s.Data, want, renews.In(lima).Format("15:04"))
+	if !strings.HasPrefix(s.Data.Text, want) || !strings.Contains(s.Data.Text, clockOf(renews.In(lima))) || s.CausedBy != id || s.Data.Block != 0 {
+		t.Errorf("said %+v, want %q... at %s", s.Data, want, clockOf(renews.In(lima)))
 	}
 	d := h.nextTurn().Data
 	if d.Failure != events.FailureUsageLimit || !strings.Contains(d.Error, "session limit") || len(d.Replies) != 1 || d.Replies[0] != s.Data.Text {
@@ -207,3 +207,6 @@ func TestLowUsageIsNotSpentWhileStopping(t *testing.T) {
 		t.Errorf("warned %d times after the restart, want 1", warned)
 	}
 }
+
+// clockOf is a time as DOGGIE tells it: "9:05", "21:10".
+func clockOf(t time.Time) string { return fmt.Sprintf("%d:%02d", t.Hour(), t.Minute()) }

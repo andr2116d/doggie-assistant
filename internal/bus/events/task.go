@@ -50,10 +50,11 @@ type TaskSpec struct {
 	ThreadID string `json:"thread_id,omitempty"`
 	// TimeoutS overrides the manager's default timeout, in seconds.
 	TimeoutS int `json:"timeout_s,omitempty"`
-	// Sensitive keeps Input and the result out of the event log: they only
-	// travel in commands and live in the manager's memory, so they are gone
-	// after a restart. Description, progress messages and questions are still
-	// logged, so keep them free of sensitive data.
+	// Sensitive keeps Input, the result, progress messages and questions
+	// out of the event log: they only travel in commands and live in the
+	// manager's memory (task.get tells them), so they are gone after a
+	// restart. The description is still logged, so keep it free of
+	// sensitive data.
 	Sensitive bool `json:"sensitive,omitempty"`
 }
 
@@ -91,6 +92,9 @@ type TaskProgressData struct {
 	Message string `json:"message"`
 	// Percent is 0-100, or 0 when unknown.
 	Percent int `json:"percent,omitempty"`
+	// Redacted means the message of a sensitive task was left out of the
+	// event; task.get tells it.
+	Redacted bool `json:"redacted,omitempty"`
 }
 
 // TaskNeedsInputData is a question a task needs answered to continue.
@@ -98,6 +102,9 @@ type TaskNeedsInputData struct {
 	TaskID   string   `json:"task_id"`
 	Question string   `json:"question"`
 	Options  []string `json:"options,omitempty"`
+	// Redacted means the question and options of a sensitive task were
+	// left out of the event; task.get tells them while the task waits.
+	Redacted bool `json:"redacted,omitempty"`
 }
 
 // TaskDoneData is a task's result.

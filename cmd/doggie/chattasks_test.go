@@ -381,3 +381,26 @@ func TestAnswerCommandTellsWhatItAnswered(t *testing.T) {
 		t.Errorf("a failed answer = %+v", r)
 	}
 }
+
+// A sensitive task's question isn't in its event: the board asks the
+// manager for it and tells it then, once.
+func TestBoardTellsAHiddenQuestionFromTheManager(t *testing.T) {
+	b := newTaskBoard("terminal")
+	sensitive := events.TaskInfo{ID: "t1", TaskSpec: events.TaskSpec{Kind: "demo.ask", ThreadID: "terminal", Sensitive: true}}
+	b.event(env(events.TaskCreated, sensitive))
+	q, lookup := b.event(env(events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: "t1", Redacted: true}))
+	if q != "" || lookup != "t1" {
+		t.Fatalf("question %q, lookup %q; want a lookup of t1", q, lookup)
+	}
+	waiting := sensitive
+	waiting.Status, waiting.Question, waiting.Options = events.StatusWaitingInput, "¿Pago 40 euros?", []string{"sí", "no"}
+	questions, again := b.looked(boardLookup{id: "t1", info: waiting})
+	if want := `· t1 asks: "¿Pago 40 euros?" [sí | no]. Only you may answer it: /answer t1 <answer>`; len(questions) != 1 || questions[0] != want || again != "" {
+		t.Errorf("questions %q, again %q\nwant %q", questions, again, want)
+	}
+	// Told once, however often the manager says it.
+	b.event(env(events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: "t1", Redacted: true}))
+	if questions, _ := b.looked(boardLookup{id: "t1", info: waiting}); len(questions) != 0 {
+		t.Errorf("told again: %q", questions)
+	}
+}

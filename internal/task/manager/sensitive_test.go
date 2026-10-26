@@ -117,3 +117,42 @@ func TestATaskIsAcceptedOnlyWithItsClaim(t *testing.T) {
 		t.Errorf("task = %s by %q, want failed by nobody", info.Status, info.Worker)
 	}
 }
+
+// A sensitive task's progress messages and questions stay out of the log
+// too; the manager tells them while they matter.
+func TestSensitiveQuestionsAndProgressStayOutOfTheLog(t *testing.T) {
+	h := newHarness(t, testOptions(), map[string]worker.Func{
+		"test.pay": func(ctx context.Context, task *worker.Task) (any, error) {
+			if err := task.Progress(ctx, "card ending 4821", 50); err != nil {
+				return nil, err
+			}
+			return task.Ask(ctx, "Pay 40 EUR with card 4821?", "yes 4821", "no")
+		},
+	})
+	id := h.mustStart(events.TaskSpec{Kind: "test.pay", Sensitive: true, Description: "pay a bill"})
+	info := h.waitQuestion(id, "Pay 40 EUR with card 4821?")
+	if len(info.Options) != 2 || info.Progress != "card ending 4821" || info.Percent != 50 {
+		t.Errorf("the manager doesn't tell the question: %+v", info)
+	}
+	if err := h.answer(id, "yes 4821"); err != nil {
+		t.Fatal(err)
+	}
+	h.waitStatus(id, events.StatusDone)
+
+	logged, err := bus.History(context.Background(), h.client, time.Time{}, "task.>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var redacted int
+	for _, env := range logged {
+		if strings.Contains(string(env.Data), "4821") {
+			t.Errorf("sensitive data in the log: %s %s", env.Type, env.Data)
+		}
+		if strings.Contains(string(env.Data), `"redacted":true`) {
+			redacted++
+		}
+	}
+	if redacted != 3 { // progress, question, result
+		t.Errorf("%d redacted events, want 3", redacted)
+	}
+}

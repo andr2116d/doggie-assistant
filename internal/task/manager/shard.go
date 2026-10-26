@@ -306,7 +306,11 @@ func (s *shard) progress(ctx context.Context, in bus.Incoming[events.TaskProgres
 		return
 	}
 	info := t.Info()
-	publish(ctx, s, events.TaskProgress, events.TaskProgressData{TaskID: info.ID, Message: info.Progress, Percent: info.Percent})
+	logged := events.TaskProgressData{TaskID: info.ID, Message: info.Progress, Percent: info.Percent}
+	if info.Sensitive {
+		logged = events.TaskProgressData{TaskID: info.ID, Percent: info.Percent, Redacted: true}
+	}
+	publish(ctx, s, events.TaskProgress, logged)
 	in.Reply(events.Ack{})
 }
 
@@ -319,7 +323,11 @@ func (s *shard) ask(ctx context.Context, in bus.Incoming[events.TaskNeedsInputDa
 		in.Fail(err)
 		return
 	}
-	publish(ctx, s, events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: t.ID(), Question: in.Req.Question, Options: in.Req.Options})
+	logged := events.TaskNeedsInputData{TaskID: t.ID(), Question: in.Req.Question, Options: in.Req.Options}
+	if t.Info().Sensitive {
+		logged = events.TaskNeedsInputData{TaskID: t.ID(), Redacted: true}
+	}
+	publish(ctx, s, events.TaskNeedsInput, logged)
 	in.Reply(events.Ack{})
 }
 

@@ -272,7 +272,11 @@ func writeInput(b *strings.Builder, in Input, clk clock, omitAt string, maxText 
 		}
 		b.WriteString(".")
 	case events.TaskNeedsInput.Type():
-		fmt.Fprintf(b, "needs an answer: <data>%s</data>", esc(cut(e.Question, maxDataText)))
+		if e.Question == "" {
+			b.WriteString("needs an answer. Its question is hidden here: it is a sensitive task.")
+		} else {
+			fmt.Fprintf(b, "needs an answer: <data>%s</data>", esc(cut(e.Question, maxDataText)))
+		}
 		if len(e.Options) > 0 {
 			fmt.Fprintf(b, " Options: <data>%s</data>", esc(cut(strings.Join(e.Options, " | "), maxDataText)))
 		}

@@ -3,6 +3,7 @@ package brain
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/brain/llm"
@@ -29,7 +30,7 @@ type turnJob struct {
 // records the turn, returning where it was logged. It runs outside the Run
 // loop and touches no brain state.
 func (b *Brain) runTurn(ctx context.Context, job turnJob) (rec events.BrainTurnData, logged bus.Meta) {
-	rec = events.BrainTurnData{ThreadID: job.thread, Channel: job.channel, Inputs: job.inputs, Provider: b.provider.Name()}
+	rec = events.BrainTurnData{ThreadID: job.thread, Channel: job.channel, Inputs: loggable(job.inputs), Provider: b.provider.Name()}
 	cause := job.inputs[len(job.inputs)-1].EventID
 	defer func() {
 		pctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
@@ -175,4 +176,18 @@ func (b *Brain) warnLowUsage(job turnJob, rec *events.BrainTurnData, usage *llm.
 	text := prompts.UsageLow(b.opts.Language, low[0].Renews, now.In(b.opts.Location))
 	rec.Replies = append(rec.Replies, text)
 	b.say(job, text, block, cause)
+}
+
+// loggable is what a turn's inputs may leave in the event log: the
+// questions of sensitive tasks stay out of it, as their results do.
+func loggable(inputs []events.TurnInput) []events.TurnInput {
+	out := slices.Clone(inputs)
+	for i, in := range out {
+		if in.Task != nil && in.Task.Sensitive {
+			task := *in.Task
+			task.Question, task.Options = "", nil
+			out[i].Task = &task
+		}
+	}
+	return out
 }

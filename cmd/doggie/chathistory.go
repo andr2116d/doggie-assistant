@@ -156,6 +156,9 @@ func taskNotice(t *events.TurnTask) string {
 	case events.TaskCancelled.Type():
 		return what + " was cancelled"
 	case events.TaskNeedsInput.Type():
+		if t.Question == "" {
+			return what + " asked a sensitive question"
+		}
 		return what + " asked: " + truncate(oneLineText(t.Question), 80)
 	}
 	return what + " changed"

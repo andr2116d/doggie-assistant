@@ -183,11 +183,15 @@ func (b *taskBoard) event(env bus.Envelope) (question string, lookup string) {
 // is a task to look up once more, a little later.
 func (b *taskBoard) looked(l boardLookup) (questions []string, again string) {
 	if n, ok := b.refreshing[l.id]; ok {
-		if b.refreshed(l, n) {
+		again, question := b.refreshed(l, n)
+		if again {
 			b.refreshing[l.id] = n + 1
 			return nil, l.id
 		}
 		delete(b.refreshing, l.id)
+		if question != "" {
+			return []string{question}, ""
+		}
 		return nil, ""
 	}
 	queued, ok := b.looking[l.id]
@@ -214,8 +218,10 @@ func (b *taskBoard) looked(l boardLookup) (questions []string, again string) {
 
 // refreshed takes what the manager says of a task the board knows, on the
 // n-th look. It reports whether to look again: the manager may not have
-// heard of a question the board has, the first time.
-func (b *taskBoard) refreshed(l boardLookup, n int) (again bool) {
+// heard of a question the board has, the first time. It also returns the
+// question the user must answer themselves, if only the manager could tell
+// it, as with sensitive tasks.
+func (b *taskBoard) refreshed(l boardLookup, n int) (again bool, question string) {
 	t, ok := b.tasks[l.id]
 	switch {
 	case !ok || l.err != nil:
@@ -223,12 +229,15 @@ func (b *taskBoard) refreshed(l boardLookup, n int) (again bool) {
 		delete(b.tasks, l.id)
 		b.ended.add(l.id)
 	case n == 1 && l.info.Status == events.StatusRunning && t.info.Status == events.StatusWaitingInput:
-		return true
+		return true, ""
 	default:
 		t.info.Status, t.info.Question, t.info.Options = l.info.Status, l.info.Question, l.info.Options
 		t.info.Progress, t.info.Percent = l.info.Progress, l.info.Percent
+		if t.info.Question != "" {
+			return false, b.tell(t.info)
+		}
 	}
-	return false
+	return false, ""
 }
 
 func terminal(typ string) bool {
@@ -250,6 +259,7 @@ func (b *taskBoard) apply(t *boardTask, env bus.Envelope) (question string, refr
 	case events.TaskProgress.Type():
 		var d events.TaskProgressData
 		if json.Unmarshal(env.Data, &d) == nil {
+			// A sensitive task's message stays with the manager.
 			t.info.Status, t.info.Progress, t.info.Percent = events.StatusRunning, d.Message, d.Percent
 		}
 	case events.TaskNeedsInput.Type():
@@ -258,6 +268,10 @@ func (b *taskBoard) apply(t *boardTask, env bus.Envelope) (question string, refr
 			return "", false
 		}
 		t.info.Status, t.info.Question, t.info.Options = events.StatusWaitingInput, d.Question, d.Options
+		if d.Redacted {
+			// Only the manager tells a sensitive task's question.
+			return "", true
+		}
 		return b.tell(t.info), false
 	default:
 		if terminal(env.Type) {

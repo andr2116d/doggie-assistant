@@ -463,7 +463,10 @@ func (b *Brain) onTaskEvent(ctx context.Context, env bus.Envelope) {
 	default:
 		return // running, progress: the next prompt shows them
 	}
-	var ref events.TaskRef
+	var ref struct {
+		events.TaskRef
+		Redacted bool `json:"redacted"`
+	}
 	if err := json.Unmarshal(env.Data, &ref); err != nil || !validID(ref.TaskID) {
 		return
 	}
@@ -473,7 +476,10 @@ func (b *Brain) onTaskEvent(ctx context.Context, env bus.Envelope) {
 		b.lookups[ref.TaskID] = append(q, env)
 		return
 	}
-	if info, ok := b.tasks[ref.TaskID]; ok {
+	// The question of a sensitive task is left out of its event: only the
+	// manager tells it.
+	hidden := env.Type == events.TaskNeedsInput.Type() && ref.Redacted
+	if info, ok := b.tasks[ref.TaskID]; ok && !hidden {
 		b.taskEvent(info, env)
 		return
 	}
@@ -482,7 +488,7 @@ func (b *Brain) onTaskEvent(ctx context.Context, env bus.Envelope) {
 	go func() {
 		lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 		defer cancel()
-		info, err := bus.Request(lctx, b.conn, events.GetTask, ref)
+		info, err := bus.Request(lctx, b.conn, events.GetTask, ref.TaskRef)
 		b.do(ctx, results, func() { b.looked(ref.TaskID, info, err) })
 	}()
 }
@@ -545,6 +551,12 @@ func (b *Brain) taskEvent(info events.TaskInfo, env bus.Envelope) {
 	case events.TaskNeedsInput.Type():
 		var d events.TaskNeedsInputData
 		json.Unmarshal(env.Data, &d)
+		if d.Redacted {
+			if info.Status != events.StatusWaitingInput || info.Question == "" {
+				return // answered meanwhile, or the manager didn't say
+			}
+			d.Question, d.Options = info.Question, info.Options
+		}
 		in.Task.Question, in.Task.Options = d.Question, d.Options
 	}
 	b.enqueue(th, in)

@@ -173,10 +173,19 @@ func TestSensitiveQuestionsAreTheUsers(t *testing.T) {
 		if _, err := bus.Request(context.Background(), h.client, events.StartTask, spec); err != nil {
 			t.Fatal(err)
 		}
-		h.nextTurn()
+		turn := h.nextTurn()
 		in := h.fake.requests()[i+1].Input
 		if got := strings.Contains(inputOf(in), "Only the user can answer it"); got != spec.Sensitive {
 			t.Errorf("sensitive %v: told only the user may answer = %v:\n%s", spec.Sensitive, got, inputOf(in))
+		}
+		// The LLM gets the question, from the manager when it is a
+		// sensitive task's, but the logged turn only keeps the others'.
+		if !strings.Contains(inputOf(in), "¿Qué perfil?") {
+			t.Errorf("sensitive %v: the prompt lacks the question:\n%s", spec.Sensitive, inputOf(in))
+		}
+		logged, _ := json.Marshal(turn.Data.Inputs)
+		if got := strings.Contains(string(logged), "¿Qué perfil?"); got == spec.Sensitive {
+			t.Errorf("sensitive %v: the logged turn has the question = %v: %s", spec.Sensitive, got, logged)
 		}
 	}
 }

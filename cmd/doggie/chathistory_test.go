@@ -192,3 +192,13 @@ func TestFailureNotes(t *testing.T) {
 		}
 	}
 }
+
+// A sensitive task's question isn't in the log, and the history says so.
+func TestHistoryHidesSensitiveQuestions(t *testing.T) {
+	if got := taskNotice(&events.TurnTask{Type: events.TaskNeedsInput.Type(), TaskID: "t2", Sensitive: true}); got != "t2 asked a sensitive question" {
+		t.Errorf("notice = %q", got)
+	}
+	if got := taskNotice(&events.TurnTask{Type: events.TaskNeedsInput.Type(), TaskID: "t3", Question: "¿Cuál?"}); got != "t3 asked: ¿Cuál?" {
+		t.Errorf("notice = %q", got)
+	}
+}

@@ -238,7 +238,7 @@ func selfReport(started, inputAt time.Time, inputLen int) report {
 		r.CwdEntries = append(r.CwdEntries, e.Name())
 	}
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "ANTHROPIC_") || strings.HasPrefix(kv, "DOGGIE_TEST_") {
+		if strings.HasPrefix(kv, "ANTHROPIC_") || strings.HasPrefix(kv, "CLAUDE_") || strings.HasPrefix(kv, "DOGGIE_TEST_") {
 			r.Env = append(r.Env, kv)
 		}
 	}

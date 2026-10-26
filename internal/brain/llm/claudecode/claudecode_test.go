@@ -229,6 +229,10 @@ func TestCLIIsLockedDown(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "should-not-leak")
 	t.Setenv("DOGGIE_TEST_KEEP", "kept")
+	// As if DOGGIE was started from a Claude Code session.
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "a-session")
+	t.Setenv("CLAUDE_CODE_CHILD_SESSION", "1")
+	t.Setenv("CLAUDECODE", "1")
 	o.System = "Sistema con acentos: ñandú.\n" + strings.Repeat("x", 200<<10) // over Linux's per-argument limit
 	p := newProvider(t, o)
 	outs, done := collect(t, p, context.Background(), scriptOf(step{Report: true}))

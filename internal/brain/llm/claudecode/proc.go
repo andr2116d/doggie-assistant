@@ -107,12 +107,16 @@ func (p *Provider) args(cfgFile string) []string {
 }
 
 // childEnv is the environment for claude. Without API keys the CLI uses the
-// subscription login, which is what DOGGIE is meant to use.
+// subscription login, which is what DOGGIE is meant to use. Nothing else of
+// the CLI's own reaches it but that login: started from a Claude Code
+// session, DOGGIE would pass on that session's variables, and the CLI would
+// take itself for part of it.
 func childEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		if name == "ANTHROPIC_API_KEY" || name == "ANTHROPIC_AUTH_TOKEN" {
+		login := name == "CLAUDE_CODE_OAUTH_TOKEN" || name == "CLAUDE_CONFIG_DIR"
+		if name == "ANTHROPIC_API_KEY" || name == "ANTHROPIC_AUTH_TOKEN" || (strings.HasPrefix(name, "CLAUDE") && !login) {
 			continue
 		}
 		out = append(out, kv)

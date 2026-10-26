@@ -406,19 +406,23 @@ func TestCleanLineAndTruncate(t *testing.T) {
 	}
 }
 
-// A resumed turn can't start again what the turn that died already started.
+// A resumed turn can't start again what the turn that died already started
+// for the same sentence.
 func TestResumedTurnDoesNotRepeatAnAction(t *testing.T) {
 	h := newHarness(t)
 	c, cs := h.bound("th")
-	sentence := time.Now()
 	timer := map[string]any{"kind": "demo.sleep", "description": "Poner un temporizador", "input": map[string]any{"seconds": 5}}
 
-	// The turn that died started it.
+	// The turn that died started it, for sentence u1.
+	c.Bind(Turn{ThreadID: "th", Channel: "terminal", Said: []string{"u1"}})
 	var first startTaskOut
 	callOK(t, cs, "start_task", timer, &first)
+	if info := h.get(first.TaskID); len(info.CausedBy) != 1 || info.CausedBy[0] != "u1" {
+		t.Fatalf("caused_by = %q, want the turn's sentence", info.CausedBy)
+	}
 
 	// The resumed turn tries again: refused, whatever the description.
-	c.Bind(Turn{ThreadID: "th", Channel: "terminal", Resumed: sentence})
+	c.Bind(Turn{ThreadID: "th", Channel: "terminal", Said: []string{"u1", "u2"}, Resumed: []string{"u1"}})
 	again := map[string]any{"kind": "demo.sleep", "description": "Poniendo el temporizador otra vez", "input": map[string]any{"seconds": 5}}
 	msg := callErr(t, cs, "start_task", again)
 	mustContain(t, msg, "already started")
@@ -427,7 +431,7 @@ func TestResumedTurnDoesNotRepeatAnAction(t *testing.T) {
 
 	// Something else is fine: another input, or another kind.
 	var other startTaskOut
-	callOK(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "YouTube", "input": map[string]any{"seconds": 6}}, &other)
+	callOK(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "Lavadora", "input": map[string]any{"seconds": 6}}, &other)
 	callOK(t, cs, "start_task", map[string]any{"kind": "demo.ask", "description": "Perfil", "input": map[string]any{"question": "¿Cuál?"}}, &other)
 	// The same input for another kind is another action.
 	callOK(t, cs, "start_task", map[string]any{"kind": "test.big", "description": "Otra cosa", "input": map[string]any{"seconds": 5}}, &other)
@@ -445,34 +449,36 @@ func TestResumedGuardEdges(t *testing.T) {
 		callOK(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "x", "input": input}, &out)
 		return out
 	}
+	c.Bind(Turn{ThreadID: "th", Said: []string{"u1"}})
 	// A task that ended well counts as done: not again.
 	done := start(map[string]any{"seconds": 1})
 	h.waitStatus(done.TaskID, events.StatusRunning)
 	h.gate <- struct{}{} // let it end
 	h.waitStatus(done.TaskID, events.StatusDone)
-	// One that failed or was cancelled may be tried again (the LLM still
-	// asks the user first, by the prompt).
+	// Nor one that failed or was cancelled: it may have half run, so only
+	// the user may ask for it again.
 	cancelled := start(map[string]any{"seconds": 2})
-	bus.Request(context.Background(), h.direct, events.CancelTask, events.TaskCancelRequest{TaskID: cancelled.TaskID})
+	bus.Request(context.Background(), h.direct, events.CancelTask, events.TaskCancelRequest{TaskID: cancelled.TaskID, Reason: "the user changed their mind"})
 	h.waitStatus(cancelled.TaskID, events.StatusCancelled)
 	// No input and an empty input are the same.
 	start(nil)
+	// Tasks other sentences caused don't count, whatever the thread.
+	c.Bind(Turn{ThreadID: "th", Said: []string{"u2"}})
+	start(map[string]any{"seconds": 3})
+	h.startDirect(events.TaskSpec{Kind: "demo.sleep", Input: json.RawMessage(`{"seconds":4}`), ThreadID: "otro", CausedBy: []string{"u9"}})
 
-	c.Bind(Turn{ThreadID: "th", Resumed: time.Now()})
+	c.Bind(Turn{ThreadID: "th", Said: []string{"u1"}, Resumed: []string{"u1"}})
 	mustContain(t, callErr(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "x", "input": map[string]any{"seconds": 1}}), done.TaskID)
 	mustContain(t, callErr(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "x", "input": map[string]any{}}), "already started")
-	start(map[string]any{"seconds": 2})
-
-	// Tasks of another thread, or from before the sentence (beyond the
-	// clock margin), don't count.
-	h.startDirect(events.TaskSpec{Kind: "demo.sleep", Input: json.RawMessage(`{"seconds":3}`), ThreadID: "otro"})
+	msg := callErr(t, cs, "start_task", map[string]any{"kind": "demo.sleep", "description": "x", "input": map[string]any{"seconds": 2}})
+	mustContain(t, msg, "ask whether to try again")
+	mustContain(t, msg, "the user changed their mind")
 	start(map[string]any{"seconds": 3})
-	c.Bind(Turn{ThreadID: "th", Resumed: time.Now().Add(resumedMargin + time.Minute)})
-	start(map[string]any{"seconds": 1})
+	start(map[string]any{"seconds": 4})
 
-	// A turn that isn't resumed is not checked.
-	c.Bind(Turn{ThreadID: "th"})
-	start(map[string]any{"seconds": 1})
+	// A turn that isn't resumed is not checked: the user asked again.
+	c.Bind(Turn{ThreadID: "th", Said: []string{"u3"}})
+	start(map[string]any{"seconds": 2})
 }
 
 func TestSameJSON(t *testing.T) {

@@ -34,12 +34,14 @@ func TestRealResumeDoesNotRepeatAnAction(t *testing.T) {
 			r := newRealStackDown(t)
 			ctx := context.Background()
 			// The sentence, while the brain is down...
-			if _, err := bus.Publish(ctx, r.client, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: "th", Text: tc.said}); err != nil {
+			said, err := bus.Publish(ctx, r.client, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: "th", Text: tc.said})
+			if err != nil {
 				t.Fatal(err)
 			}
 			// ...and the task the dead turn started for it.
 			first, err := bus.Request(ctx, r.client, events.StartTask, events.TaskSpec{
 				Kind: "demo.sleep", Description: "Poner un temporizador", ThreadID: "th", Input: json.RawMessage(`{"seconds":60}`),
+				CausedBy: []string{said.ID},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -73,11 +75,13 @@ func TestRealGuardStopsARepeatTheLLMCantSee(t *testing.T) {
 	system, _ := prompts.System(prompts.Persona{AssistantName: "DOGGIE", OwnerName: "Alex", Language: "es"})
 	r := newRealStackDown(t)
 	ctx := context.Background()
-	if _, err := bus.Publish(ctx, r.client, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: "th", Text: "Pon un temporizador, usa demo.sleep de 1 segundo."}); err != nil {
+	said, err := bus.Publish(ctx, r.client, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: "th", Text: "Pon un temporizador, usa demo.sleep de 1 segundo."})
+	if err != nil {
 		t.Fatal(err)
 	}
 	first, err := bus.Request(ctx, r.client, events.StartTask, events.TaskSpec{
 		Kind: "demo.sleep", Description: "Poner un temporizador", ThreadID: "th", Input: json.RawMessage(`{"seconds":1}`),
+		CausedBy: []string{said.ID},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -256,4 +260,47 @@ func TestRealIdentity(t *testing.T) {
 type identityAsk struct {
 	said      string
 	wantModel bool
+}
+
+// The task the dead turn started for a sentence was cut short by the
+// restart. Resuming the sentence, the LLM must not run it again on its own:
+// it may have half run. It tells the user and asks.
+func TestRealResumedActionThatFailedIsNotRetried(t *testing.T) {
+	if os.Getenv("DOGGIE_REAL_CLAUDE") != "1" {
+		t.Skip("set DOGGIE_REAL_CLAUDE=1 to run on the real claude CLI")
+	}
+	system, _ := prompts.System(prompts.Persona{AssistantName: "DOGGIE", OwnerName: "Alex", Language: "es"})
+	for _, said := range []string{"Pon un temporizador de 60 segundos con demo.sleep.", "Avísame en un minuto (demo.sleep, 60 segundos)."} {
+		r := newRealStackDown(t)
+		ctx := context.Background()
+		ev, err := bus.Publish(ctx, r.client, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: "th", Text: said})
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := bus.Request(ctx, r.client, events.StartTask, events.TaskSpec{
+			Kind: "demo.sleep", Description: "Temporizador de 60 segundos", ThreadID: "th", Input: json.RawMessage(`{"seconds":60}`),
+			CausedBy: []string{ev.ID},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bus.Request(ctx, r.client, events.CancelTask, events.TaskCancelRequest{TaskID: first.TaskID, Reason: "interrupted: DOGGIE restarted"})
+		r.startBrain(system, 1)
+
+		turn := r.waitTurn("th")
+		reply := strings.Join(turn.Replies, " ")
+		for _, a := range turn.Actions {
+			t.Logf("action: %s %s", a.Tool, a.Input)
+		}
+		t.Logf("%s -> %s", said, reply)
+		list, _ := bus.Request(ctx, r.client, events.ListTasks, events.TaskListRequest{})
+		for _, task := range list.Tasks {
+			if task.ID != first.TaskID {
+				t.Errorf("ran it again on its own: %s %s %s", task.ID, task.Input, task.Status)
+			}
+		}
+		if !strings.Contains(reply, "?") {
+			t.Errorf("didn't ask whether to try again: %q", reply)
+		}
+	}
 }

@@ -355,3 +355,27 @@ func TestResumedSentences(t *testing.T) {
 	mustContain(`<said channel="terminal" at="15:40" resumed="yes">pon música</said>`)
 	mustContain(`<said channel="terminal" at="15:40">hola</said>`)
 }
+
+func TestActedTasks(t *testing.T) {
+	failed := events.TaskInfo{ID: "t2", TaskSpec: events.TaskSpec{Kind: "demo.sleep", Description: "Temporizador <x>"}, Status: events.StatusFailed, Error: "interrupted: DOGGIE restarted"}
+	done := events.TaskInfo{ID: "t3", TaskSpec: events.TaskSpec{Kind: "demo.ask"}, Status: events.StatusDone}
+	in := Input{At: at(0), Said: "hazlo", Channel: "terminal", Resumed: true, Acted: []events.TaskInfo{failed, done}}
+	got := Build(Context{Now: at(0), Inputs: []Input{in}})
+	want := `<acted>Before the restart, you started for it: task t2 (demo.sleep, <data>Temporizador &lt;x&gt;</data>), now failed: <data>interrupted: DOGGIE restarted</data>; task t3 (demo.ask), now done.</acted>`
+	if !strings.Contains(got, want) {
+		t.Errorf("prompt:\n%s\nwant it to contain:\n%s", got, want)
+	}
+	// Many are cut short; a sentence that isn't resumed has none.
+	var many []events.TaskInfo
+	for i := range 13 {
+		many = append(many, events.TaskInfo{ID: fmt.Sprintf("t%d", i+10), TaskSpec: events.TaskSpec{Kind: "demo.sleep"}, Status: events.StatusRunning})
+	}
+	in.Acted = many
+	if got := Build(Context{Now: at(0), Inputs: []Input{in}}); !strings.Contains(got, "now running and 3 more.</acted>") || strings.Contains(got, "t20") {
+		t.Errorf("prompt:\n%s", got)
+	}
+	in.Resumed = false
+	if got := Build(Context{Now: at(0), Inputs: []Input{in}}); strings.Contains(got, "<acted>") {
+		t.Errorf("acted for a sentence not resumed:\n%s", got)
+	}
+}

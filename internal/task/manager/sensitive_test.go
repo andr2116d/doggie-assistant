@@ -156,3 +156,21 @@ func TestSensitiveQuestionsAndProgressStayOutOfTheLog(t *testing.T) {
 		t.Errorf("%d redacted events, want 3", redacted)
 	}
 }
+
+// What caused a task is logged, so it is bounded.
+func TestCausedByIsChecked(t *testing.T) {
+	h := newHarness(t, testOptions(), map[string]worker.Func{"test.echo": echo})
+	id := h.mustStart(events.TaskSpec{Kind: "test.echo", CausedBy: []string{"01ABC", "01DEF"}})
+	if info := h.get(id); !slices.Equal(info.CausedBy, []string{"01ABC", "01DEF"}) {
+		t.Errorf("caused_by = %q", info.CausedBy)
+	}
+	tooMany := make([]string, events.MaxCausedBy+1)
+	for i := range tooMany {
+		tooMany[i] = "x"
+	}
+	for _, bad := range [][]string{tooMany, {""}, {"a b"}, {strings.Repeat("x", 65)}} {
+		if _, err := h.start(events.TaskSpec{Kind: "test.echo", CausedBy: bad}); err == nil {
+			t.Errorf("accepted caused_by %q", bad)
+		}
+	}
+}

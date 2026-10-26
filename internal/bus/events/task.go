@@ -50,6 +50,11 @@ type TaskSpec struct {
 	ThreadID string `json:"thread_id,omitempty"`
 	// TimeoutS overrides the manager's default timeout, in seconds.
 	TimeoutS int `json:"timeout_s,omitempty"`
+	// CausedBy are the events that led to the task, e.g. the sentences a
+	// turn answered when the LLM started it: at most MaxCausedBy IDs. Its
+	// task.created, logged before the task runs, records which sentence
+	// asked for what.
+	CausedBy []string `json:"caused_by,omitempty"`
 	// Sensitive keeps Input, the result, progress messages and questions
 	// out of the event log: they only travel in commands and live in the
 	// manager's memory (task.get tells them), so they are gone after a
@@ -57,6 +62,9 @@ type TaskSpec struct {
 	// sensitive data.
 	Sensitive bool `json:"sensitive,omitempty"`
 }
+
+// MaxCausedBy bounds TaskSpec.CausedBy.
+const MaxCausedBy = 16
 
 // TaskInfo is a snapshot of a task.
 type TaskInfo struct {

@@ -17,6 +17,10 @@ import (
 // maxListedTasks is how many active tasks a prompt may list.
 const maxListedTasks = 50
 
+// maxActedTasks is how many recent tasks are searched for those resumed
+// sentences caused.
+const maxActedTasks = 500
+
 // turnJob is what a turn works on: a snapshot taken by the Run loop.
 type turnJob struct {
 	thread  string
@@ -54,30 +58,32 @@ func (b *Brain) runTurn(ctx context.Context, job turnJob) (rec events.BrainTurnD
 		tasks = list.Tasks
 	}
 
+	// The tasks the turn starts were caused by its sentences. A resumed
+	// sentence may already have been acted on: the prompt tells what was
+	// started for it, and the tools refuse to start it again.
+	turn := mcp.Turn{ThreadID: job.thread, Channel: job.channel}
+	for _, in := range job.inputs {
+		if in.Said == "" {
+			continue
+		}
+		turn.Said = append(turn.Said, in.EventID)
+		if in.Resumed {
+			turn.Resumed = append(turn.Resumed, in.EventID)
+		}
+	}
+	acted := b.actedOn(ctx, turn.Resumed)
+
 	inputs := make([]prompt.Input, len(job.inputs))
 	for i, in := range job.inputs {
 		inputs[i] = promptInput(in)
+		if in.Resumed {
+			inputs[i].Acted = acted[in.EventID]
+		}
 	}
 	msg := prompt.Build(prompt.Context{
 		Now: time.Now(), Location: b.opts.Location, ThreadID: job.thread,
 		Tasks: tasks, History: job.history, MaxTurns: b.opts.HistoryTurns, Inputs: inputs,
 	})
-
-	turn := mcp.Turn{ThreadID: job.thread, Channel: job.channel}
-	// A resumed sentence may already have been acted on: the tools guard
-	// against starting it again (see mcp.Turn.Resumed).
-	for _, in := range job.inputs {
-		if !in.Resumed {
-			continue
-		}
-		at := in.At
-		if at.IsZero() {
-			at = job.started.Add(-catchUpWindow) // unknown: assume the oldest
-		}
-		if turn.Resumed.IsZero() || at.Before(turn.Resumed) {
-			turn.Resumed = at
-		}
-	}
 	block := 0
 	out, err := b.provider.Generate(ctx, llm.Request{Turn: turn, Input: msg, Stream: true})
 	if err != nil {
@@ -187,6 +193,31 @@ func loggable(inputs []events.TurnInput) []events.TurnInput {
 			task := *in.Task
 			task.Question, task.Options = "", nil
 			out[i].Task = &task
+		}
+	}
+	return out
+}
+
+// actedOn returns the tasks each of the given sentences caused, oldest
+// first. Without the task manager it returns none: the tools refuse to
+// start anything they can't check.
+func (b *Brain) actedOn(ctx context.Context, said []string) map[string][]events.TaskInfo {
+	if len(said) == 0 {
+		return nil
+	}
+	lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
+	list, err := bus.Request(lctx, b.conn, events.ListTasks, events.TaskListRequest{Limit: maxActedTasks})
+	if err != nil {
+		b.log.Warn("brain: could not list what resumed sentences caused", "err", err)
+		return nil
+	}
+	out := make(map[string][]events.TaskInfo)
+	for _, t := range list.Tasks {
+		for _, id := range t.CausedBy {
+			if slices.Contains(said, id) {
+				out[id] = append(out[id], t)
+			}
 		}
 	}
 	return out

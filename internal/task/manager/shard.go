@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
@@ -161,6 +162,10 @@ func (s *shard) start(ctx context.Context, in bus.Incoming[events.TaskSpec, even
 	}
 	if !bus.ValidName(spec.Kind) {
 		refuse(fmt.Errorf("invalid task kind %q", spec.Kind))
+		return
+	}
+	if err := checkCausedBy(spec.CausedBy); err != nil {
+		refuse(err)
 		return
 	}
 	if spec.ParentID != "" {
@@ -618,4 +623,17 @@ func (s *shard) sorted() []*task.Task {
 		return na - nb
 	})
 	return out
+}
+
+// checkCausedBy bounds what a task says caused it: it is logged.
+func checkCausedBy(ids []string) error {
+	if len(ids) > events.MaxCausedBy {
+		return fmt.Errorf("caused_by has %d events, at most %d", len(ids), events.MaxCausedBy)
+	}
+	for _, id := range ids {
+		if id == "" || len(id) > 64 || strings.ContainsFunc(id, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
+			return fmt.Errorf("invalid event ID %q in caused_by", id)
+		}
+	}
+	return nil
 }

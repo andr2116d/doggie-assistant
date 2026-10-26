@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -236,7 +237,7 @@ func (s *Server) startTask(ctx context.Context, turn Turn, in startTaskIn) (star
 	if len(raw) > maxInputBytes {
 		return startTaskOut{}, fmt.Errorf("input is too large (%d bytes, max %d)", len(raw), maxInputBytes)
 	}
-	if !turn.Resumed.IsZero() {
+	if len(turn.Resumed) > 0 {
 		if err := s.notStartedYet(ctx, turn, k.Name, raw); err != nil {
 			return startTaskOut{}, err
 		}
@@ -246,6 +247,7 @@ func (s *Server) startTask(ctx context.Context, turn Turn, in startTaskIn) (star
 		Input:       raw,
 		Description: desc,
 		ThreadID:    turn.ThreadID,
+		CausedBy:    turn.Said,
 	})
 	if err != nil {
 		return startTaskOut{}, busError(err)
@@ -404,30 +406,36 @@ func truncate(s string, maxRunes int) string {
 	return string(r[:maxRunes]) + "…"
 }
 
-// resumedMargin widens the window in which a resumed turn looks for a task
-// it already started: the sentence was stamped by its satellite's clock,
-// the task by the core's.
-const resumedMargin = 2 * time.Minute
-
 // notStartedYet guards a resumed turn against starting an action twice: the
-// turn that died may have started it already. It refuses a task of the same
-// kind and input that the thread started since the resumed sentences (unless
-// it failed or was cancelled), and refuses when it can't check, since
-// starting an action twice is worse than asking.
+// turn that died may have started it already. Every task records the
+// sentences that caused it, so it refuses a task of the same kind and input
+// that a resumed sentence caused, however it ended: one that failed or was
+// cancelled may have half run, so only the user may ask for it again, in a
+// new sentence. It also refuses when it can't check, since starting an
+// action twice is worse than asking.
 func (s *Server) notStartedYet(ctx context.Context, turn Turn, kind string, input json.RawMessage) error {
 	list, err := bus.Request(ctx, s.conn, events.ListTasks, events.TaskListRequest{Limit: maxListLimit * 2})
 	if err != nil {
 		return fmt.Errorf("could not check whether this was already started before the restart (%v): ask the user before trying again", busError(err))
 	}
-	since := turn.Resumed.Add(-resumedMargin)
 	for _, t := range list.Tasks {
-		if t.ThreadID != turn.ThreadID || t.Kind != kind || t.CreatedAt.Before(since) ||
-			t.Status == events.StatusFailed || t.Status == events.StatusCancelled || !sameJSON(t.Input, input) {
+		if t.Kind != kind || !sameJSON(t.Input, input) || !slices.ContainsFunc(t.CausedBy, func(id string) bool { return slices.Contains(turn.Resumed, id) }) {
 			continue
+		}
+		if t.Status == events.StatusFailed || t.Status == events.StatusCancelled {
+			return fmt.Errorf("task %s (%s) was already started for this before the restart and %s: don't start it again on your own; tell the user and ask whether to try again", t.ID, t.Kind, endedHow(t))
 		}
 		return fmt.Errorf("task %s (%s) was already started for this before the restart and is %s: don't start it again; tell the user how it is going", t.ID, t.Kind, t.Status)
 	}
 	return nil
+}
+
+// endedHow says how a failed or cancelled task ended.
+func endedHow(t events.TaskInfo) string {
+	if t.Error == "" {
+		return string(t.Status)
+	}
+	return fmt.Sprintf("%s (%s)", t.Status, t.Error)
 }
 
 // sameJSON reports whether two inputs mean the same; empty, null and {} are

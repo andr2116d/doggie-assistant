@@ -77,8 +77,9 @@ type Input struct {
 	Said    string
 	Channel string
 	// Resumed marks a sentence answered after a restart: the LLM may have
-	// acted on it already.
+	// acted on it already. Acted are the tasks it started for it then.
 	Resumed bool
+	Acted   []events.TaskInfo
 	Event   *TaskEvent
 }
 
@@ -242,6 +243,9 @@ func writeInput(b *strings.Builder, in Input, clk clock, omitAt string, maxText 
 			resumed = ` resumed="yes"`
 		}
 		fmt.Fprintf(b, "<said channel=\"%s\"%s%s>%s</said>\n", attr(in.Channel), at, resumed, esc(cut(in.Said, maxText)))
+		if in.Resumed && len(in.Acted) > 0 {
+			writeActed(b, in.Acted)
+		}
 		return
 	}
 	e := in.Event
@@ -340,4 +344,31 @@ func cut(s string, maxRunes int) string {
 		n++
 	}
 	return s
+}
+
+// maxActed bounds the tasks listed for one resumed sentence.
+const maxActed = 10
+
+// writeActed tells what was started for a resumed sentence before the
+// restart, and how each task is now.
+func writeActed(b *strings.Builder, tasks []events.TaskInfo) {
+	b.WriteString("<acted>Before the restart, you started for it:")
+	for i, t := range tasks {
+		if i == maxActed {
+			fmt.Fprintf(b, " and %d more", len(tasks)-maxActed)
+			break
+		}
+		if i > 0 {
+			b.WriteString(";")
+		}
+		fmt.Fprintf(b, " task %s (%s", esc(t.ID), esc(t.Kind))
+		if t.Description != "" {
+			fmt.Fprintf(b, ", <data>%s</data>", esc(cut(t.Description, maxDataText)))
+		}
+		fmt.Fprintf(b, "), now %s", esc(string(t.Status)))
+		if (t.Status == events.StatusFailed || t.Status == events.StatusCancelled) && t.Error != "" {
+			fmt.Fprintf(b, ": <data>%s</data>", esc(cut(t.Error, maxDataText)))
+		}
+	}
+	b.WriteString(".</acted>\n")
 }

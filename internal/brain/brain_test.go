@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +48,7 @@ func TestSaysTheReplyAndRecordsTheTurn(t *testing.T) {
 	}
 	// The provider got the thread to act for and the built context.
 	reqs := h.fake.requests()
-	if len(reqs) != 1 || reqs[0].Turn != (mcp.Turn{ThreadID: "terminal", Channel: "terminal"}) {
+	if len(reqs) != 1 || !reflect.DeepEqual(reqs[0].Turn, mcp.Turn{ThreadID: "terminal", Channel: "terminal", Said: []string{id}}) {
 		t.Fatalf("requests = %+v", reqs)
 	}
 	mustContain(t, reqs[0].Input, "<world>", "Active tasks: none", `<said channel="terminal"`, "recuérdame comprar pan y cuéntame un chiste</said>")
@@ -739,9 +740,10 @@ func TestUnansweredSentencesAreResumedAfterARestart(t *testing.T) {
 		t.Errorf("resumed = %q", said)
 	}
 	mustContain(t, h.fake.requests()[0].Input, `resumed="yes">¿qué hora es?</said>`, `resumed="yes">¿sigues ahí?</said>`)
-	// The tools guard the resumed turn from the oldest resumed sentence on.
-	if got := h.fake.requests()[0].Turn.Resumed; !got.Equal(turn.Data.Inputs[0].At) {
-		t.Errorf("Turn.Resumed = %s, want %s", got, turn.Data.Inputs[0].At)
+	// The tools guard what the resumed sentences caused.
+	want := []string{turn.Data.Inputs[0].EventID, turn.Data.Inputs[1].EventID}
+	if got := h.fake.requests()[0].Turn; !reflect.DeepEqual(got.Resumed, want) || !reflect.DeepEqual(got.Said, want) {
+		t.Errorf("Turn = %+v, want %q resumed", got, want)
 	}
 
 	// Once answered, a further restart resumes nothing.
@@ -950,4 +952,31 @@ func TestBrainKeepsFewPastTurns(t *testing.T) {
 	if len(th.past) != maxPastTurns || th.past[len(th.past)-1].ID != fmt.Sprint(3*maxPastTurns-1) {
 		t.Errorf("kept %d turns, the last %s", len(th.past), th.past[len(th.past)-1].ID)
 	}
+}
+
+// A resumed sentence comes with what was started for it before the
+// restart, so the LLM doesn't start it again.
+func TestResumedSentencesTellWhatTheyCaused(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.fake.set(func(f *fake) { f.gate = make(chan struct{}) })
+	id := h.say("th", "terminal", "pon un temporizador")
+	h.waitRequest(">pon un temporizador</said>")
+	// The turn started a task for it, then died before it was recorded.
+	ref, err := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{
+		Kind: "demo.sleep", Description: "Temporizador", ThreadID: "th", CausedBy: []string{id},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.sleep", Description: "Otra cosa", ThreadID: "th", CausedBy: []string{"another"}})
+	h.waitStatus(ref.TaskID, events.StatusRunning)
+	h.stop()
+	h.nextTurn()
+
+	h.fake.set(func(f *fake) { f.gate = nil })
+	h.startBrain(Options{})
+	h.nextTurn()
+	in := inputOf(h.fake.requests()[0].Input)
+	mustContain(t, in, `resumed="yes">pon un temporizador</said>`+"\n<acted>Before the restart, you started for it: task "+ref.TaskID+" (demo.sleep, <data>Temporizador</data>), now running.</acted>")
+	mustNotContain(t, in, "<acted>Before the restart, you started for it: task "+other.TaskID)
 }

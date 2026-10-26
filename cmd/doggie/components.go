@@ -152,6 +152,7 @@ func newBrain(d deps) (supervisor.Component, error) {
 	bc := d.cfg.Brain
 	return brain.New(d.conn, d.log, brain.Options{
 		HistoryTurns: bc.HistoryTurns,
+		Language:     d.cfg.Language,
 		NewProvider: func(tools *mcp.Server) (llm.Brain, func(), error) {
 			p, err := claudecode.New(claudecode.Options{
 				Command:     bc.ClaudeCode.Command,

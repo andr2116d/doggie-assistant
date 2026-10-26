@@ -25,12 +25,34 @@ type BrainTurnData struct {
 	// text, or 0 if it wrote none. DurationMS is the whole turn.
 	FirstTextMS int64 `json:"first_text_ms,omitempty"`
 	DurationMS  int64 `json:"duration_ms"`
-	// Error is why the turn failed, if it did.
-	Error string `json:"error,omitempty"`
+	// Error is why the turn failed, if it did, and Failure what kind of
+	// failure it was (Failure*).
+	Error   string `json:"error,omitempty"`
+	Failure string `json:"failure,omitempty"`
 	// FiveHourUsage and SevenDayUsage are the share (0-1) of the
 	// subscription's usage windows spent, when the provider knows it.
 	FiveHourUsage float64 `json:"five_hour_usage,omitempty"`
 	SevenDayUsage float64 `json:"seven_day_usage,omitempty"`
+	// LowUsage are the usage windows this turn warned were running low.
+	LowUsage []UsageWindow `json:"low_usage,omitempty"`
+}
+
+// The kinds of BrainTurnData.Failure.
+const (
+	// FailureUsageLimit: the LLM's usage limit is spent. DOGGIE says so
+	// itself, in one of the Replies.
+	FailureUsageLimit = "usage_limit"
+	FailureTimeout    = "timeout"
+	// FailureNoTools: the LLM could not reach DOGGIE's tools.
+	FailureNoTools = "tools_unavailable"
+	FailureOther   = "other"
+)
+
+// UsageWindow is one of the LLM's usage windows, e.g. "five_hour" or
+// "seven_day", and when it renews (zero if unknown).
+type UsageWindow struct {
+	Window string    `json:"window"`
+	Renews time.Time `json:"renews,omitzero"`
 }
 
 // TurnInput is something a turn answered: a sentence (Said) or a task event

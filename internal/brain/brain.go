@@ -66,6 +66,9 @@ type Options struct {
 	HistoryTurns int
 	// MaxTurns is how many turns may run at once. Zero means 2.
 	MaxTurns int
+	// Language is the language DOGGIE speaks (BCP 47), for what it says
+	// when the LLM can't, e.g. once its usage limit is spent.
+	Language string
 }
 
 // Brain is the brain component.
@@ -89,6 +92,8 @@ type Brain struct {
 	startSeq uint64
 	turns    sync.WaitGroup
 	tick     uint64 // logical clock for thread recency
+	// warnings outlives a run: the log tells the next one the same.
+	warnings usageWarnings
 }
 
 type thread struct {
@@ -281,6 +286,7 @@ func (b *Brain) recover(ctx context.Context) error {
 			th.channel = ev.Data.Channel
 		}
 		b.remember(th, ev.Meta, ev.Time, ev.Data)
+		b.warnings.recall(ev.Data, ev.Time)
 		// A turn that failed without saying or doing anything answered
 		// nothing, so its inputs are caught up again (no action can repeat).
 		// Only once: a sentence that keeps failing, or crashing the brain,

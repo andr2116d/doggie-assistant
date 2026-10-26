@@ -962,3 +962,56 @@ func TestStreamDeltas(t *testing.T) {
 		t.Errorf("outputs without Stream = %+v", outs)
 	}
 }
+
+// What the CLI writes once the usage limit is spent: the limits it was told,
+// a message of its own, and a failed result.
+func TestSpentUsageLimit(t *testing.T) {
+	const (
+		rejected  = `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792995000,"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":1,"resetsAt":1792995000,"status":"rejected"},"seven_day":{"utilization":0.56,"resetsAt":1793386800,"status":"allowed"}}}}`
+		noReset   = `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","unifiedWindows":{"five_hour":{"utilization":0.7,"resetsAt":1792995000,"status":"allowed"},"seven_day":{"utilization":1,"resetsAt":1793386800,"status":"rejected"}}}}`
+		allowed   = `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1792995000,"unifiedWindows":{"five_hour":{"utilization":0.12,"resetsAt":1792995000,"status":"allowed"}}}}`
+		synthetic = `{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your session limit · resets 9:10pm (America/Lima)"}]}}`
+		failed    = `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You've hit your session limit · resets 9:10pm (America/Lima)"}`
+		overload  = `{"type":"result","subtype":"error_during_execution","is_error":true,"api_error_status":529,"result":"Overloaded"}`
+	)
+	for _, tc := range []struct {
+		name   string
+		lines  []string
+		spent  bool
+		renews time.Time
+	}{
+		{"rejected", []string{rejected, synthetic, failed}, true, time.Unix(1792995000, 0)},
+		{"renewal of the spent window", []string{noReset, synthetic, failed}, true, time.Unix(1793386800, 0)},
+		{"429 without limits", []string{synthetic, failed}, true, time.Time{}},
+		{"allowed, then another failure", []string{allowed, overload}, false, time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newProvider(t, testOptions(t))
+			var steps []step
+			for _, l := range tc.lines {
+				steps = append(steps, step{Raw: json.RawMessage(l)})
+			}
+			outs, done := collect(t, p, context.Background(), scriptOf(steps...))
+			if len(outs) != 0 {
+				t.Errorf("the CLI's own message reached DOGGIE: %+v", outs)
+			}
+			var limit *llm.UsageLimitError
+			if got := errors.As(done.Err, &limit); got != tc.spent {
+				t.Fatalf("Done.Err = %v, want a usage limit: %v", done.Err, tc.spent)
+			}
+			if tc.spent && (!limit.Renews.Equal(tc.renews) || !strings.Contains(limit.Detail, "session limit")) {
+				t.Errorf("limit = %+v, want it to renew at %v", limit, tc.renews)
+			}
+		})
+	}
+}
+
+func TestUsageTellsWhenWindowsRenew(t *testing.T) {
+	p := newProvider(t, testOptions(t))
+	_, done := collect(t, p, context.Background(), scriptOf(step{Raw: json.RawMessage(
+		`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":{"five_hour":{"utilization":0.91,"resetsAt":1792995000},"seven_day":{"utilization":0.16}}}}`)}))
+	u := done.Usage
+	if done.Err != nil || u == nil || u.FiveHour != 0.91 || !u.FiveHourRenews.Equal(time.Unix(1792995000, 0)) || u.SevenDay != 0.16 || !u.SevenDayRenews.IsZero() {
+		t.Errorf("done = %+v, usage = %+v", done, u)
+	}
+}

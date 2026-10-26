@@ -18,6 +18,19 @@ var ErrToolsUnavailable = errors.New("llm: DOGGIE's tools are not available to t
 // ErrTurnTimeout means the turn took longer than allowed.
 var ErrTurnTimeout = errors.New("llm: turn timed out")
 
+// UsageLimitError means the provider's usage limit is spent: it can't
+// answer until the limit renews.
+type UsageLimitError struct {
+	// Renews is when the limit renews, zero if unknown.
+	Renews time.Time
+	// Detail is what the provider said about it.
+	Detail string
+}
+
+func (e *UsageLimitError) Error() string {
+	return "llm: usage limit reached: " + e.Detail
+}
+
 // Brain is an LLM provider.
 type Brain interface {
 	Name() string
@@ -73,8 +86,11 @@ type Done struct {
 	Usage *Usage
 }
 
-// Usage is the share (0-1) of a subscription's usage windows already spent.
+// Usage is the share (0-1) of a subscription's usage windows already spent,
+// and when each renews (zero if unknown).
 type Usage struct {
-	FiveHour float64
-	SevenDay float64
+	FiveHour       float64
+	SevenDay       float64
+	FiveHourRenews time.Time
+	SevenDayRenews time.Time
 }

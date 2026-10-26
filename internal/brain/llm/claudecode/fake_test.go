@@ -59,6 +59,7 @@ type step struct {
 	Error    string          `json:"error,omitempty"`
 	Hang     bool            `json:"hang,omitempty"`
 	Child    bool            `json:"child,omitempty"` // start a child process and report its PID
+	Raw      json.RawMessage `json:"raw,omitempty"`   // a line as is; a result ends the turn
 }
 
 // report is what the fake tells about itself.
@@ -169,6 +170,12 @@ func fakeMain() {
 		case s.Error != "":
 			emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": s.Error})
 			return
+		case s.Raw != nil:
+			out.Write(append(append([]byte(nil), s.Raw...), '\n'))
+			out.Flush()
+			if bytes.Contains(s.Raw, []byte(`"type":"result"`)) {
+				return
+			}
 		case s.Hang:
 			select {}
 		}

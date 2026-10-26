@@ -334,6 +334,7 @@ func (p *Provider) runTurn(ctx context.Context, pr *proc, req llm.Request, out c
 // may be retried: it failed before the model started and said nothing.
 func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, out chan<- llm.Output) (d *llm.Done, retry bool) {
 	var said, started bool
+	var limit *rateLimit // the last usage the CLI reported
 	defer p.discard(pr)
 	start := time.Now()
 	d = &llm.Done{}
@@ -421,7 +422,9 @@ func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, o
 					continue
 				}
 			case "assistant":
-				if ev.Message == nil {
+				// The CLI writes some messages itself, e.g. when the usage
+				// limit is spent: the result tells what went wrong.
+				if ev.Message == nil || ev.Message.Model == syntheticModel {
 					continue
 				}
 				for _, c := range ev.Message.Content {
@@ -440,14 +443,17 @@ func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, o
 				}
 			case "rate_limit_event":
 				if ev.RateLimit != nil {
-					d.Usage = &llm.Usage{
-						FiveHour: ev.RateLimit.Windows["five_hour"].Utilization,
-						SevenDay: ev.RateLimit.Windows["seven_day"].Utilization,
-					}
+					limit = ev.RateLimit
+					d.Usage = limit.usage()
 				}
 			case "result":
 				if f := ev.failure(); f != "" {
 					d.Err = fmt.Errorf("claudecode: %s", f)
+					// A 429 the CLI gives up on is the usage limit, even
+					// when it said nothing about the limits first.
+					if spent, renews := limit.spent(); spent || ev.apiStatus() == 429 {
+						d.Err = &llm.UsageLimitError{Renews: renews, Detail: f}
+					}
 				}
 				return d, false
 			}

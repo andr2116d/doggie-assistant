@@ -502,6 +502,9 @@ func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, o
 			}
 			switch ev.Type {
 			case "system":
+				if ev.Subtype == "status" && ev.Status == "requesting" && d.Request == 0 {
+					d.Request = time.Since(start)
+				}
 				if ev.Subtype != "init" {
 					continue
 				}

@@ -82,8 +82,11 @@ type Done struct {
 	// Model is the model that answered, if known.
 	Model string
 	// FirstText is the time from sending the input to the first text, or 0
-	// if there was none.
+	// if there was none. Request is the time from sending the input to the
+	// provider's first request to its model, or 0 if unknown: the rest of
+	// FirstText is the model's.
 	FirstText time.Duration
+	Request   time.Duration
 	// Duration is the time from sending the input to the end of the turn.
 	Duration time.Duration
 	// Usage is how much of the provider's usage limits is spent, if known.

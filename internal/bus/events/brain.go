@@ -25,6 +25,10 @@ type BrainTurnData struct {
 	// text, or 0 if it wrote none. DurationMS is the whole turn.
 	FirstTextMS int64 `json:"first_text_ms,omitempty"`
 	DurationMS  int64 `json:"duration_ms"`
+	// RequestMS is the time from the LLM receiving the input to its first
+	// request to its model, if known: what the provider adds before the
+	// model starts.
+	RequestMS int64 `json:"request_ms,omitempty"`
 	// Error is why the turn failed, if it did, and Failure what kind of
 	// failure it was (Failure*).
 	Error   string `json:"error,omitempty"`

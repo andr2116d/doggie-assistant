@@ -208,7 +208,7 @@ func TestTurnOutputs(t *testing.T) {
 	if tool := outs[1].Tool; tool == nil || tool.Name != "start_task" || string(tool.Input) != `{"kind":"demo.sleep","description":"Temporizador"}` {
 		t.Errorf("tool = %+v", outs[1].Tool)
 	}
-	if done.Model != "fake-model" || done.FirstText <= 0 || done.Duration < done.FirstText {
+	if done.Model != "fake-model" || done.FirstText <= 0 || done.Duration < done.FirstText || done.Request <= 0 || done.Request >= done.FirstText {
 		t.Errorf("done = %+v", done)
 	}
 	if done.Usage == nil || done.Usage.FiveHour != 0.25 || done.Usage.SevenDay != 0.5 {

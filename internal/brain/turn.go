@@ -114,6 +114,7 @@ func (b *Brain) runTurn(ctx context.Context, job turnJob) (rec events.BrainTurnD
 			d := o.Done
 			rec.Model = d.Model
 			rec.FirstTextMS = d.FirstText.Milliseconds()
+			rec.RequestMS = d.Request.Milliseconds()
 			if usage = d.Usage; usage != nil {
 				rec.FiveHourUsage, rec.SevenDayUsage = usage.FiveHour, usage.SevenDay
 			}

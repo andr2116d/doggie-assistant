@@ -40,7 +40,7 @@ func TestRealLatency(t *testing.T) {
 	for _, warm := range []int{0, 1} {
 		t.Run(fmt.Sprintf("warm=%d", warm), func(t *testing.T) {
 			r := newRealStack(t, system, warm)
-			var chat, action, notice, model, firstBlock samples
+			var chat, action, notice, model, firstBlock, cli, ttft samples
 			for i := range runs {
 				thread := fmt.Sprintf("lat%d", i)
 				time.Sleep(2 * time.Second) // let a warm process come back
@@ -48,6 +48,10 @@ func TestRealLatency(t *testing.T) {
 				s, turn := r.measure(thread, "Dime un dato curioso muy corto sobre los perros.")
 				chat.add(s)
 				model.add(time.Duration(turn.FirstTextMS) * time.Millisecond)
+				if turn.RequestMS > 0 {
+					cli.add(time.Duration(turn.RequestMS) * time.Millisecond)
+					ttft.add(time.Duration(turn.FirstTextMS-turn.RequestMS) * time.Millisecond)
+				}
 				firstBlock.add(s - time.Duration(turn.FirstTextMS)*time.Millisecond)
 				time.Sleep(2 * time.Second)
 				// An order and conversation: one tool call.
@@ -61,6 +65,8 @@ func TestRealLatency(t *testing.T) {
 			t.Logf("  sentence → first words, order + tool:  %s", action)
 			t.Logf("  task done → notice (whole block):      %s", notice)
 			t.Logf("  model's first token (chat):            %s", model)
+			t.Logf("    of which the CLI, before its request: %s", cli)
+			t.Logf("    of which the API, to the first token: %s", ttft)
 			t.Logf("  rest of chat (pipeline, warm-up):      %s", firstBlock)
 			t.Logf("  first whole block, both cases:         %s", r.blocks)
 		})

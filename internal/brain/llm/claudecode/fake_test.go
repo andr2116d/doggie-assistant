@@ -138,6 +138,8 @@ func fakeMain() {
 	time.Sleep(time.Duration(sc.InitDelayMS) * time.Millisecond)
 	emit(map[string]any{"type": "system", "subtype": "init", "model": "fake-model",
 		"mcp_servers": []map[string]string{{"name": "doggie", "status": status}}})
+	// As the CLI says when it asks its model.
+	emit(map[string]any{"type": "system", "subtype": "status", "status": "requesting"})
 
 	var childPID int
 	mcpURL, mcpAuth := mcpConfig()

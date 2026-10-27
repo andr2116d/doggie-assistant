@@ -23,7 +23,9 @@ type event struct {
 	Type    string `json:"type"`
 	Subtype string `json:"subtype"`
 
-	// system/init
+	// system/init, and system/status: "requesting" when the CLI sends a
+	// request to the model
+	Status     string `json:"status"`
 	Model      string `json:"model"`
 	MCPServers []struct {
 		Name   string `json:"name"`

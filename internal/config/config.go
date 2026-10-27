@@ -71,7 +71,11 @@ type Brain struct {
 	HistoryTurns int `yaml:"history_turns"`
 	// TurnTimeout bounds one turn of the LLM, tool calls included.
 	TurnTimeout time.Duration `yaml:"turn_timeout"`
-	ClaudeCode  ClaudeCode    `yaml:"claudecode"`
+	// Warm is how many LLM processes wait started, so a turn doesn't pay
+	// for starting one: one per turn that may run at once (2). Each takes
+	// about 200 MB of memory.
+	Warm       int        `yaml:"warm"`
+	ClaudeCode ClaudeCode `yaml:"claudecode"`
 }
 
 // ClaudeCode configures the Claude Code provider.
@@ -132,6 +136,7 @@ func Default() Config {
 			Model:        "sonnet",
 			HistoryTurns: 20,
 			TurnTimeout:  90 * time.Second,
+			Warm:         2,
 			ClaudeCode:   ClaudeCode{Command: "claude"},
 		},
 	}
@@ -220,6 +225,9 @@ func (b Brain) validate() error {
 	}
 	if b.HistoryTurns < 0 || b.HistoryTurns > 200 {
 		return fmt.Errorf("config: brain.history_turns %d must be between 0 and 200", b.HistoryTurns)
+	}
+	if b.Warm < 0 || b.Warm > 4 {
+		return fmt.Errorf("config: brain.warm %d must be between 0 and 4", b.Warm)
 	}
 	if b.TurnTimeout < 5*time.Second || b.TurnTimeout > 10*time.Minute {
 		return fmt.Errorf("config: brain.turn_timeout %s must be between 5s and 10m", b.TurnTimeout)

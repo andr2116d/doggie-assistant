@@ -138,17 +138,17 @@ func TestLoad(t *testing.T) {
 			check: func(t *testing.T, cfg Config) {
 				b := cfg.Brain
 				if cfg.Assistant.Name != "DOGGIE" || b.Provider != "claudecode" || b.Model != "sonnet" ||
-					b.HistoryTurns != 20 || b.TurnTimeout != 90*time.Second || b.ClaudeCode.Command != "claude" {
+					b.HistoryTurns != 20 || b.TurnTimeout != 90*time.Second || b.Warm != 2 || b.ClaudeCode.Command != "claude" {
 					t.Errorf("unexpected defaults: %+v %+v", cfg.Assistant, b)
 				}
 			},
 		},
 		{
 			name:    "brain settings",
-			content: "brain:\n  model: \"claude-opus-5-5[1m]\"\n  history_turns: 0\n  turn_timeout: 2m\n  claudecode:\n    command: /opt/claude/bin/claude\n",
+			content: "brain:\n  model: \"claude-opus-5-5[1m]\"\n  history_turns: 0\n  turn_timeout: 2m\n  warm: 0\n  claudecode:\n    command: /opt/claude/bin/claude\n",
 			check: func(t *testing.T, cfg Config) {
 				b := cfg.Brain
-				if b.Model != "claude-opus-5-5[1m]" || b.HistoryTurns != 0 || b.TurnTimeout != 2*time.Minute || b.ClaudeCode.Command != "/opt/claude/bin/claude" {
+				if b.Model != "claude-opus-5-5[1m]" || b.HistoryTurns != 0 || b.TurnTimeout != 2*time.Minute || b.Warm != 0 || b.ClaudeCode.Command != "/opt/claude/bin/claude" {
 					t.Errorf("unexpected brain config: %+v", b)
 				}
 			},
@@ -173,6 +173,8 @@ func TestLoad(t *testing.T) {
 		},
 		{name: "negative history", content: "brain:\n  history_turns: -1\n", wantErr: "history_turns"},
 		{name: "huge history", content: "brain:\n  history_turns: 201\n", wantErr: "history_turns"},
+		{name: "negative warm", content: "brain:\n  warm: -1\n", wantErr: "brain.warm"},
+		{name: "many warm", content: "brain:\n  warm: 5\n", wantErr: "brain.warm"},
 		{name: "short turn timeout", content: "brain:\n  turn_timeout: 1s\n", wantErr: "turn_timeout"},
 		{name: "long turn timeout", content: "brain:\n  turn_timeout: 11m\n", wantErr: "turn_timeout"},
 		{name: "empty claude command", content: "brain:\n  claudecode:\n    command: \"\"\n", wantErr: "claudecode.command"},

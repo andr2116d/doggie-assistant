@@ -52,6 +52,9 @@ brain:
   history_turns: 20
   # Upper bound for one turn of the LLM, tool calls included (5s-10m).
   turn_timeout: "90s"
+  # LLM processes kept started ahead, so a turn needn't wait for one (0-4).
+  # One per turn that may run at once; each takes about 200 MB of memory.
+  warm: 2
   claudecode:
     # The claude executable. Use an absolute path if it is not in PATH (e.g.
     # when DOGGIE runs as a service).

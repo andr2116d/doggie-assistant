@@ -171,7 +171,7 @@ func newBrain(d deps) (supervisor.Component, error) {
 				Token:       token,
 				Tools:       tools,
 				Log:         d.log,
-				Warm:        1,
+				Warm:        bc.Warm,
 			})
 			if err != nil {
 				return nil, nil, err

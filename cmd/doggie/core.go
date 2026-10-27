@@ -85,7 +85,7 @@ func takeLock(ctx context.Context, dir, role string, log *slog.Logger) (unlock f
 		return unlock, err
 	}
 	log.Info("a chat runs DOGGIE: asking it to hand it over", "pid", running.pid)
-	if err := askToHandOver(running.pid); err != nil {
+	if err := requestHandover(dir); err != nil {
 		return nil, fmt.Errorf("%w; asking it to hand DOGGIE over: %v", running, err)
 	}
 	deadline := time.Now().Add(handoverTimeout)

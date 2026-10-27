@@ -20,8 +20,9 @@ type hosting struct {
 	selected   []factory
 	own        *core // nil when DOGGIE doesn't run here
 	logPath    string
-	// handover delivers an explicit DOGGIE's requests for the one run here.
-	handover     <-chan os.Signal
+	// handover delivers an explicit DOGGIE's requests for the one run here,
+	// while one runs here; stopHandover stops watching for them.
+	handover     <-chan struct{}
 	stopHandover func()
 }
 
@@ -35,9 +36,7 @@ var (
 )
 
 func newHosting(configPath string, selected []factory) *hosting {
-	h := &hosting{configPath: configPath, selected: selected}
-	h.handover, h.stopHandover = handoverSignals()
-	return h
+	return &hosting{configPath: configPath, selected: selected, stopHandover: func() {}}
 }
 
 // start runs DOGGIE in this process, logging to a file. An error wrapping
@@ -60,6 +59,8 @@ func (h *hosting) start(ctx context.Context) error {
 	}
 	own.logFile = logFile
 	h.own, h.logPath = own, logPath
+	wctx, stop := context.WithCancel(context.Background())
+	h.handover, h.stopHandover = watchHandover(wctx, h.dataDir), stop
 	return nil
 }
 
@@ -88,16 +89,17 @@ func (h *hosting) done() <-chan struct{} {
 func (h *hosting) release() *core {
 	own := h.own
 	h.own = nil
+	h.stopHandover()
+	h.handover, h.stopHandover = nil, func() {}
 	return own
 }
 
 // close stops the DOGGIE run here, if any, telling the other chats they
-// may take over, and stops listening for handover requests.
+// may take over.
 func (h *hosting) close() {
 	if own := h.release(); own != nil {
 		stopCore(own, events.StopHostClosed)
 	}
-	h.stopHandover()
 }
 
 // stopCore stops a DOGGIE run by a chat and closes its log.

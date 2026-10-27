@@ -1,31 +1,9 @@
-//go:build !unix
+//go:build !unix && !windows
 
 package main
 
-import (
-	"errors"
-	"os"
-)
+import "os"
 
-var errRunning = errors.New("another DOGGIE is running with this data dir")
-
-const (
-	roleRun  = "run"
-	roleChat = "chat"
-)
-
-// runningError is errRunning; without flock the holder is unknown.
-type runningError struct {
-	pid  int
-	role string
-}
-
-func (e *runningError) Error() string { return errRunning.Error() }
-func (e *runningError) Unwrap() error { return errRunning }
-
-// lockDataDir does nothing where flock doesn't exist.
-func lockDataDir(string, string) (unlock func(), err error) { return func() {}, nil }
-
-func askToHandOver(int) error { return errors.ErrUnsupported }
-
-func handoverSignals() (<-chan os.Signal, func()) { return nil, func() {} }
+// tryLock does nothing where the system has no file locks DOGGIE knows of:
+// two DOGGIEs could share a data dir there.
+func tryLock(*os.File) error { return nil }

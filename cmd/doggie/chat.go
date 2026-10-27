@@ -683,7 +683,7 @@ func (c *chatState) takeOver(ctx context.Context) {
 
 // handoverRequests delivers an explicit DOGGIE's requests for the one run
 // here; nil when none runs here.
-func (c *chatState) handoverRequests() <-chan os.Signal {
+func (c *chatState) handoverRequests() <-chan struct{} {
 	if c.host == nil || c.host.own == nil {
 		return nil
 	}

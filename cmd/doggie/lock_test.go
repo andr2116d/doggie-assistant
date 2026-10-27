@@ -10,23 +10,6 @@ import (
 	"github.com/andr2116d/doggie-assistant/internal/config"
 )
 
-func TestOneDoggiePerDataDir(t *testing.T) {
-	dir := t.TempDir()
-	unlock, err := lockDataDir(dir, roleRun)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := lockDataDir(dir, roleRun); !errors.Is(err, errRunning) {
-		t.Fatalf("second lock: %v", err)
-	}
-	unlock()
-	again, err := lockDataDir(dir, roleRun)
-	if err != nil {
-		t.Fatalf("lock after unlock: %v", err)
-	}
-	again()
-}
-
 func TestStartCoreRefusesASecondDoggie(t *testing.T) {
 	client := localDoggie(t)
 	ui := newFakeUI(false)

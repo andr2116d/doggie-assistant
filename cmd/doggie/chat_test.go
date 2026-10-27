@@ -399,7 +399,10 @@ func TestChatPipedWaitsForSlowSends(t *testing.T) {
 func TestChatShowsSentencesSaidElsewhere(t *testing.T) {
 	brains := make(chan *bus.Conn, 1)
 	client := sayEnv(t, func(ctx context.Context, c *bus.Conn, u bus.Event[events.UtteranceData]) {
-		brains <- c
+		select {
+		case brains <- c:
+		default: // the sentences below come here too: one is enough
+		}
 	})
 	ui := newFakeUI(true)
 	runChat(t, client, ui, make(chan connState), testChatOptions())

@@ -10,14 +10,14 @@
 
 
   DOGGIE
-  ╭────────────────────────────────────╮
-  │ Receta rápida                      │
-  │ Necesitas tres cosas, nada más:    │
-  │ • arroz, lavado dos veces para que │
-  │   no quede pegajoso                │
-  │ • 2 tazas de agua                  │
-  │ hervir 10 min                      │
-  ╰────────────────────────────────────╯
+  ╭──────────────────────────────────────╮
+  │  Receta rápida                       │
+  │  Necesitas tres cosas, nada más:     │
+  │  • arroz, lavado dos veces para que  │
+  │    no quede pegajoso                 │
+  │  • 2 tazas de agua                   │
+  │  hervir 10 min                       │
+  ╰──────────────────────────────────────╯
  ╭────────────────────────────────────────╮
  │ ›                                      │
  ╰────────────────────────────────────────╯

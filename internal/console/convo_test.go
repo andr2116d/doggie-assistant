@@ -296,3 +296,26 @@ func renderRows(text string, width int, md bool) []textRow {
 func rowsEqual(a, b []textRow) bool {
 	return slices.EqualFunc(a, b, func(x, y textRow) bool { return x.text == y.text && slices.Equal(x.attrs, y.attrs) })
 }
+
+// A word alone sits in the middle of a bubble of the least width, and a
+// reply being written ends in the cursor, in the bubble's padding.
+func TestShortBubbleAndCursor(t *testing.T) {
+	c := newConversation("DOGGIE")
+	c.say(fromUser, "", "hola", noteInfo)
+	c.stream("r", "Sí, ya ")
+	for c.pace() {
+	}
+	text, _ := drawConversation(c, 60, 20)
+	if !strings.Contains(text, "│   hola   │") {
+		t.Errorf("the word isn't in the middle:\n%s", text)
+	}
+	if !strings.Contains(text, "│  Sí, ya▍ │") {
+		t.Errorf("no cursor while writing:\n%s", text)
+	}
+	c.finish("r", "Sí, ya está.")
+	for c.pace() {
+	}
+	if text, _ := drawConversation(c, 60, 20); strings.Contains(text, "▍") {
+		t.Errorf("the cursor stays once written:\n%s", text)
+	}
+}

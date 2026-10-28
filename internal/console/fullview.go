@@ -474,10 +474,8 @@ func (v *view) paint(g *grid) (int, int, bool) {
 	if time.Since(v.copiedAt) < copiedFor && t.Copied != "" {
 		c.hints = t.Copied
 	}
-	// An activity shows from the first move of its dots on, so one set
-	// and cleared at once, as between two blocks of a reply, never shows.
 	v.convo.activity = ""
-	if d := time.Since(v.activitySince); v.activity != "" && d >= activityEvery {
+	if d := time.Since(v.activitySince); v.activity != "" && d >= activityDelay {
 		v.convo.activity = v.activity
 		if d >= shownAfter {
 			v.convo.activity += " · " + since(d)
@@ -556,10 +554,15 @@ func inputRows(line []rune, pos, width int) (rows [][]rune, crow, ccol int) {
 	return rows, crow, ccol
 }
 
-// activityEvery is how often the dots of the assistant at work move: a few
-// times a second is enough to look alive. A variable so tests can change
-// it.
-var activityEvery = 300 * time.Millisecond
+// activityEvery is how often the light moves over the dots of the
+// assistant at work: a few times a second is enough to look alive.
+// activityDelay is how long an activity waits to show, so one set and
+// cleared at once, as between two blocks of a reply, never does. Variables
+// so tests can change them.
+var (
+	activityEvery = 150 * time.Millisecond
+	activityDelay = 300 * time.Millisecond
+)
 
 // TaskView is a task as the panel shows it.
 type TaskView struct {
@@ -831,8 +834,9 @@ func (v *view) highlight(g *grid) {
 	})
 }
 
-// boxRunes are the frames of the bubbles, left out of what is copied.
-const boxRunes = "│╭╮╰╯─"
+// boxRunes are the frames of the bubbles and the writing cursor, left out
+// of what is copied.
+const boxRunes = "│╭╮╰╯─▍"
 
 // selectedText is the text selected on g, row by row, without the frames
 // of the bubbles and the blanks around them.

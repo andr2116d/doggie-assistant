@@ -365,8 +365,19 @@ const (
 // widths are how wide the text of each kind of bubble may be in a
 // conversation cols wide.
 func widths(cols int) (reply, said int) {
-	return min(cols-4, maxReplyCols), min(cols*3/4, maxSaidCols) - 4
+	frame := 2 + 2*bubblePad
+	return min(cols-frame, maxReplyCols), min(cols*3/4, maxSaidCols) - frame
 }
+
+// A bubble's measures, in columns: the room between its edge and its text,
+// and the text's width at the least, so a word alone doesn't look cramped.
+const (
+	bubblePad = 2
+	bubbleMin = 6
+)
+
+// bubbleWidth is how wide a bubble is around text w columns wide.
+func bubbleWidth(w int) int { return max(w, bubbleMin) + 2 + 2*bubblePad }
 
 // named reports whether message i shows the assistant's name above it:
 // when it starts a run of the assistant's bubbles.
@@ -410,8 +421,12 @@ func (c *conversation) draw(g *grid, body rect, lk looks, newer func(n int) stri
 	}
 	heights := c.heights
 	act := 0 // rows of the activity, below the newest message
+	namedActivity := len(c.msgs) == 0 || c.msgs[len(c.msgs)-1].from != fromAssistant
 	if c.activity != "" {
 		act = activityRows + 1
+		if namedActivity {
+			act++
+		}
 	}
 	total += act
 	if c.scroll > 0 && c.anchor != nil {
@@ -434,9 +449,9 @@ func (c *conversation) draw(g *grid, body rect, lk looks, newer func(n int) stri
 	viewBottom := body.y + body.h
 	bottom := viewBottom + c.scroll // where the newest message ends
 	if act > 0 {
-		top := bottom - activityRows
+		top := bottom - (act - 1)
 		if top < viewBottom {
-			c.drawActivity(g, body.x+conversationX, top, cols, body, lk)
+			c.drawActivity(g, body.x+conversationX, top, cols, body, lk, namedActivity)
 		}
 		bottom = top - 1
 	}
@@ -478,15 +493,21 @@ func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk l
 			y++
 		}
 		lines := m.lines(reply)
-		w := max(m.linesWidth(reply), 1) + 4 // the borders and a space inside each
+		w := bubbleWidth(m.linesWidth(reply))
+		writing := m.open || m.shown < len(m.text)
 		if visible(y) {
 			hline(g, x, y, w, "╭", "╮", lk.border)
 		}
 		y++
-		for _, l := range lines {
+		for j, l := range lines {
 			if visible(y) {
 				g.text(x, y, x+1, "│", lk.border)
-				drawRow(g, x+2, y, x+w-2, l, lk)
+				at := x + 1 + bubblePad + shortPad(lines, m.linesWidth(reply))
+				drawRow(g, at, y, x+w-1-bubblePad, l, lk)
+				if writing && j == len(lines)-1 {
+					// In the padding, so the bubble keeps its width.
+					g.text(at+textWidth(l.text), y, x+w-1, "▍", lk.name)
+				}
 				g.text(x+w-1, y, x+w, "│", lk.border)
 			}
 			y++
@@ -503,8 +524,8 @@ func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk l
 		}
 	case fromUser, fromElsewhere:
 		lines := m.lines(said)
-		w := m.linesWidth(said)
-		left := x + cols - (w + 4)
+		w := bubbleWidth(m.linesWidth(said))
+		left := x + cols - w
 		if m.from == fromElsewhere {
 			if visible(y) {
 				textRight(g, x, x+cols, y, m.label, lk.muted)
@@ -512,20 +533,21 @@ func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk l
 			y++
 		}
 		if visible(y) {
-			hline(g, left, y, w+4, "╭", "╮", lk.youEdge)
+			hline(g, left, y, w, "╭", "╮", lk.youEdge)
 		}
 		y++
 		for _, l := range lines {
 			if visible(y) {
 				g.text(left, y, left+1, "│", lk.youEdge)
-				g.fill(left+1, y, w+2, 1, lk.you)
-				g.text(left+2, y, left+2+w, l.text, lk.you)
-				g.text(left+w+3, y, left+w+4, "│", lk.youEdge)
+				g.fill(left+1, y, w-2, 1, lk.you)
+				at := left + 1 + bubblePad + shortPad(lines, m.linesWidth(said))
+				g.text(at, y, left+w-1-bubblePad, l.text, lk.you)
+				g.text(left+w-1, y, left+w, "│", lk.youEdge)
 			}
 			y++
 		}
 		if visible(y) {
-			hline(g, left, y, w+4, "╰", "╯", lk.youEdge)
+			hline(g, left, y, w, "╰", "╯", lk.youEdge)
 		}
 		y++
 	default:
@@ -560,27 +582,41 @@ func drawNotice(g *grid, x, y, limit int, n notice, lk looks) {
 // activityRows is how tall the assistant at work shows.
 const activityRows = 3
 
-// drawActivity draws the assistant at work from row top: a bubble of
-// dots, one lit at a time, and what it is doing beside it.
-func (c *conversation) drawActivity(g *grid, x, top, cols int, clip rect, lk looks) {
+// drawActivity draws the assistant at work from row top: its name if named,
+// where its reply will start, and a bubble of three dots a light runs
+// across, bright, then dimmer, then out, with what it is doing beside it.
+func (c *conversation) drawActivity(g *grid, x, top, cols int, clip rect, lk looks, named bool) {
 	visible := func(y int) bool { return y >= clip.y && y < clip.y+clip.h }
-	if visible(top) {
-		hline(g, x, top, 7, "╭", "╮", lk.border)
+	y := top
+	if named {
+		if visible(y) {
+			textIn(g, x, y, x+cols, c.name, lk.name)
+		}
+		y++
 	}
-	if y := top + 1; visible(y) {
+	const w = 9 // "│ • • • │"
+	if visible(y) {
+		hline(g, x, y, w, "╭", "╮", lk.border)
+	}
+	y++
+	if visible(y) {
 		g.text(x, y, x+1, "│", lk.border)
 		for i := range 3 {
-			st := lk.border
-			if i == c.phase%3 {
+			st := lk.line
+			switch (c.phase - i + 4) % 4 {
+			case 0:
 				st = lk.name
+			case 1:
+				st = lk.border
 			}
-			g.put(x+2+i, y, "•", 1, st)
+			g.put(x+2+2*i, y, "•", 1, st)
 		}
-		g.text(x+6, y, x+7, "│", lk.border)
-		textIn(g, x+9, y, x+cols, c.activity, lk.muted)
+		g.text(x+w-1, y, x+w, "│", lk.border)
+		textIn(g, x+w+2, y, x+cols, c.activity, lk.muted)
 	}
-	if y := top + 2; visible(y) {
-		hline(g, x, y, 7, "╰", "╯", lk.border)
+	y++
+	if visible(y) {
+		hline(g, x, y, w, "╰", "╯", lk.border)
 	}
 }
 
@@ -612,4 +648,14 @@ func boundaryAt(s string, i int) bool {
 	it := graphemes.FromString(s[i-n:])
 	it.Next()
 	return len(it.Value()) <= n
+}
+
+// shortPad is how far a bubble's one row of text, w columns wide, moves
+// right to sit in the middle when it is shorter than a bubble at the
+// least; 0 for longer text.
+func shortPad(rows []textRow, w int) int {
+	if len(rows) != 1 || w >= bubbleMin {
+		return 0
+	}
+	return (bubbleMin - w) / 2
 }

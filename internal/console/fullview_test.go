@@ -204,3 +204,52 @@ func (f *fakeTerm) waitGone(t *testing.T, text string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// The assistant at work shows below the newest message and moves, but
+// not while the window is in the background: then nothing is drawn.
+func TestScreenActivity(t *testing.T) {
+	old := activityEvery
+	activityEvery = 10 * time.Millisecond
+	t.Cleanup(func() { activityEvery = old })
+	s, f := openScreen(t, 60, 16, ScreenOptions{})
+	s.Reply("r", "hola")
+	s.SetActivity("revisando tu agenda")
+	f.waitShown(t, "│ hola │", "revisando tu agenda", "╭─────╮")
+	frames := func() int { return strings.Count(f.rawOutput(), syncBegin) }
+	before := frames()
+	time.Sleep(100 * time.Millisecond)
+	if frames() == before {
+		t.Fatal("the dots don't move")
+	}
+	f.typeKeys(t, "\x1b[O")
+	time.Sleep(50 * time.Millisecond)
+	before = frames()
+	time.Sleep(150 * time.Millisecond)
+	if n := frames() - before; n > 0 {
+		t.Errorf("%d frames drawn in the background", n)
+	}
+	f.typeKeys(t, "\x1b[I")
+	s.SetActivity("")
+	f.waitGone(t, "revisando tu agenda")
+	s.SetStatus("⏱ ropa 7:41 · +1 elsewhere")
+	f.waitShown(t, "⏱ ropa 7:41 · +1 elsewhere")
+	f.waitGone(t, "/help comandos")
+	s.SetStatus("")
+	f.waitShown(t, "/help comandos")
+}
+
+// An activity set and cleared at once, as between two blocks of a reply,
+// never shows.
+func TestScreenBriefActivityHidden(t *testing.T) {
+	s, f := openScreen(t, 60, 16, ScreenOptions{})
+	s.Reply("r", "hola")
+	f.waitShown(t, "│ hola │")
+	s.SetActivity("pensando")
+	s.SetActivity("")
+	s.Reply("r2", "chau")
+	f.waitShown(t, "│ chau │")
+	time.Sleep(50 * time.Millisecond)
+	if strings.Contains(f.rawOutput(), "pensando") {
+		t.Error("a brief activity showed")
+	}
+}

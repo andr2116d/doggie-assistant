@@ -161,6 +161,10 @@ type conversation struct {
 	anchor     *message
 	anchorRows int
 	unseen     int // messages that came while scrolled up
+	// activity, if set, shows the assistant at work below the newest
+	// message, with dots moving by phase.
+	activity string
+	phase    int
 	// top is set when the view reached the oldest message kept.
 	top     bool
 	heights []int // of each message, reused by draw
@@ -201,8 +205,15 @@ func (c *conversation) say(from sender, label, text string, kind noteKind) {
 
 // stream adds text to the assistant's reply id, starting it if new. The
 // text is paced in.
+// Whitespace starting a reply is dropped.
 func (c *conversation) stream(id, text string) {
 	m := c.byID[id]
+	if m == nil || m.text == "" {
+		text = strings.TrimLeft(text, " \t\r\n")
+		if text == "" {
+			return
+		}
+	}
 	if m == nil {
 		m = &message{id: id, from: fromAssistant, open: true}
 		c.add(m)
@@ -213,6 +224,7 @@ func (c *conversation) stream(id, text string) {
 // finish ends the reply id with its whole text, which corrects what
 // came in pieces. A reply never streamed shows at once.
 func (c *conversation) finish(id, text string) {
+	text = strings.TrimSpace(text)
 	m := c.byID[id]
 	if m == nil {
 		m = &message{id: id, from: fromAssistant}
@@ -337,6 +349,11 @@ func (c *conversation) draw(g *grid, body rect, lk looks, newer func(n int) stri
 		total += h + 1 // and the gap above it
 	}
 	heights := c.heights
+	act := 0 // rows of the activity, below the newest message
+	if c.activity != "" {
+		act = activityRows + 1
+	}
+	total += act
 	if c.scroll > 0 && c.anchor != nil {
 		below, found := 0, false
 		for i := len(c.msgs) - 1; i >= 0; i-- {
@@ -347,7 +364,7 @@ func (c *conversation) draw(g *grid, body rect, lk looks, newer func(n int) stri
 			below += heights[i] + 1
 		}
 		if found {
-			c.scroll = below + c.anchorRows
+			c.scroll = below + act + c.anchorRows
 		}
 	}
 	c.scroll = min(c.scroll, max(total-body.h, 0))
@@ -356,6 +373,13 @@ func (c *conversation) draw(g *grid, body rect, lk looks, newer func(n int) stri
 	}
 	viewBottom := body.y + body.h
 	bottom := viewBottom + c.scroll // where the newest message ends
+	if act > 0 {
+		top := bottom - activityRows
+		if top < viewBottom {
+			c.drawActivity(g, body.x+conversationX, top, cols, body, lk)
+		}
+		bottom = top - 1
+	}
 	c.anchor, c.top = nil, true
 	for i := len(c.msgs) - 1; i >= 0; i-- {
 		top := bottom - heights[i]
@@ -461,4 +485,31 @@ func drawNotice(g *grid, x, y, limit int, n notice, lk looks) {
 	}
 	x = g.text(x, y, limit, mark, st)
 	textIn(g, x+1, y, limit, n.text, lk.muted)
+}
+
+// activityRows is how tall the assistant at work shows.
+const activityRows = 3
+
+// drawActivity draws the assistant at work from row top: a bubble of
+// dots, one lit at a time, and what it is doing beside it.
+func (c *conversation) drawActivity(g *grid, x, top, cols int, clip rect, lk looks) {
+	visible := func(y int) bool { return y >= clip.y && y < clip.y+clip.h }
+	if visible(top) {
+		hline(g, x, top, 7, "╭", "╮", lk.border)
+	}
+	if y := top + 1; visible(y) {
+		g.text(x, y, x+1, "│", lk.border)
+		for i := range 3 {
+			st := lk.border
+			if i == c.phase%3 {
+				st = lk.name
+			}
+			g.put(x+2+i, y, "•", 1, st)
+		}
+		g.text(x+6, y, x+7, "│", lk.border)
+		textIn(g, x+9, y, x+cols, c.activity, lk.muted)
+	}
+	if y := top + 2; visible(y) {
+		hline(g, x, y, 7, "╰", "╯", lk.border)
+	}
 }

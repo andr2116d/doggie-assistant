@@ -118,6 +118,11 @@ func (s *Screen) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Said shows text the user said before, e.g. on opening the conversation.
+func (s *Screen) Said(text string) {
+	s.do(func(v *view) { v.convo.say(fromUser, "", text, noteInfo) })
+}
+
 // SaidElsewhere shows text said in the conversation on another channel,
 // under label, e.g. "voice:kitchen".
 func (s *Screen) SaidElsewhere(label, text string) {
@@ -145,6 +150,25 @@ func (s *Screen) Notice(id string, kind NoticeKind, text string) {
 // bar.
 func (s *Screen) SetConnection(online bool, status string) {
 	s.do(func(v *view) { v.online, v.status = online, status })
+}
+
+// SetActivity shows the assistant at work below the newest message, with
+// text telling what it does and, once it goes long, for how long; empty
+// text removes it.
+func (s *Screen) SetActivity(text string) {
+	s.do(func(v *view) {
+		text = strings.TrimSpace(oneLine(text))
+		if text != "" && v.activity == "" {
+			v.activitySince = time.Now()
+		}
+		v.activity = text
+	})
+}
+
+// SetStatus shows text, e.g. the tasks running, below the input box in
+// place of the hints; empty text brings the hints back.
+func (s *Screen) SetStatus(text string) {
+	s.do(func(v *view) { v.taskStatus = strings.TrimSpace(oneLine(text)) })
 }
 
 // AskHidden has the user type the next line unseen, after prompt, as a
@@ -180,6 +204,14 @@ type view struct {
 	status string
 	panel  bool // the user wants the panel
 	pacing bool // a reply may have text to pace in
+	// activity is what the assistant does, since activitySince; taskStatus
+	// replaces the hints while set.
+	activity      string
+	activitySince time.Time
+	taskStatus    string
+	// unfocused is set while the window is in the background, where
+	// nothing needs to move.
+	unfocused bool
 	// inputScroll is the first row of what is typed shown in the box.
 	inputScroll int
 	body        rect // where the conversation was last drawn
@@ -206,8 +238,9 @@ func (s *Screen) loop(t Terminal, v *view) {
 	}
 	input := reader(t, s.done)
 	dec := decoder{full: true}
-	pace := newClock()
+	pace, anim := newClock(), newClock()
 	defer pace.stop()
+	defer anim.stop()
 	defer fs.gate.stop()
 	minute := time.NewTimer(untilNextMinute(time.Now()))
 	defer minute.Stop()
@@ -223,6 +256,11 @@ func (s *Screen) loop(t Terminal, v *view) {
 		if v.pacing {
 			pace.start(frameEvery)
 			v.pacing = false
+		}
+		if v.activity != "" && !v.unfocused {
+			anim.start(activityEvery)
+		} else {
+			anim.stop()
 		}
 		select {
 		case p, ok := <-input:
@@ -244,6 +282,9 @@ func (s *Screen) loop(t Terminal, v *view) {
 			}
 			q.hidden = ask.answer
 			v.ed.hide(ask.prompt)
+			want()
+		case <-anim.c:
+			v.convo.phase++
 			want()
 		case <-pace.c:
 			if !v.convo.pace() {
@@ -313,6 +354,7 @@ func (v *view) key(k key, q *lineQueue) {
 			return
 		}
 	case keyFocusIn, keyFocusOut:
+		v.unfocused = k.kind == keyFocusOut
 		return
 	case keyRedraw:
 		v.fs.painter.invalidate()
@@ -382,6 +424,18 @@ func (v *view) paint(g *grid) (int, int, bool) {
 	if t.Clock != nil {
 		c.clock = t.Clock(time.Now())
 	}
+	if v.taskStatus != "" {
+		c.hints = v.taskStatus
+	}
+	// An activity shows from the first move of its dots on, so one set
+	// and cleared at once, as between two blocks of a reply, never shows.
+	v.convo.activity = ""
+	if d := time.Since(v.activitySince); v.activity != "" && d >= activityEvery {
+		v.convo.activity = v.activity
+		if d >= shownAfter {
+			v.convo.activity += " · " + since(d)
+		}
+	}
 	drawChrome(g, r, v.lk, c)
 	if r.tooSmall {
 		return 0, 0, false
@@ -448,3 +502,8 @@ func inputRows(line []rune, pos, width int) (rows [][]rune, crow, ccol int) {
 	}
 	return rows, crow, ccol
 }
+
+// activityEvery is how often the dots of the assistant at work move: a few
+// times a second is enough to look alive. A variable so tests can change
+// it.
+var activityEvery = 300 * time.Millisecond

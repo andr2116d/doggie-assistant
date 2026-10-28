@@ -42,6 +42,8 @@ type looks struct {
 	panelMark, panelWait          styleID // marks on the panel
 	panelGood, panelBad           styleID
 	selected                      styleID // text marked with the mouse
+	// Markdown in a reply.
+	bold, italic, code, heading styleID
 }
 
 func newLooks(t *styleTable, p palette) looks {
@@ -78,5 +80,25 @@ func newLooks(t *styleTable, p palette) looks {
 		panelGood:   on(p.good, p.panel, false),
 		panelBad:    on(p.bad, p.panel, false),
 		selected:    on(p.fg, p.accentLine, false),
+		bold:        on(p.fg, p.bg, true),
+		italic:      t.id(Style{Fg: p.fg, Bg: p.bg, Italic: true}),
+		code:        on(p.good, p.you, false),
+		heading:     on(p.accent, p.bg, true),
 	}
+}
+
+// forAttr is the look of text with markdown attribute a: code first, then
+// a heading, then bold, then italic.
+func (lk looks) forAttr(a mdAttr) styleID {
+	switch {
+	case a&mdCode != 0:
+		return lk.code
+	case a&mdHeading != 0:
+		return lk.heading
+	case a&mdBold != 0:
+		return lk.bold
+	case a&mdItalic != 0:
+		return lk.italic
+	}
+	return lk.text
 }

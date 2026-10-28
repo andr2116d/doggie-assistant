@@ -3,6 +3,8 @@ package console
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/clipperhouse/uax29/v2/graphemes"
 )
 
 // sender is who a message comes from.
@@ -46,53 +48,127 @@ type message struct {
 	buf   strings.Builder // holds text, to grow it in place
 }
 
-// wrapCache keeps a message's lines at one width.
+// wrapCache keeps a message's rows at one width.
 type wrapCache struct {
 	width int
-	// from is where the last line wrapped starts, in bytes of text: the
-	// lines before it, in stable, can't change as text grows. wrapped is
-	// set when that line began at a break.
+	// from is where the paragraph being wrapped starts, in bytes of text,
+	// and code whether it is in a block of code. tail is where its last
+	// row starts in it as it shows, past rows that can't change as text
+	// grows, kept with those of the paragraphs before in stable. wrapped
+	// is set when that row began at a break.
 	from    int
+	code    bool
+	tail    int
 	wrapped bool
-	stable  []string
-	stableW int      // the widest of stable, in columns
-	lines   []string // stable and the lines from from, for text[:shown]
-	w       int      // the widest of lines
-	shown   int      // what lines covers; -1 when stale
+	stable  []textRow
+	stableW int // the widest of stable, in columns
+	// paraText is how the paragraph being wrapped showed, and paraRows how
+	// many of its rows are in stable. Unless it shows now as it did with
+	// more at its end, it is wrapped again whole: a mark may turn a line
+	// into a heading, change its rows' indent (paraHang), or hide a * that
+	// showed; and a cluster may now go across tail.
+	paraText string
+	paraHang int
+	paraRows int
+	rows     []textRow // stable and the rows from tail, for text[:shown]
+	w        int       // the widest of rows
+	shown    int       // what rows covers; -1 when stale
 }
 
-// lines are the message's shown text wrapped to width. As text comes in
-// only its last line is wrapped again.
-func (m *message) lines(width int) []string {
+// lines are the message's shown text wrapped to width, as markdown for a
+// reply. As text comes in only its last row is wrapped again.
+func (m *message) lines(width int) []textRow {
 	width = max(width, 2)
 	c := &m.wrap
 	if c.width == width && c.shown == m.shown {
-		return c.lines
+		return c.rows
 	}
-	if c.width != width || c.shown < 0 || m.shown < c.from {
+	if c.width != width || c.shown < 0 || m.shown < c.from+c.tail {
 		*c = wrapCache{width: width, stable: c.stable[:0]}
 	}
 	text := m.text[:m.shown]
 	known := len(c.stable)
+	wrap := func(para string) (int, bool) {
+		p := mdPara{text: para}
+		if m.from == fromAssistant {
+			p = markdown(para, c.code)
+		}
+		if p.fence { // it doesn't show: neither do rows it had before
+			c.stable = c.stable[:len(c.stable)-c.paraRows]
+			c.tail, c.wrapped, c.paraRows, c.paraText = 0, false, 0, ""
+			c.stableW = -1
+			return 0, true
+		}
+		if !strings.HasPrefix(p.text, c.paraText) || !boundaryAt(p.text, c.tail) || p.hang != c.paraHang {
+			c.stable = c.stable[:len(c.stable)-c.paraRows]
+			c.tail, c.wrapped, c.paraRows = 0, false, 0
+			c.stableW = -1 // to measure again
+		}
+		c.paraText, c.paraHang = p.text, p.hang
+		before := len(c.stable)
+		var last int
+		c.stable, last = wrapRows(c.stable, p.text[c.tail:], tailAttrs(p.attrs, c.tail), width, c.wrapped, p.hang)
+		c.paraRows += len(c.stable) - before
+		return c.tail + last, false
+	}
 	for {
 		i := strings.IndexByte(text[c.from:], '\n')
 		if i < 0 {
 			break
 		}
-		c.stable, _ = wrapParagraph(c.stable, text[c.from:c.from+i], width, c.wrapped)
-		c.from, c.wrapped = c.from+i+1, false
+		if _, fence := wrap(text[c.from : c.from+i]); fence {
+			c.code = !c.code
+		}
+		c.from, c.tail, c.wrapped, c.paraRows, c.paraText, c.paraHang = c.from+i+1, 0, false, 0, "", 0
 	}
-	all, last := wrapParagraph(c.stable, text[c.from:], width, c.wrapped)
-	c.stable, c.lines = all[:len(all)-1], all
-	for _, l := range c.stable[known:] {
-		c.stableW = max(c.stableW, textWidth(l))
+	last, fence := wrap(text[c.from:])
+	all := c.stable
+	if fence {
+		c.stable = all // a fence being typed adds no row
+	} else {
+		c.stable = all[:len(all)-1]
+		c.paraRows-- // its last row isn't kept
+		if last > c.tail {
+			c.tail, c.wrapped = last, true
+		}
 	}
-	c.w = max(c.stableW, textWidth(all[len(all)-1]))
-	if last > 0 {
-		c.from, c.wrapped = c.from+last, true
+	if len(all) == 0 {
+		all = []textRow{{}}
 	}
+	c.rows = all
+	if c.stableW < 0 || known > len(c.stable) {
+		c.stableW, known = 0, 0
+	}
+	for _, r := range c.stable[known:] {
+		c.stableW = max(c.stableW, textWidth(r.text))
+	}
+	c.w = max(c.stableW, textWidth(all[len(all)-1].text))
 	c.shown = m.shown
-	return c.lines
+	return c.rows
+}
+
+// tailAttrs is attrs from i on, or nil for no attributes.
+func tailAttrs(attrs []mdAttr, i int) []mdAttr {
+	if attrs == nil {
+		return nil
+	}
+	return attrs[min(i, len(attrs)):]
+}
+
+// setText replaces the text, cleaned of what mustn't reach the terminal.
+// Text that only grows keeps what is wrapped and what is on screen.
+func (m *message) setText(text string, paced bool) {
+	text = sanitize(text, true)
+	if !strings.HasPrefix(text, m.text) {
+		m.wrap.shown = -1
+		m.shown = min(m.shown, commonPrefix(m.text, text))
+	}
+	m.buf.Reset()
+	m.buf.WriteString(text)
+	m.text = m.buf.String()
+	if !paced {
+		m.shown = len(text)
+	}
 }
 
 // appendText adds text, cleaned, to the end. The text grows in place, so a
@@ -113,22 +189,6 @@ func (m *message) appendText(text string, paced bool) {
 func (m *message) linesWidth(width int) int {
 	m.lines(width)
 	return m.wrap.w
-}
-
-// setText replaces the text, cleaned of what mustn't reach the terminal.
-// Text that only grows keeps what is wrapped and what is on screen.
-func (m *message) setText(text string, paced bool) {
-	text = sanitize(text, true)
-	if !strings.HasPrefix(text, m.text) {
-		m.wrap.shown = -1
-		m.shown = min(m.shown, commonPrefix(m.text, text))
-	}
-	m.buf.Reset()
-	m.buf.WriteString(text)
-	m.text = m.buf.String()
-	if !paced {
-		m.shown = len(text)
-	}
 }
 
 // commonPrefix is how many bytes a and b start with alike, whole runes.
@@ -426,7 +486,7 @@ func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk l
 		for _, l := range lines {
 			if visible(y) {
 				g.text(x, y, x+1, "│", lk.border)
-				g.text(x+2, y, x+w-2, l, lk.text)
+				drawRow(g, x+2, y, x+w-2, l, lk)
 				g.text(x+w-1, y, x+w, "│", lk.border)
 			}
 			y++
@@ -454,7 +514,7 @@ func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk l
 		for _, l := range lines {
 			if visible(y) {
 				g.fill(left, y, w+2, 1, lk.you)
-				g.text(left+1, y, left+1+w, l, lk.you)
+				g.text(left+1, y, left+1+w, l.text, lk.you)
 			}
 			y++
 		}
@@ -462,9 +522,9 @@ func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk l
 		for j, l := range m.lines(cols - 2) {
 			if visible(y) {
 				if j == 0 {
-					drawNotice(g, x, y, x+cols, notice{m.kind, l}, lk)
+					drawNotice(g, x, y, x+cols, notice{m.kind, l.text}, lk)
 				} else {
-					textIn(g, x+2, y, x+cols, l, lk.muted)
+					textIn(g, x+2, y, x+cols, l.text, lk.muted)
 				}
 			}
 			y++
@@ -512,4 +572,34 @@ func (c *conversation) drawActivity(g *grid, x, top, cols int, clip rect, lk loo
 	if y := top + 2; visible(y) {
 		hline(g, x, y, 7, "╰", "╯", lk.border)
 	}
+}
+
+// drawRow writes a row of a reply from x up to limit, each run of it in
+// the look of its markdown attribute.
+func drawRow(g *grid, x, y, limit int, r textRow, lk looks) {
+	if r.attrs == nil {
+		g.text(x, y, limit, r.text, lk.text)
+		return
+	}
+	for i := 0; i < len(r.text) && x < limit; {
+		a := r.attrs[i]
+		j := i + 1
+		for j < len(r.text) && r.attrs[j] == a {
+			j++
+		}
+		x = g.text(x, y, limit, r.text[i:j], lk.forAttr(a))
+		i = j
+	}
+}
+
+// boundaryAt reports whether a grapheme cluster starts at byte i of s:
+// text added after a rune may join its cluster, as a combining mark does.
+func boundaryAt(s string, i int) bool {
+	if i <= 0 || i >= len(s) {
+		return true
+	}
+	_, n := utf8.DecodeLastRuneInString(s[:i])
+	it := graphemes.FromString(s[i-n:])
+	it.Next()
+	return len(it.Value()) <= n
 }

@@ -1,0 +1,22 @@
+ ◆ DOGGIE   ● en línea · terminal                  mar 28 oct · 21:40
+
+
+
+
+
+
+
+
+
+  DOGGIE
+  ╭──────────────────────────────────────────────────────╮
+  │ Receta rápida                                        │
+  │ Necesitas tres cosas, nada más:                      │
+  │ • arroz, lavado dos veces para que no quede pegajoso │
+  │ • 2 tazas de agua                                    │
+  │ hervir 10 min                                        │
+  ╰──────────────────────────────────────────────────────╯
+ ╭──────────────────────────────────────────────────────────────────╮
+ │ ›                                                                │
+ ╰──────────────────────────────────────────────────────────────────╯
+  /help comandos · ↑ historial · Ctrl+D salir             Tab: panel

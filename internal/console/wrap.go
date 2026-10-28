@@ -13,11 +13,22 @@ import (
 // are kept, as indentation. Whatever mustn't reach the terminal is dropped
 // first.
 func wrapLines(text string, width int) []string {
-	var lines []string
+	var rows []textRow
 	for para := range strings.SplitSeq(sanitize(text, true), "\n") {
-		lines, _ = wrapParagraph(lines, para, max(width, 2), false)
+		rows, _ = wrapRows(rows, para, nil, max(width, 2), false, 0)
+	}
+	lines := make([]string, len(rows))
+	for i, r := range rows {
+		lines[i] = r.text
 	}
 	return lines
+}
+
+// textRow is a row of wrapped text, with the markdown attribute of each of
+// its bytes; nil attributes are none.
+type textRow struct {
+	text  string
+	attrs []mdAttr
 }
 
 // piece is a grapheme cluster, its width and where it starts in the
@@ -27,19 +38,43 @@ type piece struct {
 	w, at int
 }
 
-// wrapParagraph appends the lines of para, which must be clean and have no
-// newline, and returns where its last line starts in para. Lines before the
-// last never change as text is added to the paragraph, so wrapping it again
-// may start there; wrapped then says that line began at a break.
-func wrapParagraph(lines []string, para string, width int, wrapped bool) ([]string, int) {
+// wrapRows appends the rows of para, which must be clean and have no
+// newline, with attrs giving each of its bytes an attribute (nil for none).
+// Rows after the first are indented by hang. It returns where its last row
+// starts in para: rows before the last never change as text is added to
+// the paragraph, so wrapping it again may start there, with wrapped set to
+// tell that row began at a break.
+func wrapRows(rows []textRow, para string, attrs []mdAttr, width int, wrapped bool, hang int) ([]textRow, int) {
+	hang = min(hang, width/2)
 	var line []piece
 	lineW := 0
+	limit := func() int {
+		if wrapped {
+			return max(width-hang, 2)
+		}
+		return width
+	}
 	emit := func(ps []piece) {
+		for len(ps) > 0 && ps[len(ps)-1].s == " " {
+			ps = ps[:len(ps)-1]
+		}
 		var b strings.Builder
+		var as []mdAttr
+		if wrapped && hang > 0 {
+			b.WriteString(strings.Repeat(" ", hang))
+			if attrs != nil {
+				as = make([]mdAttr, hang)
+			}
+		}
 		for _, p := range ps {
 			b.WriteString(p.s)
+			if attrs != nil {
+				for i := range len(p.s) {
+					as = append(as, attrs[min(p.at+i, len(attrs)-1)])
+				}
+			}
 		}
-		lines = append(lines, strings.TrimRight(b.String(), " "))
+		rows = append(rows, textRow{b.String(), as})
 	}
 	lastStart := 0
 	it := graphemes.FromString(para)
@@ -57,16 +92,19 @@ func wrapParagraph(lines []string, para string, width int, wrapped bool) ([]stri
 		case c == " " && wrapped && len(line) == 0:
 			continue // a wrapped line doesn't start with a space
 		}
-		if lineW+w > width {
+		if lineW+w > limit() {
 			if c == " " {
 				emit(line)
 				line, lineW, wrapped = nil, 0, true
 				lastStart = it.End()
 				continue
 			}
-			line = breakLine(line, emit)
-			lineW, wrapped = widthOfPieces(line), true
-			if lineW+w > width { // what was carried over and c don't fit
+			var rest []piece
+			line, rest = breakLine(line)
+			emit(line)
+			line, wrapped = rest, true
+			lineW = widthOfPieces(line)
+			if lineW+w > limit() { // what was carried over and c don't fit
 				emit(line)
 				line, lineW = nil, 0
 			}
@@ -79,13 +117,13 @@ func wrapParagraph(lines []string, para string, width int, wrapped bool) ([]stri
 		lineW += w
 	}
 	emit(line)
-	return lines, lastStart
+	return rows, lastStart
 }
 
-// breakLine emits line up to its last space, past any indentation, and
-// returns the word after it, to go on the next line. Without such a space
-// it emits the whole line.
-func breakLine(line []piece, emit func([]piece)) []piece {
+// breakLine splits line at its last space, past any indentation, into what
+// stays on it and the word after, to go on the next line. Without such a
+// space all of it stays.
+func breakLine(line []piece) (stay, next []piece) {
 	cut := -1
 	for i := len(line) - 1; i > 0; i-- {
 		if line[i].s == " " && !onlySpaces(line[:i]) {
@@ -94,15 +132,13 @@ func breakLine(line []piece, emit func([]piece)) []piece {
 		}
 	}
 	if cut < 0 {
-		emit(line)
-		return nil
+		return line, nil
 	}
-	emit(line[:cut])
 	rest := line[cut+1:]
 	for len(rest) > 0 && rest[0].s == " " {
 		rest = rest[1:]
 	}
-	return append([]piece(nil), rest...)
+	return line[:cut], append([]piece(nil), rest...)
 }
 
 func onlySpaces(ps []piece) bool {

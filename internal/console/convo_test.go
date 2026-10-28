@@ -59,7 +59,7 @@ func TestStreamedReplyWrapsAsWhole(t *testing.T) {
 			}
 			c.msgs[0].lines(30)
 		}
-		if got, want := c.msgs[0].lines(30), wrapLines(text, 30); !slices.Equal(got, want) {
+		if got, want := rowTexts(c.msgs[0].lines(30)), wrapLines(text, 30); !slices.Equal(got, want) {
 			t.Fatalf("in pieces of %d:\n%q\nwant\n%q", n, got, want)
 		}
 	}
@@ -210,6 +210,7 @@ func FuzzIncrementalWrap(f *testing.F) {
 	f.Add("Claro: la reunión es el jueves.\nAnoté los papeles del seguro.", uint8(12), []byte{3, 1, 9, 2})
 	f.Add("ab supercalifragilistico cd  ef\n\n  - lista 日本語 👍🏽", uint8(5), []byte{1, 1, 1})
 	f.Add("abcd  efgh  ij", uint8(2), []byte{}) // two spaces where a line breaks
+	f.Add("# Título\n- uno **dos** tres *cuatro* `cinco`\n```\ncódigo  aquí\n```\n1. a\\*b 2 * 3", uint8(9), []byte{2, 5, 1})
 	f.Fuzz(func(t *testing.T, text string, width uint8, cuts []byte) {
 		w := 2 + int(width)%40
 		text = sanitize(text, true)
@@ -230,7 +231,7 @@ func FuzzIncrementalWrap(f *testing.F) {
 				for m.shown < len(m.text) && !utf8RuneStart(m.text[m.shown]) {
 					m.shown++
 				}
-				if got, want := m.lines(w), wrapLines(m.text[:m.shown], w); !slices.Equal(got, want) {
+				if got, want := m.lines(w), renderRows(m.text[:m.shown], w, true); !rowsEqual(got, want) {
 					t.Fatalf("%q at %d:\n%q\nwant\n%q", m.text[:m.shown], w, got, want)
 				}
 			}
@@ -254,8 +255,44 @@ func TestStreamedBreakAtTwoSpaces(t *testing.T) {
 	m := &message{from: fromAssistant}
 	for _, r := range text {
 		m.appendText(string(r), false)
-		if got, want := m.lines(4), wrapLines(m.text, 4); !slices.Equal(got, want) {
+		if got, want := rowTexts(m.lines(4)), wrapLines(m.text, 4); !slices.Equal(got, want) {
 			t.Fatalf("%q: %q, want %q", m.text, got, want)
 		}
 	}
+}
+
+// rowTexts is the text of each row.
+func rowTexts(rows []textRow) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.text
+	}
+	return out
+}
+
+// renderRows is what a message's rows must be: its text rendered and
+// wrapped from scratch, paragraph by paragraph.
+func renderRows(text string, width int, md bool) []textRow {
+	width = max(width, 2)
+	var rows []textRow
+	code := false
+	for para := range strings.SplitSeq(text, "\n") {
+		p := mdPara{text: para}
+		if md {
+			p = markdown(para, code)
+		}
+		if p.fence {
+			code = !code
+			continue
+		}
+		rows, _ = wrapRows(rows, p.text, p.attrs, width, false, p.hang)
+	}
+	if len(rows) == 0 {
+		rows = []textRow{{}}
+	}
+	return rows
+}
+
+func rowsEqual(a, b []textRow) bool {
+	return slices.EqualFunc(a, b, func(x, y textRow) bool { return x.text == y.text && slices.Equal(x.attrs, y.attrs) })
 }

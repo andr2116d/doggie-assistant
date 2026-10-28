@@ -22,6 +22,7 @@ type fakeTerm struct {
 	v        *vt
 	raw      bytes.Buffer
 	width    int
+	height   int
 	restored int
 }
 
@@ -36,6 +37,9 @@ func (f *fakeTerm) Write(p []byte) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.raw.Write(p)
+	if f.v == nil {
+		return len(p), nil
+	}
 	return f.v.Write(p)
 }
 
@@ -43,6 +47,12 @@ func (f *fakeTerm) Width() (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.width, nil
+}
+
+func (f *fakeTerm) Height() (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.height, nil
 }
 
 func (f *fakeTerm) Resized() <-chan struct{} { return f.resized }
@@ -346,6 +356,7 @@ func (b brokenTerm) Read([]byte) (int, error) {
 }
 func (brokenTerm) Write([]byte) (int, error) { return 0, errors.New("terminal gone") }
 func (brokenTerm) Width() (int, error)       { return 0, errors.New("no size") }
+func (brokenTerm) Height() (int, error)      { return 0, errors.New("no size") }
 func (brokenTerm) Resized() <-chan struct{}  { return nil }
 func (brokenTerm) Restore() error            { return errors.New("can't restore") }
 

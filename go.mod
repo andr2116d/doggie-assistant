@@ -3,6 +3,7 @@ module github.com/andr2116d/doggie-assistant
 go 1.27.1
 
 require (
+	github.com/clipperhouse/uax29/v2 v2.2.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/mattn/go-runewidth v0.0.31
 	github.com/modelcontextprotocol/go-sdk v1.8.0
@@ -17,7 +18,6 @@ require (
 
 require (
 	github.com/antithesishq/antithesis-sdk-go v0.8.0-default-no-op // indirect
-	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/klauspost/compress v1.20.1 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect

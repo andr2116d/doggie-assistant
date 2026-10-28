@@ -47,6 +47,8 @@ type Terminal interface {
 	io.ReadWriter
 	// Width is the terminal's width in columns.
 	Width() (int, error)
+	// Height is the terminal's height in rows.
+	Height() (int, error)
 	// Resized delivers a value when the terminal changes size; nil if it
 	// can't tell.
 	Resized() <-chan struct{}

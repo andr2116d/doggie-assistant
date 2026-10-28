@@ -33,6 +33,11 @@ func (t *fileTerminal) Width() (int, error) {
 	return w, err
 }
 
+func (t *fileTerminal) Height() (int, error) {
+	_, h, err := term.GetSize(int(t.out.Fd()))
+	return h, err
+}
+
 func (t *fileTerminal) Resized() <-chan struct{} { return t.resized }
 
 func (t *fileTerminal) Restore() error {

@@ -67,7 +67,7 @@ func words(lang string) chatWords {
 			screen: console.ScreenTexts{
 				Online: "en línea", Offline: "sin conexión", Channel: "terminal",
 				Hints: "/help comandos · ↑ historial · Ctrl+D salir", HintsRight: "Tab: panel",
-				Tasks: "TAREAS", Notices: "AVISOS", TooSmall: "Agranda la ventana\npara hablar conmigo",
+				Tasks: "TAREAS", Notices: "AVISOS", NoTasks: "sin tareas en curso", TooSmall: "Agranda la ventana\npara hablar conmigo",
 				Newer: func(n int) string {
 					if n == 1 {
 						return "↓ 1 nuevo"
@@ -90,7 +90,7 @@ func words(lang string) chatWords {
 		screen: console.ScreenTexts{
 			Online: "online", Offline: "offline", Channel: "terminal",
 			Hints: "/help commands · ↑ history · Ctrl+D quit", HintsRight: "Tab: panel",
-			Tasks: "TASKS", Notices: "NOTICES", TooSmall: "Make the window bigger\nto talk with me",
+			Tasks: "TASKS", Notices: "NOTICES", NoTasks: "no tasks running", TooSmall: "Make the window bigger\nto talk with me",
 			Newer:  func(n int) string { return fmt.Sprintf("↓ %d new", n) },
 			Clock:  func(t time.Time) string { return t.Format("Mon Jan 2 · 15:04") },
 			Copied: "✓ copied",

@@ -10,7 +10,7 @@ import (
 
 var testTexts = ScreenTexts{
 	Online: "en línea", Offline: "sin conexión", Channel: "terminal",
-	Hints: "/help comandos", HintsRight: "Tab: panel", Tasks: "TAREAS", Notices: "AVISOS",
+	Hints: "/help comandos", HintsRight: "Tab: panel", Tasks: "TAREAS", Notices: "AVISOS", NoTasks: "sin tareas en curso",
 	TooSmall: "Agranda la ventana", Newer: func(n int) string { return fmt.Sprintf("↓ %d nuevos", n) },
 }
 
@@ -146,9 +146,9 @@ func TestScreenHidden(t *testing.T) {
 
 func TestScreenPanelAndSize(t *testing.T) {
 	s, f := openScreen(t, 120, 20, ScreenOptions{})
-	f.waitShown(t, "/help")
+	f.waitShown(t, "╭─ TAREAS ", "sin tareas en curso")
 	f.typeKeys(t, "\t")
-	f.waitShown(t, "│ TAREAS")
+	f.waitGone(t, "TAREAS")
 	f.mu.Lock()
 	f.width, f.height = 30, 8
 	f.raw.Reset() // what was drawn before had the old size
@@ -272,16 +272,16 @@ var sampleTasks = []TaskView{
 	{ID: "t3", Title: "Buscar recetas de lentejas con un nombre largo"},
 }
 
-// The panel opens by itself with tasks, shows them and the last notices,
-// and Tab closes it; then, as on a narrow screen, the status tells the
-// tasks below the box.
+// The panel is open from the start and shows the tasks and the last
+// notices in cards; Tab closes it, and then, as on a narrow screen, the
+// status tells the tasks below the box.
 func TestScreenPanel(t *testing.T) {
 	s, f := openScreen(t, 120, 26, ScreenOptions{})
 	s.Notice("", NoticeGood, "t0 finished")
 	s.Notice("", NoticeBad, "t9 failed: timed out")
 	s.SetTasks(sampleTasks, "+1 en otras conversaciones")
 	s.SetStatus("· t1 Recordar estirar: 5/10 s")
-	rows := f.waitShown(t, "│ TAREAS", "● t1 Recordar estirar", "███", "50%", "? t2 Pagar la luz", "+1 en otras conversaciones", "AVISOS", "✗ t9 failed: timed out", "✓ t0 finished")
+	rows := f.waitShown(t, "╭─ TAREAS ", "● Recordar estirar", "━━━", "50%", "t1 · 5/10 s", "? Pagar la luz", "t2 · espera tu respuesta", "+1 en otras conversaciones", "╭─ AVISOS ", "✗ t9 failed: timed out", "✓ t0 finished")
 	golden(t, "panel-120x26.txt", strings.Join(rows, "\n")+"\n")
 	if strings.Contains(strings.Join(rows, "\n"), "· t1 Recordar estirar: 5/10 s") {
 		t.Error("the status shows with the panel")
@@ -292,7 +292,7 @@ func TestScreenPanel(t *testing.T) {
 	f.typeKeys(t, "\t")
 	f.waitShown(t, "TAREAS")
 	s.SetTasks(nil, "")
-	f.waitShown(t, "TAREAS") // opened by the user: it stays
+	f.waitShown(t, "sin tareas en curso") // it stays open, and says so
 }
 
 func TestScreenPanelNarrow(t *testing.T) {
@@ -370,5 +370,22 @@ func TestSelectedTextKeepsInnerLines(t *testing.T) {
 	v.sel = selection{on: true, ax: 19, ay: 3, bx: 0, by: 0}
 	if got := v.selectedText(&g); got != "uno dos\ntres" {
 		t.Errorf("backwards %q", got)
+	}
+}
+
+// A terminal that doesn't tell when it changes size is asked now and then.
+func TestScreenAsksForTheSize(t *testing.T) {
+	f := newFullFake(t, 120, 20)
+	f.resized = nil
+	s := NewScreen(f, ScreenOptions{Name: "DOGGIE", Texts: testTexts})
+	t.Cleanup(func() { s.Close() })
+	f.waitShown(t, "TAREAS")
+	f.mu.Lock()
+	f.width = 80
+	f.raw.Reset()
+	f.mu.Unlock()
+	f.waitShown(t, "/help comandos")
+	if strings.Contains(strings.Join(f.shown(t), "\n"), "TAREAS") {
+		t.Error("a panel at 80 columns")
 	}
 }

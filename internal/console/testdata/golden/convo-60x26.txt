@@ -1,9 +1,7 @@
  ◆ DOGGIE   ● en línea · terminal        mar 28 oct · 21:40
-
-
-                   Recuérdame en 10 minutos sacar la ropa
-                   de la lavadora y cuéntame un chiste
-                   corto
+────────────────────────────────────────────────────────────
+                │ corto                                  │
+                ╰────────────────────────────────────────╯
 
   DOGGIE
   ╭────────────────────────────────╮
@@ -17,7 +15,9 @@
   ╰─────────────────────────────────────────────────╯
 
                                              voice:kitchen
-                      ¿y mañana a qué hora es mi reunión?
+                   ╭─────────────────────────────────────╮
+                   │ ¿y mañana a qué hora es mi reunión? │
+                   ╰─────────────────────────────────────╯
 
   ? lost the connection to DOGGIE; reconnecting…
  ╭────────────────────────────────────────────────────────╮

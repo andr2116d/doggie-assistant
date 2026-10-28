@@ -10,8 +10,6 @@ type chrome struct {
 	clock   string
 	// hints are shown below the input box, on the left and on the right.
 	hints, hintsRight string
-	// tasks and notices title the panel's two parts.
-	tasks, notices string
 	// tooSmall is shown alone when the screen can't hold the chat.
 	tooSmall string
 }
@@ -23,9 +21,15 @@ func drawChrome(g *grid, r regions, lk looks, c chrome) {
 		return
 	}
 	drawHeader(g, r.header, lk, c)
+	if !r.rule.empty() {
+		g.fill(r.rule.x, r.rule.y, r.rule.w, 1, lk.base)
+		for x := r.rule.x; x < r.rule.x+r.rule.w; x++ {
+			g.put(x, r.rule.y, "─", 1, lk.line)
+		}
+	}
 	g.fill(r.body.x, r.body.y, r.body.w, r.body.h, lk.base)
 	if !r.panel.empty() {
-		drawPanelFrame(g, r.panel, lk, c)
+		g.fill(r.panel.x, r.panel.y, r.panel.w, r.panel.h, lk.base)
 	}
 	g.fill(r.input.x, r.input.y, r.input.w, r.input.h, lk.base)
 	border(g, rect{r.input.x + 1, r.input.y, r.input.w - 2, r.input.h}, lk.box)
@@ -33,38 +37,56 @@ func drawChrome(g *grid, r regions, lk looks, c chrome) {
 	drawFooter(g, r.footer, lk, c)
 }
 
+// drawHeader draws the top bar: the assistant's name and its connection on
+// the left, the time on the right. Short of room, the channel goes first,
+// then the time.
 func drawHeader(g *grid, r rect, lk looks, c chrome) {
 	g.fill(r.x, r.y, r.w, r.h, lk.header)
+	left := []string{"◆ ", c.name, "   ● ", c.status}
+	leftW := 0
+	for _, s := range left {
+		leftW += textWidth(s)
+	}
+	channel := ""
+	if c.channel != "" {
+		channel = " · " + c.channel
+	}
+	clock := c.clock
+	room := r.w - 2
+	if leftW+textWidth(channel)+textWidth(clock)+2 > room {
+		channel = ""
+	}
+	if leftW+textWidth(clock)+2 > room {
+		clock = ""
+	}
 	end := r.x + r.w - 1
-	clockAt := textRight(g, r.x+r.w/2, end, r.y, c.clock, lk.headerMuted)
-	x := g.text(r.x+1, r.y, clockAt-1, "◆ ", lk.brand)
-	x = textIn(g, x, r.y, clockAt-1, c.name, lk.brand)
+	if clock != "" {
+		end = textRight(g, r.x, end, r.y, clock, lk.headerMuted) - 2
+	}
 	state := lk.offline
 	if c.online {
 		state = lk.online
 	}
-	x = g.text(x, r.y, clockAt-1, "   ● ", state)
-	x = textIn(g, x, r.y, clockAt-1, c.status, state)
-	if c.channel != "" {
-		x = g.text(x, r.y, clockAt-1, " · ", lk.headerMuted)
-		textIn(g, x, r.y, clockAt-1, c.channel, lk.headerMuted)
+	x := g.text(r.x+1, r.y, end, "◆ ", lk.brand)
+	x = textIn(g, x, r.y, end, c.name, lk.brand)
+	x = g.text(x, r.y, end, "   ● ", state)
+	x = textIn(g, x, r.y, end, c.status, state)
+	if channel != "" {
+		textIn(g, x, r.y, end, channel, lk.headerMuted)
 	}
 }
 
-func drawPanelFrame(g *grid, r rect, lk looks, c chrome) {
-	g.fill(r.x, r.y, r.w, r.h, lk.panel)
-	for y := r.y; y < r.y+r.h; y++ {
-		g.put(r.x, y, "│", 1, lk.rule)
-	}
-	textIn(g, r.x+2, r.y+1, r.x+r.w-1, c.tasks, lk.panelTitle)
-}
-
+// drawFooter draws the hints below the input box; short of room, the ones
+// on the right go first.
 func drawFooter(g *grid, r rect, lk looks, c chrome) {
 	g.fill(r.x, r.y, r.w, r.h, lk.base)
 	end := r.x + r.w - 2
-	rightAt := end
-	if c.hintsRight != "" {
-		rightAt = textRight(g, r.x+r.w/2, end, r.y, c.hintsRight, lk.hint) - 2
+	right := c.hintsRight
+	if textWidth(c.hints)+textWidth(right)+6 > r.w {
+		right = ""
 	}
-	textIn(g, r.x+2, r.y, rightAt, c.hints, lk.hint)
+	if right != "" {
+		end = textRight(g, r.x, end, r.y, right, lk.hint) - 2
+	}
+	textIn(g, r.x+2, r.y, end, c.hints, lk.hint)
 }

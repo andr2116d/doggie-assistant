@@ -1,4 +1,4 @@
- ◆ DOGGIE   ● en lí… mar 28 oct · 21:40
+ ◆ DOGGIE   ● en línea
 
 
 
@@ -7,4 +7,4 @@
  ╭────────────────────────────────────╮
  │ ›                                  │
  ╰────────────────────────────────────╯
-  /help comandos · ↑ hist…  Tab: panel
+  /help comandos · ↑ historial · Ctrl…

@@ -365,7 +365,7 @@ const (
 // widths are how wide the text of each kind of bubble may be in a
 // conversation cols wide.
 func widths(cols int) (reply, said int) {
-	return min(cols-4, maxReplyCols), min(cols*3/4, maxSaidCols) - 2
+	return min(cols-4, maxReplyCols), min(cols*3/4, maxSaidCols) - 4
 }
 
 // named reports whether message i shows the assistant's name above it:
@@ -386,9 +386,9 @@ func (c *conversation) height(i, cols int) int {
 		}
 		return h
 	case fromElsewhere:
-		return len(m.lines(said)) + 1
+		return len(m.lines(said)) + 3
 	case fromUser:
-		return len(m.lines(said))
+		return len(m.lines(said)) + 2
 	default:
 		return len(m.lines(cols - 2))
 	}
@@ -504,20 +504,30 @@ func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk l
 	case fromUser, fromElsewhere:
 		lines := m.lines(said)
 		w := m.linesWidth(said)
-		left := x + cols - (w + 2)
+		left := x + cols - (w + 4)
 		if m.from == fromElsewhere {
 			if visible(y) {
 				textRight(g, x, x+cols, y, m.label, lk.muted)
 			}
 			y++
 		}
+		if visible(y) {
+			hline(g, left, y, w+4, "╭", "╮", lk.youEdge)
+		}
+		y++
 		for _, l := range lines {
 			if visible(y) {
-				g.fill(left, y, w+2, 1, lk.you)
-				g.text(left+1, y, left+1+w, l.text, lk.you)
+				g.text(left, y, left+1, "│", lk.youEdge)
+				g.fill(left+1, y, w+2, 1, lk.you)
+				g.text(left+2, y, left+2+w, l.text, lk.you)
+				g.text(left+w+3, y, left+w+4, "│", lk.youEdge)
 			}
 			y++
 		}
+		if visible(y) {
+			hline(g, left, y, w+4, "╰", "╯", lk.youEdge)
+		}
+		y++
 	default:
 		for j, l := range m.lines(cols - 2) {
 			if visible(y) {

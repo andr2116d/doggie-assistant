@@ -9,8 +9,9 @@ func (r rect) empty() bool { return r.w <= 0 || r.h <= 0 }
 
 // The full screen's measures, in columns and rows.
 const (
-	panelCols     = 30  // the side panel, with its rule
 	panelMinCols  = 100 // narrower screens hide the panel
+	panelWideCols = 150 // wider ones give it more room
+	ruleMinRows   = 20  // shorter screens leave out the rule below the bar
 	maxInputRows  = 6   // the input box grows up to these lines, then scrolls
 	fullMinCols   = 40  // smaller screens only ask to be made bigger
 	fullMinRows   = 10
@@ -20,15 +21,16 @@ const (
 // regions are where each part of the full screen goes. A region that
 // doesn't show is empty.
 type regions struct {
-	header, body, panel, input, footer rect
+	header, rule, body, panel, input, footer rect
 	// tooSmall is set when the screen can't hold the chat at all.
 	tooSmall bool
 }
 
-// layout places the parts on a w×h screen: a bar on top, the input box
-// with inputRows lines (1 to maxInputRows) and a row of hints at the
-// bottom, and between them the conversation, with the panel on its right
-// when withPanel is set and the screen is wide enough.
+// layout places the parts on a w×h screen: a bar on top, with a rule below
+// it when the screen is tall enough; the input box with inputRows lines (1
+// to maxInputRows) and a row of hints at the bottom; and between them the
+// conversation, with the panel on its right when withPanel is set and the
+// screen is wide enough, wider on a wide screen.
 func layout(w, h int, withPanel bool, inputRows int) regions {
 	if w < fullMinCols || h < fullMinRows {
 		return regions{tooSmall: true}
@@ -36,12 +38,17 @@ func layout(w, h int, withPanel bool, inputRows int) regions {
 	inputRows = min(max(inputRows, 1), maxInputRows, h-fullMinRows+1)
 	var r regions
 	r.header = rect{0, 0, w, 1}
+	top := 1
+	if h >= ruleMinRows {
+		r.rule = rect{0, 1, w, 1}
+		top = 2
+	}
 	r.footer = rect{0, h - 1, w, 1}
 	r.input = rect{0, h - 1 - (inputRows + 2), w, inputRows + 2}
-	body := rect{0, 1, w, r.input.y - 1}
-	if withPanel && w >= panelMinCols {
-		r.panel = rect{w - panelCols, body.y, panelCols, body.h}
-		body.w -= panelCols
+	body := rect{0, top, w, r.input.y - top}
+	if cols := panelWidth(w); withPanel && cols > 0 {
+		r.panel = rect{w - cols, body.y, cols, body.h}
+		body.w -= cols
 	}
 	r.body = body
 	return r
@@ -89,26 +96,6 @@ func border(g *grid, r rect, st styleID) {
 	}
 }
 
-// eighths are the blocks a progress bar ends in, an eighth of a cell each.
-var eighths = []string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"}
-
-// bar draws a progress bar w cells wide from x on row y, done of the way
-// (0 to 1), to an eighth of a cell.
-func bar(g *grid, x, y, w int, done float64, fill, rest styleID) {
-	done = min(max(done, 0), 1)
-	n := int(done*float64(w*8) + 0.5)
-	for i := range w {
-		switch {
-		case n >= 8*(i+1):
-			g.put(x+i, y, "█", 1, fill)
-		case n > 8*i:
-			g.put(x+i, y, eighths[n-8*i], 1, fill)
-		default:
-			g.put(x+i, y, "─", 1, rest)
-		}
-	}
-}
-
 // centered is the column where text w columns wide starts centered in r.
 func centered(r rect, w int) int { return r.x + max((r.w-w)/2, 0) }
 
@@ -136,4 +123,17 @@ func hline(g *grid, x, y, w int, left, right string, st styleID) {
 		g.put(x+i, y, "─", 1, st)
 	}
 	g.put(x+w-1, y, right, 1, st)
+}
+
+// panelWidth is how wide the panel is on a screen w columns wide: none
+// under panelMinCols, about a quarter of it otherwise, and more past
+// panelWideCols.
+func panelWidth(w int) int {
+	switch {
+	case w < panelMinCols:
+		return 0
+	case w < panelWideCols:
+		return 32
+	}
+	return min(w/4, 44)
 }

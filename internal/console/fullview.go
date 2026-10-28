@@ -17,7 +17,8 @@ type ScreenTexts struct {
 	Channel         string // the conversation's channel, on the top bar
 	// Hints go below the input box, on the left and on the right.
 	Hints, HintsRight string
-	Tasks, Notices    string // the panel's two parts
+	Tasks, Notices    string // the panel's two cards
+	NoTasks           string // in the tasks card while there are none
 	TooSmall          string // alone on a screen too small for the chat
 	// Newer tells how many messages came while scrolled up.
 	Newer func(n int) string
@@ -262,6 +263,14 @@ func (s *Screen) loop(t Terminal, v *view) {
 	defer fs.gate.stop()
 	minute := time.NewTimer(untilNextMinute(time.Now()))
 	defer minute.Stop()
+	// A terminal that doesn't tell when it changes size, as on Windows, is
+	// asked now and then.
+	var poll <-chan time.Time
+	if t.Resized() == nil {
+		ticker := time.NewTicker(sizePoll)
+		defer ticker.Stop()
+		poll = ticker.C
+	}
 	want := func() { fs.gate.want(time.Now()) }
 	draw := func() {
 		fs.fit()
@@ -322,6 +331,10 @@ func (s *Screen) loop(t Terminal, v *view) {
 			draw()
 		case <-t.Resized():
 			want()
+		case <-poll:
+			if fs.fit() {
+				want()
+			}
 		case <-minute.C:
 			minute.Reset(untilNextMinute(time.Now()))
 			want()
@@ -444,7 +457,7 @@ func (v *view) paint(g *grid) (int, int, bool) {
 	r := layout(g.W, g.H, v.showsPanel(), len(rows))
 	c := chrome{
 		name: v.opts.Name, online: v.online, status: v.status, channel: t.Channel,
-		hints: t.Hints, hintsRight: t.HintsRight, tasks: t.Tasks, notices: t.Notices, tooSmall: t.TooSmall,
+		hints: t.Hints, hintsRight: t.HintsRight, tooSmall: t.TooSmall,
 	}
 	if c.status == "" {
 		c.status = t.Offline
@@ -571,8 +584,7 @@ func (s *Screen) SetTasks(tasks []TaskView, more string) {
 type panelMode uint8
 
 const (
-	panelAuto panelMode = iota // shown while there are tasks
-	panelOn
+	panelOn panelMode = iota // the default: open
 	panelOff
 )
 
@@ -580,15 +592,7 @@ const (
 const maxPanelNotices = 8
 
 // showsPanel reports whether the panel is wanted now.
-func (v *view) showsPanel() bool {
-	switch v.panelMode {
-	case panelOn:
-		return true
-	case panelOff:
-		return false
-	}
-	return len(v.tasks) > 0 || v.moreTasks != ""
-}
+func (v *view) showsPanel() bool { return v.panelMode == panelOn }
 
 // remember keeps a notice for the panel, unless it is only information.
 func (v *view) remember(n notice) {
@@ -601,66 +605,142 @@ func (v *view) remember(n notice) {
 	}
 }
 
-// drawPanel draws the tasks and the last notices in the panel, below its
-// title.
+// drawPanel draws the panel's cards: the tasks, and below them the last
+// notices when there is room.
 func (v *view) drawPanel(g *grid, r rect) {
-	lk := v.lk
-	x, right := r.x+2, r.x+r.w-1
-	y, bottom := r.y+3, r.y+r.h
-	room := func(rows int) bool { return y+rows <= bottom }
-	for _, t := range v.tasks {
-		rows := 1
-		if t.Percent > 0 {
-			rows++
-		}
-		if t.Detail != "" {
-			rows++
-		}
-		if !room(rows) {
-			break
-		}
-		mark, st := "●", lk.panelMark
-		if t.Waiting {
-			mark, st = "?", lk.panelWait
-		}
-		at := g.text(x, y, right, mark, st)
-		at = textIn(g, at+1, y, right, t.ID, lk.panelMuted)
-		textIn(g, at+1, y, right, t.Title, lk.panelText)
-		y++
-		if t.Percent > 0 {
-			pct := fmt.Sprintf(" %3d%%", min(t.Percent, 100))
-			w := right - x - len(pct) - 2
-			bar(g, x+2, y, w, float64(t.Percent)/100, lk.bar, lk.barRest)
-			g.text(x+2+w, y, right, pct, lk.panelMuted)
-			y++
-		}
-		if t.Detail != "" {
-			textIn(g, x+2, y, right, t.Detail, lk.panelMuted)
-			y++
-		}
-		y++
-	}
-	if v.moreTasks != "" && room(1) {
-		textIn(g, x, y, right, v.moreTasks, lk.panelMuted)
-		y += 2
-	}
-	if len(v.notices) == 0 || !room(2) {
+	lk, t := v.lk, v.opts.Texts
+	inner := rect{r.x + 1, r.y, r.w - 2, r.h}
+	rows := v.taskRows(inner.w - 4)
+	tasksH := min(len(rows)+2, inner.h)
+	v.card(g, rect{inner.x, inner.y, inner.w, tasksH}, t.Tasks, rows)
+	noticesY := inner.y + tasksH + 1
+	if len(v.notices) == 0 || inner.y+inner.h-noticesY < 3 {
 		return
 	}
-	textIn(g, x, y, right, v.opts.Texts.Notices, lk.panelTitle)
-	y += 2
-	for i := len(v.notices) - 1; i >= 0 && room(1); i-- {
+	var notes []cardRow
+	for i := len(v.notices) - 1; i >= 0; i-- {
 		n := v.notices[i]
-		mark, st := "✓", lk.panelGood
+		mark, st := "✓", lk.good
 		switch n.kind {
 		case noteWait:
-			mark, st = "?", lk.panelWait
+			mark, st = "?", lk.wait
 		case noteBad:
-			mark, st = "✗", lk.panelBad
+			mark, st = "✗", lk.bad
 		}
-		at := g.text(x, y, right, mark, st)
-		textIn(g, at+1, y, right, n.text, lk.panelText)
-		y++
+		lines := wrapLines(n.text, inner.w-6)
+		notes = append(notes, cardRow{mark: mark, markStyle: st, left: lines[0], leftStyle: lk.text})
+		if len(lines) > 1 {
+			notes = append(notes, cardRow{left: "  " + lines[1], leftStyle: lk.text})
+		}
+	}
+	h := min(len(notes)+2, inner.y+inner.h-noticesY)
+	v.card(g, rect{inner.x, noticesY, inner.w, h}, t.Notices, notes)
+}
+
+// cardRow is one row inside a card: a mark, text on the left, text on the
+// right, or a bar.
+type cardRow struct {
+	mark      string
+	markStyle styleID
+	left      string
+	leftStyle styleID
+	right     string
+	// isBar draws a bar instead, bar of the way done (0 to 1).
+	isBar bool
+	bar   float64
+}
+
+// taskRows are the rows the tasks take in a card w columns wide inside.
+func (v *view) taskRows(w int) []cardRow {
+	lk := v.lk
+	if len(v.tasks) == 0 && v.moreTasks == "" {
+		return []cardRow{{left: v.opts.Texts.NoTasks, leftStyle: lk.muted}}
+	}
+	var rows []cardRow
+	for i, t := range v.tasks {
+		if i > 0 {
+			rows = append(rows, cardRow{})
+		}
+		mark, st := "●", lk.name
+		if t.Waiting {
+			mark, st = "?", lk.wait
+		}
+		right := ""
+		if t.Percent > 0 {
+			right = fmt.Sprintf("%d%%", min(t.Percent, 100))
+		}
+		// The title takes up to two rows, the percent on the first.
+		title := wrapLines(t.Title, w-2-textWidth(right)-1)
+		rows = append(rows, cardRow{mark: mark, markStyle: st, left: title[0], leftStyle: lk.text, right: right})
+		if len(title) > 1 {
+			rows = append(rows, cardRow{left: "  " + title[1], leftStyle: lk.text})
+		}
+		if t.Percent > 0 {
+			rows = append(rows, cardRow{isBar: true, bar: float64(min(t.Percent, 100)) / 100})
+		}
+		if t.Detail != "" {
+			detail := lk.muted
+			if t.Waiting {
+				detail = lk.wait
+			}
+			// Up to two rows, so a hint like "/answer t2" isn't cut.
+			lines := wrapLines(t.ID+" · "+t.Detail, w)
+			for _, l := range lines[:min(len(lines), 2)] {
+				rows = append(rows, cardRow{left: l, leftStyle: detail})
+			}
+		}
+	}
+	if v.moreTasks != "" {
+		rows = append(rows, cardRow{}, cardRow{left: v.moreTasks, leftStyle: lk.muted})
+	}
+	return rows
+}
+
+// card draws a rounded card on r, with title in its top edge and rows
+// inside, as many as fit.
+func (v *view) card(g *grid, r rect, title string, rows []cardRow) {
+	lk := v.lk
+	if r.w < 8 || r.h < 3 {
+		return
+	}
+	border(g, r, lk.line)
+	if title != "" {
+		at := g.text(r.x+2, r.y, r.x+r.w-2, " ", lk.line)
+		at = textIn(g, at, r.y, r.x+r.w-3, title, lk.cardTitle)
+		g.text(at, r.y, r.x+r.w-2, " ", lk.line)
+	}
+	left, right := r.x+2, r.x+r.w-2
+	for i, row := range rows {
+		y := r.y + 1 + i
+		if y >= r.y+r.h-1 {
+			break
+		}
+		if row.isBar {
+			thinBar(g, left+2, y, right-left-2, row.bar, lk)
+			continue
+		}
+		x := left
+		if row.mark != "" {
+			x = g.text(x, y, right, row.mark, row.markStyle) + 1
+		}
+		end := right
+		if row.right != "" {
+			end = textRight(g, x, right, y, row.right, lk.muted) - 1
+		}
+		textIn(g, x, y, end, row.left, row.leftStyle)
+	}
+}
+
+// thinBar draws a thin progress bar w cells wide from x on row y, done of
+// the way (0 to 1).
+func thinBar(g *grid, x, y, w int, done float64, lk looks) {
+	n := int(min(max(done, 0), 1)*float64(w) + 0.5)
+	for i := range w {
+		if i < n {
+			g.put(x+i, y, "━", 1, lk.name)
+		} else {
+			g.put(x+i, y, "─", 1, lk.line)
+		}
 	}
 }
 
@@ -789,3 +869,7 @@ func since(d time.Duration) string {
 	}
 	return fmt.Sprintf("%dm %02ds", sec/60, sec%60)
 }
+
+// sizePoll is how often a terminal that doesn't tell when it changes size
+// is asked for it.
+const sizePoll = 500 * time.Millisecond

@@ -55,7 +55,7 @@ func golden(t *testing.T, name, got string) {
 var sampleChrome = chrome{
 	name: "DOGGIE", online: true, status: "en línea", channel: "terminal", clock: "mar 28 oct · 21:40",
 	hints: "/help comandos · ↑ historial · Ctrl+D salir", hintsRight: "Tab: panel",
-	tasks: "TAREAS", notices: "AVISOS", tooSmall: "Agranda la ventana\npara hablar con DOGGIE",
+	tooSmall: "Agranda la ventana\npara hablar con DOGGIE",
 }
 
 func TestChromeGolden(t *testing.T) {
@@ -83,7 +83,7 @@ func FuzzLayout(f *testing.F) {
 			}
 			return
 		}
-		parts := []rect{r.header, r.body, r.panel, r.input, r.footer}
+		parts := []rect{r.header, r.rule, r.body, r.panel, r.input, r.footer}
 		covered := make([]int, W*H)
 		for _, p := range parts {
 			if p.empty() {
@@ -110,27 +110,6 @@ func FuzzLayout(f *testing.F) {
 			t.Fatal("no panel on a wide screen")
 		}
 	})
-}
-
-func TestBar(t *testing.T) {
-	var g grid
-	g.resize(10, 1)
-	for _, c := range []struct {
-		done float64
-		want string
-	}{
-		{0, "──────────"},
-		{0.5, "█████─────"},
-		{0.55, "█████▌────"},
-		{1, "██████████"},
-		{2, "██████████"},
-		{-1, "──────────"},
-	} {
-		bar(&g, 0, 0, 10, c.done, 0, 0)
-		if got := strings.TrimSpace(screenText(&g)); got != c.want {
-			t.Errorf("%v: %q, want %q", c.done, got, c.want)
-		}
-	}
 }
 
 func TestTextCut(t *testing.T) {

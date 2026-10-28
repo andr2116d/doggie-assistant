@@ -3,11 +3,11 @@ package console
 // palette is the full screen's colors. Backgrounds keep the terminal's own
 // in 16 colors, where painting them would clash with its theme.
 type palette struct {
-	bg, chrome, panel, line Color // grounds and rules
-	fg, muted               Color // text
-	accent, accentLine      Color // the assistant's color, and its borders
-	you                     Color // the ground of what the user said
-	good, wait, bad         Color // how things went
+	bg, chrome, line   Color // grounds and rules
+	fg, muted          Color // text
+	accent, accentLine Color // the assistant's color, and its borders
+	you, youLine       Color // the ground of what the user said, and its edge
+	good, wait, bad    Color // how things went
 }
 
 // violetMint is the default palette: violet for the assistant, mint for
@@ -15,13 +15,13 @@ type palette struct {
 var violetMint = palette{
 	bg:         Hex(0x100e16, NoANSI),
 	chrome:     Hex(0x18151f, NoANSI),
-	panel:      Hex(0x14111b, NoANSI),
 	line:       Hex(0x2a2436, 8),
 	fg:         Hex(0xece9f4, NoANSI),
 	muted:      Hex(0x948da8, 8),
 	accent:     Hex(0xa78bfa, 13),
 	accentLine: Hex(0x55468a, 5),
 	you:        Hex(0x201b2c, 8),
+	youLine:    Hex(0x3a3150, 8),
 	good:       Hex(0x6ee7b7, 10),
 	wait:       Hex(0xf4c95d, 11),
 	bad:        Hex(0xf87171, 9),
@@ -29,19 +29,16 @@ var violetMint = palette{
 
 // looks are the styles each part of the full screen is drawn with.
 type looks struct {
-	base, text, muted             styleID // the ground, text on it, notes
-	header, brand, headerMuted    styleID // the top bar
-	online, offline               styleID // the connection, on the bar
-	panel, panelText, panelMuted  styleID // the side panel
-	panelTitle, rule              styleID
-	box, prompt, input, hint      styleID // the input box and the hints below
-	you                           styleID // a bubble of what the user said
-	name, border                  styleID // a bubble of the assistant
-	good, wait, bad, bar, barRest styleID // marks and progress bars
-	pill                          styleID // "new messages below"
-	panelMark, panelWait          styleID // marks on the panel
-	panelGood, panelBad           styleID
-	selected                      styleID // text marked with the mouse
+	base, text, muted          styleID // the ground, text on it, notes
+	header, brand, headerMuted styleID // the top bar
+	online, offline            styleID // the connection, on the bar
+	box, prompt, input, hint   styleID // the input box and the hints below
+	you, youEdge               styleID // a bubble of what the user said
+	name, border               styleID // a bubble of the assistant
+	good, wait, bad            styleID // how things went
+	pill                       styleID // "new messages below"
+	line, cardTitle            styleID // rules and the panel's cards
+	selected                   styleID // text marked with the mouse
 	// Markdown in a reply.
 	bold, italic, code, heading styleID
 }
@@ -57,28 +54,20 @@ func newLooks(t *styleTable, p palette) looks {
 		headerMuted: on(p.muted, p.chrome, false),
 		online:      on(p.good, p.chrome, false),
 		offline:     on(p.wait, p.chrome, false),
-		panel:       on(Color{}, p.panel, false),
-		panelText:   on(p.fg, p.panel, false),
-		panelMuted:  on(p.muted, p.panel, false),
-		panelTitle:  on(p.muted, p.panel, true),
-		rule:        on(p.line, p.panel, false),
 		box:         on(p.accentLine, p.bg, false),
 		prompt:      on(p.accent, p.bg, true),
 		input:       on(p.fg, p.bg, false),
 		hint:        on(p.muted, p.bg, false),
 		you:         on(p.fg, p.you, false),
+		youEdge:     on(p.youLine, p.bg, false),
 		name:        on(p.accent, p.bg, true),
 		border:      on(p.accentLine, p.bg, false),
 		good:        on(p.good, p.bg, false),
 		wait:        on(p.wait, p.bg, false),
 		bad:         on(p.bad, p.bg, false),
-		bar:         on(p.accent, p.panel, false),
-		barRest:     on(p.line, p.panel, false),
 		pill:        on(p.accent, p.you, true),
-		panelMark:   on(p.accent, p.panel, false),
-		panelWait:   on(p.wait, p.panel, false),
-		panelGood:   on(p.good, p.panel, false),
-		panelBad:    on(p.bad, p.panel, false),
+		line:        on(p.line, p.bg, false),
+		cardTitle:   on(p.muted, p.bg, true),
 		selected:    on(p.fg, p.accentLine, false),
 		bold:        on(p.fg, p.bg, true),
 		italic:      t.id(Style{Fg: p.fg, Bg: p.bg, Italic: true}),

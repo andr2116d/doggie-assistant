@@ -21,6 +21,8 @@ type vt struct {
 	rows        [][]string // cells; a wide rune leaves "" in its second cell
 	row, col    int
 	pendingWrap bool
+	// sgr are the parameters of every style sequence written.
+	sgr []string
 }
 
 func newVT(t *testing.T, cols int) *vt { return &vt{t: t, cols: cols, rows: [][]string{nil}} }
@@ -96,6 +98,10 @@ func (v *vt) Write(p []byte) (int, error) {
 }
 
 func (v *vt) csi(params string, final byte) {
+	if final == 'm' {
+		v.sgr = append(v.sgr, params)
+		return
+	}
 	n := 1
 	if params != "" && params[0] != '?' {
 		var err error
@@ -115,7 +121,7 @@ func (v *vt) csi(params string, final byte) {
 			v.rows[v.row] = row[:v.col]
 		}
 	case 'h', 'l':
-		if params != "?2004" {
+		if params != "?2004" && params != "?2026" {
 			v.t.Fatalf("unexpected mode %q", params)
 		}
 	default:
@@ -190,7 +196,7 @@ func (g *rig) key(k key) {
 		g.partial = ""
 		g.modelPrint(echo)
 		g.partial = saved
-		g.update(func() { g.s.printAbove(&g.b, echo) })
+		g.update(func() { g.s.printAbove(&g.b, Text{Text: echo}) })
 		return
 	}
 	g.update(nil)
@@ -431,7 +437,7 @@ func TestScreenNarrowsWithAPartialLine(t *testing.T) {
 	g.v = newVT(t, 10)
 	g.s.drawn = false
 	g.update(func() { g.s.refit(&g.b) })
-	if w := widthOf(g.s.partial); w >= 10 {
+	if w := cellsWidth(g.s.partial); w >= 10 {
 		t.Errorf("partial line %d columns wide on 10", w)
 	}
 }

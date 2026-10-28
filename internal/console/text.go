@@ -54,3 +54,6 @@ func widthOf(rs []rune) int {
 	}
 	return w
 }
+
+// Width is how many terminal columns s takes.
+func Width(s string) int { return widthOf([]rune(s)) }

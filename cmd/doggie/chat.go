@@ -117,7 +117,7 @@ func chatCmd(args []string) error {
 			if o.host.own != nil {
 				leaving = "DOGGIE stopped"
 				if ui.IsInteractive() {
-					notice(ui, "· "+o.words.tr.f("stopping DOGGIE..."))
+					fmt.Fprintln(ui, "· "+o.words.tr.f("stopping DOGGIE..."))
 				}
 			}
 			o.host.close()
@@ -133,7 +133,7 @@ func chatCmd(args []string) error {
 	}
 	defer conn.Close()
 	if ui.IsInteractive() {
-		notice(ui, "· "+o.words.tr.f("talking with DOGGIE at %s on %s; /help lists the commands, Ctrl+D quits", url, o.channel))
+		fmt.Fprintln(ui, "· "+o.words.tr.f("talking with DOGGIE at %s on %s; /help lists the commands, Ctrl+D quits", url, o.channel))
 	}
 	return chat(ctx, conn, ui, states, o)
 }
@@ -202,14 +202,14 @@ func startHere(ctx context.Context, ui chatUI, client clientFlags, states chan<-
 	if !ui.IsInteractive() {
 		w = os.Stderr
 	}
-	notice(w, "· "+tr.f("DOGGIE wasn't running: started it here, logging to %s; it stops when you quit", host.logPath))
+	fmt.Fprintln(w, "· "+tr.f("DOGGIE wasn't running: started it here, logging to %s; it stops when you quit", host.logPath))
 	return conn, url, nil
 }
 
 // stopHere stops the DOGGIE doggie run started, on purpose.
 func stopHere(ui chatUI, own *core, tr translator) {
 	if ui.IsInteractive() {
-		notice(ui, "· "+tr.f("stopping DOGGIE..."))
+		fmt.Fprintln(ui, "· "+tr.f("stopping DOGGIE..."))
 	}
 	stopCore(own, events.StopOnPurpose)
 }
@@ -254,9 +254,9 @@ func runWithChat(ctx context.Context, cfg config.Config, selected []factory, cli
 	}
 	defer conn.Close()
 	if cfg.UsingDefaults {
-		notice(ui, "· "+tr.f("no config file at %s, using defaults", cfg.File))
+		fmt.Fprintln(ui, "· "+tr.f("no config file at %s, using defaults", cfg.File))
 	}
-	notice(ui, "· "+tr.f("DOGGIE is running, logging to %s; /help lists the commands, Ctrl+D stops it", logPath))
+	fmt.Fprintln(ui, "· "+tr.f("DOGGIE is running, logging to %s; /help lists the commands, Ctrl+D stops it", logPath))
 	o := defaultChatOptions()
 	o.words = words(cfg.Language)
 	return chatSession(ctx, conn, ui, states, own, o)
@@ -944,6 +944,3 @@ func (c *chatState) showActivity(text string) {
 	c.activity = text
 	a.SetActivity(text)
 }
-
-// notice prints one of the chat's own notes on w.
-func notice(w io.Writer, text string) { fmt.Fprintln(w, text) }

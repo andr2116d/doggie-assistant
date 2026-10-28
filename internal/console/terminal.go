@@ -6,7 +6,7 @@ import (
 	"golang.org/x/term"
 )
 
-// fileTerminal is the process's terminal, in raw mode while the console
+// fileTerminal is the process's terminal, in raw mode while the screen
 // runs.
 type fileTerminal struct {
 	in, out    *os.File

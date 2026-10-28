@@ -20,12 +20,12 @@ func TestDecoder(t *testing.T) {
 		{"ascii", "hi", []key{r('h'), r('i')}},
 		{"utf8", "ñé😀", []key{r('ñ'), r('é'), r('😀')}},
 		{"enter cr", "\r", []key{k(keyEnter)}},
-		{"enter lf", "\n", []key{k(keyEnter)}},
+		{"ctrl+j is a new line", "\n", []key{k(keyNewline)}},
 		{"crlf is one enter", "a\r\nb", []key{r('a'), k(keyEnter), r('b')}},
-		{"two enters", "\n\n", []key{k(keyEnter), k(keyEnter)}},
+		{"two new lines", "\n\n", []key{k(keyNewline), k(keyNewline)}},
 		{"cr cr", "\r\r", []key{k(keyEnter), k(keyEnter)}},
 		{"backspace", "\x7f\x08", []key{k(keyBackspace), k(keyBackspace)}},
-		{"tab is a space", "\t", []key{r(' ')}},
+		{"tab", "\t", []key{k(keyTab)}},
 		{"controls", "\x01\x05\x03\x04\x15\x0b\x17\x0c\x02\x06\x10\x0e", []key{
 			k(keyHome), k(keyEnd), k(keyInterrupt), k(keyEOF), k(keyKillStart), k(keyKillEnd),
 			k(keyKillWord), k(keyRedraw), k(keyLeft), k(keyRight), k(keyUp), k(keyDown)}},
@@ -37,10 +37,10 @@ func TestDecoder(t *testing.T) {
 		{"ctrl arrows", "\x1b[1;5C\x1b[1;5D\x1b[1;3D", []key{k(keyWordRight), k(keyWordLeft), k(keyWordLeft)}},
 		{"alt b f", "\x1bb\x1bf", []key{k(keyWordLeft), k(keyWordRight)}},
 		{"alt other keeps the key", "\x1bx", []key{r('x')}},
-		{"unknown csi dropped", "\x1b[5~\x1b[99Za", []key{r('a')}},
+		{"unknown csi dropped", "\x1b[9~\x1b[99Za", []key{r('a')}},
 		{"csi with bad byte", "\x1b[1\x01a", []key{k(keyHome), r('a')}},
 		{"invalid utf8 dropped", "a\xffb\xc3", []key{r('a'), r('b')}},
-		{"paste", "\x1b[200~hola\r\nmundo\tya\x1b[201~", []key{paste("hola mundo ya")}},
+		{"paste", "\x1b[200~hola\r\nmundo\tya\x1b[201~", []key{paste("hola\nmundo ya")}},
 		{"paste drops controls", "\x1b[200~a\x1b[31mb\x07c\x1b[201~", []key{paste("a[31mbc")}},
 		{"empty paste", "\x1b[200~\x1b[201~x", []key{r('x')}},
 		{"paste then keys", "\x1b[200~ab\x1b[201~\r", []key{paste("ab"), k(keyEnter)}},
@@ -109,7 +109,7 @@ func TestDecoderBoundsPaste(t *testing.T) {
 }
 
 func TestFullScreenKeys(t *testing.T) {
-	d := decoder{full: true}
+	d := decoder{}
 	got := d.feed([]byte("\x1b[5~\x1b[6~\x1b[1;2A\x1b[1;2B\x1b[1;5H\x1b[1;5F\x1b[I\x1b[O\t\x1b\ra\nb\r\n"))
 	want := []keyKind{keyPageUp, keyPageDown, keyScrollUp, keyScrollDown, keyTop, keyBottom, keyFocusIn, keyFocusOut, keyTab, keyNewline, keyRune, keyNewline, keyRune, keyEnter}
 	var kinds []keyKind
@@ -119,20 +119,15 @@ func TestFullScreenKeys(t *testing.T) {
 	if !slices.Equal(kinds, want) {
 		t.Errorf("%v, want %v", kinds, want)
 	}
-	p := decoder{full: true}
+	p := decoder{}
 	keys := p.feed([]byte("\x1b[200~uno\r\ndos\tx\x1b[31m\x1b[201~"))
 	if len(keys) != 1 || keys[0].text != "uno\ndos x[31m" {
 		t.Errorf("paste %+v", keys)
 	}
-	// The same bytes in the inline console keep their old meaning.
-	var inline decoder
-	if k := inline.feed([]byte("\t\n\x1b[1;5H")); len(k) != 3 || k[0].r != ' ' || k[1].kind != keyEnter || k[2].kind != keyHome {
-		t.Errorf("inline %+v", k)
-	}
 }
 
 func TestMouseKeys(t *testing.T) {
-	d := decoder{full: true}
+	d := decoder{}
 	keys := d.feed([]byte("\x1b[<0;5;3M\x1b[<32;9;4M\x1b[<0;9;4m\x1b[<64;1;1M\x1b[<65;1;1M\x1b[<4;2;2M\x1b[<0;99999999;1M\x1b[<0;0;1M"))
 	var got []mouseEvent
 	for _, k := range keys {
@@ -151,9 +146,5 @@ func TestMouseKeys(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("%+v\nwant %+v", got, want)
-	}
-	var inline decoder
-	if k := inline.feed([]byte("\x1b[<0;5;3Ma")); len(k) != 1 || k[0].r != 'a' {
-		t.Errorf("the inline console took a mouse report: %+v", k)
 	}
 }

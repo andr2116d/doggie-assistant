@@ -243,7 +243,6 @@ func (s *Screen) run(t Terminal, opts ScreenOptions) {
 		opts: opts, fs: fs, lk: newLooks(fs.styles, violetMint),
 		convo: newConversation(opts.Name), ed: newEditor(opts.MaxRunes, opts.Forget),
 	}
-	v.ed.multiline = true
 	fs.guard(func() { s.loop(t, v) })
 }
 
@@ -256,7 +255,7 @@ func (s *Screen) loop(t Terminal, v *view) {
 		return
 	}
 	input := reader(t, s.done)
-	dec := decoder{full: true}
+	var dec decoder
 	pace, anim := newClock(), newClock()
 	defer pace.stop()
 	defer anim.stop()

@@ -22,7 +22,7 @@ func FuzzDecoder(f *testing.F) {
 					t.Fatalf("rune key %U", k.r)
 				}
 			case keyPaste:
-				if k.text == "" || !utf8.ValidString(k.text) || strings.ContainsFunc(k.text, func(r rune) bool { return !printable(r) }) {
+				if k.text == "" || !utf8.ValidString(k.text) || strings.ContainsFunc(k.text, func(r rune) bool { return !printable(r) && r != '\n' }) {
 					t.Fatalf("paste %q", k.text)
 				}
 			}

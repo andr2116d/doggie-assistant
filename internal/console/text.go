@@ -30,8 +30,8 @@ func clean(text string) string {
 	return b.String()
 }
 
-// oneLine cleans text and joins its lines with spaces, for pasting into the
-// line being typed.
+// oneLine cleans text and joins its lines with spaces, for what shows on one
+// row, e.g. the status or a prompt.
 func oneLine(text string) string {
 	text = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ", "\t", " ").Replace(text)
 	return strings.Map(func(r rune) rune {

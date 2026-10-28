@@ -38,9 +38,6 @@ type editor struct {
 	hidden       bool
 	hiddenPrompt []rune
 	stashed      []rune
-
-	// multiline lets the line hold newlines, from Alt+Enter or a paste.
-	multiline bool
 }
 
 func newEditor(maxRunes int, forget func(string) bool) *editor {
@@ -72,8 +69,8 @@ func (e *editor) apply(k key) (act action, line string) {
 	case keyPaste:
 		return e.insert([]rune(k.text)), ""
 	case keyNewline:
-		if !e.multiline || e.hidden {
-			return actRefused, ""
+		if e.hidden {
+			return actRefused, "" // a hidden line is one line
 		}
 		return e.insert([]rune{'\n'}), ""
 	case keyEnter:
@@ -164,9 +161,9 @@ func (e *editor) apply(k key) (act action, line string) {
 }
 
 // insert puts rs at the cursor, as much as fits. Control characters are
-// dropped: the line is drawn as is.
+// dropped, but newlines out of a hidden line: the line is drawn as is.
 func (e *editor) insert(rs []rune) action {
-	rs = slices.DeleteFunc(slices.Clone(rs), func(r rune) bool { return !printable(r) && (r != '\n' || !e.multiline) })
+	rs = slices.DeleteFunc(slices.Clone(rs), func(r rune) bool { return !printable(r) && (r != '\n' || e.hidden) })
 	if len(rs) == 0 {
 		return actNone
 	}

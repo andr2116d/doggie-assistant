@@ -105,7 +105,7 @@ The chat fills the terminal. Type a sentence and press Enter, and keep typing wh
 ```
 
 - What you say goes on the right; DOGGIE's replies on the left, in violet bubbles, as markdown (**bold**, *italic*, `code`, lists, blocks of code). While it thinks, three dots move below the last message, with what it is doing.
-- The input box takes several lines: Alt+Enter or Ctrl+J start a new one. A command being typed shows the rest of it in grey; Tab or Right takes it.
+- The input box takes several lines: Alt+Enter or Ctrl+J start a new one. Typing `/` shows the commands and what they do, narrowed as you type: Up and Down choose, Tab or Right complete, and Enter takes the one chosen, leaving one that needs more, like `/answer`, for you to finish.
 - Page Up and Page Down, Shift+Up and Shift+Down, Ctrl+Home and Ctrl+End, and the mouse wheel scroll the conversation. Scrolled up, the view stays where it is and tells how many messages came below.
 - Drag with the mouse to mark text: letting go copies it, without the bubbles' frames. Shift-drag (Option-drag in iTerm2) selects with the terminal instead.
 - The panel is open from the start, with the tasks and the last notices in rounded cards; Tab hides or shows it. It widens on wide terminals, and under 100 columns it goes and the tasks show below the box instead. A task that waits for your answer is amber.

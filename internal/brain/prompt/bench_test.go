@@ -10,7 +10,7 @@ import (
 
 // realistic is a busy thread: 20 turns and 20 active tasks.
 func realistic() Context {
-	c := Context{Now: at(60), Location: lima, ThreadID: "terminal", MaxTurns: 20, Inputs: []Input{said(60, "¿cómo va lo del temporizador?")}}
+	c := Context{Now: at(60), Location: utc5, ThreadID: "terminal", MaxTurns: 20, Inputs: []Input{said(60, "¿cómo va lo del temporizador?")}}
 	for i := range 20 {
 		c.History = append(c.History, Turn{
 			At:      at(i),

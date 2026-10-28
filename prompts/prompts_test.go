@@ -93,7 +93,7 @@ func TestLanguageName(t *testing.T) {
 		"es":         "Spanish",
 		"ES":         "Spanish",
 		" es ":       "Spanish",
-		"es-PE":      "Spanish (es-PE)",
+		"es-419":     "Spanish (es-419)",
 		"pt-BR":      "Portuguese (pt-BR)",
 		"zh-Hant-TW": "Chinese (zh-Hant-TW)",
 		"qu":         `the language with the BCP 47 code "qu"`,

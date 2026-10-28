@@ -974,8 +974,8 @@ func TestSpentUsageLimit(t *testing.T) {
 		rejected  = `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792995000,"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":1,"resetsAt":1792995000,"status":"rejected"},"seven_day":{"utilization":0.56,"resetsAt":1793386800,"status":"allowed"}}}}`
 		noReset   = `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","unifiedWindows":{"five_hour":{"utilization":0.7,"resetsAt":1792995000,"status":"allowed"},"seven_day":{"utilization":1,"resetsAt":1793386800,"status":"rejected"}}}}`
 		allowed   = `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1792995000,"unifiedWindows":{"five_hour":{"utilization":0.12,"resetsAt":1792995000,"status":"allowed"}}}}`
-		synthetic = `{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your session limit · resets 9:10pm (America/Lima)"}]}}`
-		failed    = `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You've hit your session limit · resets 9:10pm (America/Lima)"}`
+		synthetic = `{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your session limit · resets 9:10pm (UTC)"}]}}`
+		failed    = `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You've hit your session limit · resets 9:10pm (UTC)"}`
 		overload  = `{"type":"result","subtype":"error_during_execution","is_error":true,"api_error_status":529,"result":"Overloaded"}`
 	)
 	for _, tc := range []struct {

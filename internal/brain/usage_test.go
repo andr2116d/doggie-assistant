@@ -14,8 +14,8 @@ import (
 // Once the usage limit is spent, DOGGIE says so itself, in its language,
 // and nothing of what the provider said reaches the user.
 func TestSpentUsageIsToldByDOGGIE(t *testing.T) {
-	lima := time.FixedZone("Lima", -5*3600)
-	h := newHarness(t, Options{Language: "es", Location: lima})
+	utc5 := time.FixedZone("UTC-5", -5*3600)
+	h := newHarness(t, Options{Language: "es", Location: utc5})
 	renews := time.Now().Add(2 * time.Hour).Truncate(time.Minute)
 	h.fake.set(func(f *fake) {
 		f.reply = func(context.Context, llm.Request) []llm.Output {
@@ -28,8 +28,8 @@ func TestSpentUsageIsToldByDOGGIE(t *testing.T) {
 	id := h.say("th", "terminal", "¿Qué hora es?")
 	s := h.nextSpeak()
 	want := "Ahora no puedo pensar: se me acabó la cuota y se renueva "
-	if !strings.HasPrefix(s.Data.Text, want) || !strings.Contains(s.Data.Text, clockOf(renews.In(lima))) || s.CausedBy != id || s.Data.Block != 0 {
-		t.Errorf("said %+v, want %q... at %s", s.Data, want, clockOf(renews.In(lima)))
+	if !strings.HasPrefix(s.Data.Text, want) || !strings.Contains(s.Data.Text, clockOf(renews.In(utc5))) || s.CausedBy != id || s.Data.Block != 0 {
+		t.Errorf("said %+v, want %q... at %s", s.Data, want, clockOf(renews.In(utc5)))
 	}
 	d := h.nextTurn().Data
 	if d.Failure != events.FailureUsageLimit || !strings.Contains(d.Error, "session limit") || len(d.Replies) != 1 || d.Replies[0] != s.Data.Text {

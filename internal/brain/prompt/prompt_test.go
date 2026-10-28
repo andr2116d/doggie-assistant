@@ -34,8 +34,8 @@ func golden(t *testing.T, name, got string) {
 }
 
 var (
-	lima = time.FixedZone("-05", -5*3600)
-	t0   = time.Date(2026, 10, 25, 15, 40, 0, 0, time.UTC) // 10:40 in Lima
+	utc5 = time.FixedZone("-05", -5*3600)
+	t0   = time.Date(2026, 10, 25, 15, 40, 0, 0, time.UTC) // 10:40 at UTC-5
 )
 
 func at(min int) time.Time { return t0.Add(time.Duration(min) * time.Minute) }
@@ -49,7 +49,7 @@ func TestBuildDemo(t *testing.T) {
 		Status: events.StatusRunning, Percent: 60, Progress: "3/5 s", CreatedAt: at(0),
 	}
 	got := Build(Context{
-		Now: at(1), Location: lima, ThreadID: "terminal", MaxTurns: 20,
+		Now: at(1), Location: utc5, ThreadID: "terminal", MaxTurns: 20,
 		Tasks: []events.TaskInfo{timer},
 		History: []Turn{{
 			At:      at(0),
@@ -267,7 +267,7 @@ func TestBuildHistoryLimits(t *testing.T) {
 }
 
 func TestBuildInputLimitAndTime(t *testing.T) {
-	got := Build(Context{Now: at(0), Location: lima, Inputs: []Input{said(0, strings.Repeat("é", maxInputText+10)), {Said: "sin hora", Channel: "x"}}})
+	got := Build(Context{Now: at(0), Location: utc5, Inputs: []Input{said(0, strings.Repeat("é", maxInputText+10)), {Said: "sin hora", Channel: "x"}}})
 	if strings.Contains(got, strings.Repeat("é", maxInputText+1)) {
 		t.Error("input not cut")
 	}
@@ -291,8 +291,8 @@ func TestBuildEmptyInput(t *testing.T) {
 }
 
 func TestStamps(t *testing.T) {
-	now := time.Date(2026, 10, 25, 4, 30, 0, 0, time.UTC) // 23:30 on the 24th in Lima
-	clk := clock{now: now, loc: lima}
+	now := time.Date(2026, 10, 25, 4, 30, 0, 0, time.UTC) // 23:30 on the 24th at UTC-5
+	clk := clock{now: now, loc: utc5}
 	for in, want := range map[time.Time]string{
 		now:                      "23:30",            // today in the owner's zone, though not in UTC
 		now.Add(-23 * time.Hour): "00:30",            // still today

@@ -137,7 +137,7 @@ func TestChatConnectionOnAScreen(t *testing.T) {
 }
 
 func TestWords(t *testing.T) {
-	es, en := words("es-PE"), words("fr")
+	es, en := words("es-419"), words("fr")
 	if es.thinking != "pensando" || en.thinking != "thinking" || es.screen.Newer(1) != "↓ 1 nuevo" || es.screen.Newer(3) != "↓ 3 nuevos" {
 		t.Errorf("%+v %+v", es.thinking, en.thinking)
 	}

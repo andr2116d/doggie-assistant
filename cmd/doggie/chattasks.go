@@ -376,6 +376,9 @@ func (c *chatState) showStatus() {
 		return
 	}
 	c.ui.SetStatus(s)
+	if p, ok := c.ui.(taskUI); ok {
+		p.SetTasks(c.board.views(c.wordsOr()))
+	}
 	c.statusShown, c.statusAt = s, time.Now()
 }
 

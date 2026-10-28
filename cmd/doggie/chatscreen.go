@@ -1,8 +1,10 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,6 +51,10 @@ type chatWords struct {
 	// reconnecting is the connection while it is lost; elsewhere labels
 	// what the user said in another chat of the same channel.
 	reconnecting, elsewhere string
+	// waiting tells a task waits for an answer; others how many tasks run
+	// in other conversations.
+	waiting string
+	others  func(n int) string
 }
 
 // words are the chat's words in lang (BCP 47), English when it has none in
@@ -69,6 +75,13 @@ func words(lang string) chatWords {
 				Clock: spanishClock,
 			},
 			thinking: "pensando", reconnecting: "reconectando…", elsewhere: "tú, en otra ventana",
+			waiting: "espera tu respuesta",
+			others: func(n int) string {
+				if n == 1 {
+					return "+1 en otra conversación"
+				}
+				return fmt.Sprintf("+%d en otras conversaciones", n)
+			},
 		}
 	}
 	return chatWords{
@@ -80,6 +93,13 @@ func words(lang string) chatWords {
 			Clock: func(t time.Time) string { return t.Format("Mon Jan 2 · 15:04") },
 		},
 		thinking: "thinking", reconnecting: "reconnecting…", elsewhere: "you, elsewhere",
+		waiting: "waits for your answer",
+		others: func(n int) string {
+			if n == 1 {
+				return "+1 in another conversation"
+			}
+			return fmt.Sprintf("+%d in other conversations", n)
+		},
 	}
 }
 
@@ -164,4 +184,40 @@ func (c *chatState) turnOnScreen(id string, t events.BrainTurnData) {
 	if why := failure(t); why != "" {
 		s.Notice("", console.NoticeBad, "the turn failed: "+why)
 	}
+}
+
+// taskUI shows the tasks in a panel, as a full screen does.
+type taskUI interface {
+	SetTasks(tasks []console.TaskView, more string)
+}
+
+// views are the board's tasks of this conversation as the panel shows
+// them, and what to say about the others.
+func (b *taskBoard) views(w chatWords) ([]console.TaskView, string) {
+	var views []console.TaskView
+	others := 0
+	var mine []events.TaskInfo
+	for _, t := range b.tasks {
+		if t.info.ThreadID == b.thread {
+			mine = append(mine, t.info)
+		} else {
+			others++
+		}
+	}
+	slices.SortFunc(mine, func(x, y events.TaskInfo) int { return compareIDs(x.ID, y.ID) })
+	for _, info := range mine {
+		v := console.TaskView{ID: info.ID, Title: oneLineText(cmp.Or(info.Description, info.Kind)), Percent: info.Percent}
+		switch {
+		case info.Status == events.StatusWaitingInput:
+			v.Waiting, v.Detail = true, w.waiting+" · /answer "+info.ID
+		case info.Progress != "":
+			v.Detail = oneLineText(info.Progress)
+		}
+		views = append(views, v)
+	}
+	more := ""
+	if others > 0 {
+		more = w.others(others)
+	}
+	return views, more
 }

@@ -145,3 +145,47 @@ func TestWords(t *testing.T) {
 		t.Errorf("clock %q", got)
 	}
 }
+
+func (s *fakeScreen) SetTasks(tasks []console.TaskView, more string) {
+	var parts []string
+	for _, t := range tasks {
+		parts = append(parts, fmt.Sprintf("%s|%s|%s|%d|%v", t.ID, t.Title, t.Detail, t.Percent, t.Waiting))
+	}
+	s.call("tasks %s %s", strings.Join(parts, ","), more)
+}
+
+func TestBoardViews(t *testing.T) {
+	b := newTaskBoard("terminal")
+	b.event(created("t10", "terminal", "Esperar  un\nrato"))
+	b.event(created("t2", "terminal", ""))
+	b.event(created("t7", "voice", "de otra"))
+	b.event(created("t8", "voice", "y otra"))
+	b.event(env(events.TaskRunning, events.TaskRunningData{TaskID: "t10"}))
+	b.event(progress("t10", "3/30 s", 10))
+	b.event(env(events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: "t2", Question: "¿Pago la luz?"}))
+	views, more := b.views(words("es"))
+	want := []console.TaskView{
+		{ID: "t2", Title: "demo.sleep", Detail: "espera tu respuesta · /answer t2", Waiting: true},
+		{ID: "t10", Title: "Esperar un rato", Detail: "3/30 s", Percent: 10},
+	}
+	if !slices.Equal(views, want) || more != "+2 en otras conversaciones" {
+		t.Errorf("%+v %q", views, more)
+	}
+	if _, more := newTaskBoard("terminal").views(words("en")); more != "" {
+		t.Errorf("more %q without tasks", more)
+	}
+}
+
+// The chat shows its tasks in the screen's panel as they go.
+func TestChatTasksOnAScreen(t *testing.T) {
+	client := sayEnv(t, nil)
+	ui := newFakeScreen()
+	runChat(t, client, ui, make(chan connState), testChatOptions())
+	ui.waitCalls(t, "online true ")
+	ctx := context.Background()
+	bus.Publish(ctx, client, events.TaskCreated, events.TaskInfo{ID: "t1", TaskSpec: events.TaskSpec{Kind: "demo.sleep", ThreadID: "terminal", Description: "Recordar estirar"}})
+	bus.Publish(ctx, client, events.TaskProgress, events.TaskProgressData{TaskID: "t1", Message: "5/10 s", Percent: 50})
+	ui.waitCalls(t, "tasks t1|Recordar estirar|5/10 s|50|false ")
+	bus.Publish(ctx, client, events.TaskDone, events.TaskDoneData{TaskID: "t1"})
+	ui.waitCalls(t, "tasks t1|Recordar estirar|5/10 s|50|false ", "tasks  ")
+}

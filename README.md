@@ -108,7 +108,7 @@ The chat fills the terminal. Type a sentence and press Enter, and keep typing wh
 - The input box takes several lines: Alt+Enter or Ctrl+J start a new one. A command being typed shows the rest of it in grey; Tab or Right takes it.
 - Page Up and Page Down, Shift+Up and Shift+Down, Ctrl+Home and Ctrl+End, and the mouse wheel scroll the conversation. Scrolled up, the view stays where it is and tells how many messages came below.
 - Drag with the mouse to mark text: letting go copies it, without the bubbles' frames. Shift-drag (Option-drag in iTerm2) selects with the terminal instead.
-- The panel opens by itself while there are tasks, and Tab hides or shows it; under 100 columns the tasks show below the box instead. A task that waits for your answer is amber.
+- The panel is open from the start, with the tasks and the last notices in rounded cards; Tab hides or shows it. It widens on wide terminals, and under 100 columns it goes and the tasks show below the box instead. A task that waits for your answer is amber.
 - The chat's own words follow `language` in the config (English and Spanish for now). Colors follow the terminal: 24-bit with `COLORTERM=truecolor`, 256 or the terminal's own 16 otherwise, and none with `NO_COLOR` set.
 - At rest the chat uses no CPU: it draws only what changed, and only when something did. Leaving it puts the terminal back as it was, with one line telling whether DOGGIE stopped or keeps running.
 

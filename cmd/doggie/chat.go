@@ -142,13 +142,6 @@ func chatCmd(args []string) error {
 // tells its own sentences apart from those said in its thread elsewhere.
 var chatName = fmt.Sprintf("chat-%d", os.Getpid())
 
-// chatConsole is how the chat's console edits: answers, which may carry
-// secrets, aren't kept for Up and Down.
-var chatConsole = console.Options{
-	Prompt: "› ", PromptRole: console.Accent, EchoGap: true,
-	MaxRunes: events.MaxUtteranceRunes, Forget: isAnswer,
-}
-
 // assistantName is the name replies show under.
 const assistantName = "DOGGIE"
 
@@ -158,13 +151,11 @@ type activityUI interface {
 	SetActivity(text string)
 }
 
-// chatView prints replies on ui: with looks on a console that has them.
+// chatView prints replies on ui: as bubbles on a full screen, plain lines
+// otherwise.
 func chatView(ui chatUI) *replyView {
 	if s, ok := ui.(replyScreen); ok {
 		return newScreenView(s)
-	}
-	if p, ok := ui.(printer); ok && ui.IsInteractive() {
-		return newStyledView(p, assistantName)
 	}
 	return newReplyView(ui)
 }
@@ -954,16 +945,5 @@ func (c *chatState) showActivity(text string) {
 	a.SetActivity(text)
 }
 
-// notice prints one of the chat's own notes on w, muted on a console with
-// looks.
-func notice(w io.Writer, text string) {
-	p, styled := w.(printer)
-	if ui, ok := w.(interface{ IsInteractive() bool }); !ok || !ui.IsInteractive() {
-		styled = false
-	}
-	if !styled {
-		fmt.Fprintln(w, text)
-		return
-	}
-	p.Print(console.Text{Text: text + "\n", Role: console.Muted, Wrap: true})
-}
+// notice prints one of the chat's own notes on w.
+func notice(w io.Writer, text string) { fmt.Fprintln(w, text) }

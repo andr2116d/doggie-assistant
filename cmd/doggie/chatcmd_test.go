@@ -9,6 +9,7 @@ import (
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
+	"github.com/andr2116d/doggie-assistant/internal/config"
 )
 
 func TestParseLine(t *testing.T) {
@@ -291,8 +292,12 @@ func TestIsAnswer(t *testing.T) {
 	}
 }
 
-func TestChatConsoleForgetsAnswers(t *testing.T) {
-	if chatConsole.Forget == nil || !chatConsole.Forget("/answer t1 1234") || chatConsole.Forget("hola") {
-		t.Error("the chat's console keeps answers for Up and Down")
+func TestChatScreenForgetsAnswers(t *testing.T) {
+	o := screenOptions(config.Config{})
+	if o.Forget == nil || !o.Forget("/answer t1 1234") || o.Forget("hola") {
+		t.Error("the chat's screen keeps answers for Up and Down")
+	}
+	if o.Name != "DOGGIE" || o.MaxRunes != events.MaxUtteranceRunes {
+		t.Errorf("%+v", o)
 	}
 }

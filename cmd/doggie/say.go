@@ -164,11 +164,8 @@ type blockKey struct {
 // and prints the block again if it differs.
 type replyView struct {
 	w io.Writer
-	// p, if set, prints replies with looks, under the assistant's name, in
-	// place of plain "doggie>" lines on w.
-	p    printer
-	name string
-	// screen, if set, shows each block as a bubble of its own instead.
+	// screen, if set, shows each block as a bubble of its own instead of
+	// plain "doggie>" lines on w.
 	screen  replyScreen
 	printed map[blockKey]string // what is on screen, by block
 	pending map[blockKey]string // leading whitespace, not shown yet
@@ -188,63 +185,21 @@ func newReplyView(w io.Writer) *replyView {
 	return &replyView{w: w, printed: map[blockKey]string{}, pending: map[blockKey]string{}}
 }
 
-// printer prints text with looks, as an interactive console does.
-type printer interface {
-	Print(texts ...console.Text) error
-}
-
-// newStyledView is a replyView that prints on p with looks, replies under
-// name.
-func newStyledView(p printer, name string) *replyView {
-	v := newReplyView(nil)
-	v.p, v.name = p, name
-	return v
-}
-
-// startBlock prints the start of a reply's block, under the name.
+// startBlock prints the start of a reply's block.
 func (v *replyView) startBlock(text string) {
-	if v.p == nil {
-		fmt.Fprintf(v.w, "doggie> %s", text)
-		return
-	}
-	v.p.Print(console.Text{Text: v.name, Role: console.Assistant, Gap: true}, console.Text{Text: "  "}, v.body(text, true))
+	fmt.Fprintf(v.w, "doggie> %s", text)
 }
 
 // more prints more of the block being written.
 func (v *replyView) more(text string) {
-	if text == "" {
-		return
-	}
-	if v.p == nil {
+	if text != "" {
 		fmt.Fprint(v.w, text)
-		return
 	}
-	v.p.Print(v.body(text, true))
 }
 
 // wholeBlock prints a block all at once, on its own line.
 func (v *replyView) wholeBlock(text string) {
-	if v.p == nil {
-		fmt.Fprintf(v.w, "doggie> %s\n", text)
-		return
-	}
-	v.p.Print(console.Text{Text: v.name, Role: console.Assistant, Gap: true}, console.Text{Text: "  "}, v.body(text+"\n", false))
-}
-
-// body is a reply's text, wrapped under the end of the name. Paced, so
-// what the brain writes in bursts flows; the end of a line is paced too,
-// or it would show the rest at once.
-func (v *replyView) body(text string, paced bool) console.Text {
-	return console.Text{Text: text, Wrap: true, Indent: console.Width(v.name) + 2, Paced: paced}
-}
-
-// line prints a line of its own, e.g. a note.
-func (v *replyView) line(text string, role console.Role) {
-	if v.p == nil {
-		fmt.Fprintln(v.w, text)
-		return
-	}
-	v.p.Print(console.Text{Text: text + "\n", Role: role, Wrap: true})
+	fmt.Fprintf(v.w, "doggie> %s\n", text)
 }
 
 func (v *replyView) delta(k blockKey, text string) {
@@ -322,11 +277,7 @@ func (v *replyView) forgetOpenBlocks() {
 }
 
 func (v *replyView) close() {
-	if v.p == nil {
-		fmt.Fprintln(v.w)
-	} else {
-		v.p.Print(v.body("\n", true))
-	}
+	fmt.Fprintln(v.w)
 	v.open = nil
 }
 
@@ -344,7 +295,7 @@ func (v *replyView) notice(kind console.NoticeKind, text string) {
 	if v.open != nil {
 		v.close()
 	}
-	v.line(text, noteRole(text))
+	fmt.Fprintln(v.w, text)
 }
 
 // recentIDs is a set of event IDs that forgets the oldest past maxRecent.
@@ -375,12 +326,3 @@ func (r *recentIDs) add(id string) bool {
 }
 
 func (r *recentIDs) has(id string) bool { return r.set[id] }
-
-// noteRole is how a note looks: the chat's own notes, which start with "· ",
-// are muted; what was asked for, like /tasks, is not.
-func noteRole(text string) console.Role {
-	if strings.HasPrefix(text, "· ") {
-		return console.Muted
-	}
-	return console.Normal
-}

@@ -39,7 +39,7 @@ func screenOptions(cfg config.Config) console.ScreenOptions {
 		name = assistantName
 	}
 	return console.ScreenOptions{
-		Name: name, MaxRunes: chatConsole.MaxRunes, Forget: isAnswer,
+		Name: name, MaxRunes: events.MaxUtteranceRunes, Forget: isAnswer,
 		Commands: chatCommands, Texts: words(cfg.Language).screen,
 	}
 }

@@ -3,8 +3,6 @@ package console
 import (
 	"strings"
 	"unicode/utf8"
-
-	"github.com/mattn/go-runewidth"
 )
 
 // printable reports whether r may reach the terminal as is. Control
@@ -43,17 +41,3 @@ func oneLine(text string) string {
 		return r
 	}, strings.ToValidUTF8(text, ""))
 }
-
-// width is how many terminal columns r takes.
-func width(r rune) int { return runewidth.RuneWidth(r) }
-
-func widthOf(rs []rune) int {
-	w := 0
-	for _, r := range rs {
-		w += width(r)
-	}
-	return w
-}
-
-// Width is how many terminal columns s takes.
-func Width(s string) int { return widthOf([]rune(s)) }

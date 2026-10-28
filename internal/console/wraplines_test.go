@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/clipperhouse/uax29/v2/graphemes"
 )
 
 func TestWrapLines(t *testing.T) {
@@ -65,4 +67,17 @@ func FuzzWrapLines(f *testing.F) {
 			t.Fatalf("shows %q, want %q", got, want)
 		}
 	})
+}
+
+// clusters splits s into its grapheme clusters, without what mustn't
+// reach the terminal.
+func clusters(s string) []string {
+	var out []string
+	it := graphemes.FromString(sanitize(s, false))
+	for it.Next() {
+		if c := safeCluster(it.Value()); c != "" && clusterWidth(c) > 0 {
+			out = append(out, c)
+		}
+	}
+	return out
 }

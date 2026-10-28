@@ -102,10 +102,3 @@ func TestFrameGate(t *testing.T) {
 		t.Errorf("two frames %v apart", d)
 	}
 }
-
-// newFullFake is a fake terminal w×h, checked through its raw output.
-func newFullFake(t *testing.T, w, h int) *fakeTerm {
-	f := newFakeTerm(t, w)
-	f.v, f.height = nil, h
-	return f
-}

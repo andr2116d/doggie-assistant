@@ -1,10 +1,6 @@
 package console
 
-import (
-	"strings"
-
-	"github.com/clipperhouse/uax29/v2/graphemes"
-)
+import "strings"
 
 // rect is a part of the screen: w columns by h rows from x, y.
 type rect struct{ x, y, w, h int }
@@ -111,19 +107,6 @@ func bar(g *grid, x, y, w int, done float64, fill, rest styleID) {
 			g.put(x+i, y, "─", 1, rest)
 		}
 	}
-}
-
-// clusters splits s into its grapheme clusters, without what mustn't
-// reach the terminal.
-func clusters(s string) []string {
-	var out []string
-	it := graphemes.FromString(sanitize(s, false))
-	for it.Next() {
-		if c := safeCluster(it.Value()); c != "" && clusterWidth(c) > 0 {
-			out = append(out, c)
-		}
-	}
-	return out
 }
 
 // centered is the column where text w columns wide starts centered in r.

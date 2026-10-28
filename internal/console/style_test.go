@@ -1,10 +1,6 @@
 package console
 
-import (
-	"bytes"
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestDetectProfile(t *testing.T) {
 	for _, c := range []struct {
@@ -50,93 +46,4 @@ func TestTo256(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestLookSequences(t *testing.T) {
-	l := Look{Color: RGB{1, 2, 3}, ANSI: 33, Bold: true}
-	for p, want := range map[Profile]string{
-		NoColor:   "",
-		ANSI16:    "\x1b[1;33m",
-		ANSI256:   "\x1b[1;38;5;16m",
-		TrueColor: "\x1b[1;38;2;1;2;3m",
-	} {
-		if got := l.sgr(p); got != want {
-			t.Errorf("profile %d: %q, want %q", p, got, want)
-		}
-	}
-	if got := (Look{}).sgr(TrueColor); got != "" {
-		t.Errorf("the terminal's own look: %q", got)
-	}
-	if got := (Look{ANSI: 90}).sgr(TrueColor); got != "\x1b[90m" {
-		t.Errorf("only a 16-color fallback: %q", got)
-	}
-	if got := (Look{Color: RGB{9, 9, 9}}).sgr(ANSI16); got != "\x1b[39m" {
-		t.Errorf("no 16-color fallback: %q", got)
-	}
-}
-
-// Each run of a role is drawn with its look, and every row ends in the
-// terminal's own, so nothing leaks into what comes after.
-func TestStyledRows(t *testing.T) {
-	s := &screen{cols: 40}
-	s.style(nil, ANSI16)
-	var b bytes.Buffer
-	s.printText(&b, Text{Text: "DOGGIE", Role: Assistant})
-	s.printText(&b, Text{Text: "  hola "})
-	s.printText(&b, Text{Text: "ok", Role: Good})
-	s.printText(&b, Text{Text: "\n"})
-	want := "\x1b[1;33mDOGGIE\x1b[0m  hola \x1b[32mok\x1b[0m\r\n"
-	if got := b.String(); got != want {
-		t.Fatalf("%q, want %q", got, want)
-	}
-
-	plain := &screen{cols: 40}
-	plain.style(nil, NoColor)
-	b.Reset()
-	plain.printText(&b, Text{Text: "DOGGIE", Role: Assistant})
-	plain.printText(&b, Text{Text: " hola\n", Role: Muted})
-	if got := b.String(); got != "DOGGIE hola\r\n" {
-		t.Errorf("without color: %q", got)
-	}
-}
-
-// The light sweeps across the label, and needs at least 256 colors.
-func TestShimmer(t *testing.T) {
-	label := []rune("thinking")
-	s := &screen{cols: 40}
-	s.style(nil, TrueColor)
-	frames := map[string]bool{}
-	for s.phase = 0; s.phase < len(label)+2*shimmerWidth; s.phase++ {
-		var b bytes.Buffer
-		s.shimmer(&b, label)
-		if got := stripSGR(b.String()); got != "thinking" {
-			t.Fatalf("phase %d shows %q", s.phase, got)
-		}
-		frames[b.String()] = true
-	}
-	if len(frames) < len(label) {
-		t.Errorf("only %d distinct frames", len(frames))
-	}
-	s.style(nil, ANSI16)
-	var b bytes.Buffer
-	s.shimmer(&b, label)
-	if got := b.String(); got != "\x1b[90mthinking\x1b[0m" {
-		t.Errorf("16 colors: %q", got)
-	}
-}
-
-// stripSGR drops style sequences.
-func stripSGR(s string) string {
-	var out strings.Builder
-	for len(s) > 0 {
-		if strings.HasPrefix(s, "\x1b[") {
-			if i := strings.IndexByte(s, 'm'); i >= 0 {
-				s = s[i+1:]
-				continue
-			}
-		}
-		out.WriteByte(s[0])
-		s = s[1:]
-	}
-	return out.String()
 }

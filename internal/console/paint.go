@@ -190,3 +190,10 @@ func (f *frameGate) stop() {
 	}
 	f.c = nil
 }
+
+// Synchronized output: a terminal that knows it shows what comes between
+// these at once; others ignore them.
+const (
+	syncBegin = "\x1b[?2026h"
+	syncEnd   = "\x1b[?2026l"
+)

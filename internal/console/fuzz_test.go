@@ -1,7 +1,6 @@
 package console
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -46,53 +45,4 @@ func FuzzDecoder(f *testing.F) {
 			}
 		}
 	})
-}
-
-// Whatever is typed and printed, the screen matches the model, nothing but
-// the console's own sequences reach the terminal, and no row is too wide.
-func FuzzScreen(f *testing.F) {
-	f.Add([]byte("abc\x1b[D\x7fx\r"), []byte("doggie> hola\nmundo"), uint8(20))
-	f.Add([]byte("\x1b[200~日本\x1b[201~\x01\x0b"), []byte("é\x9b2J\ttab"), uint8(8))
-	f.Fuzz(func(t *testing.T, typed, printed []byte, cols uint8) {
-		g := newRig(t, minCols+int(cols)%60, "you> ")
-		var d decoder
-		// Interleave: a chunk of keys, a chunk of output.
-		for len(typed) > 0 || len(printed) > 0 {
-			n := min(len(typed), 7)
-			for _, k := range d.feed(typed[:n]) {
-				g.key(k)
-			}
-			typed = typed[n:]
-			m := min(len(printed), 11)
-			g.print(string(printed[:m]))
-			if m > 0 && printed[0]%7 == 0 && !g.e.hidden {
-				g.update(func() { g.e.hide(string(printed[:m])) })
-			}
-			if m > 0 && printed[0]%3 == 0 {
-				text := string(printed[:m])
-				g.status = string(statusModel(text, g.s.cols))
-				g.update(func() { g.s.setStatus(text) })
-			}
-			printed = printed[m:]
-		}
-		var b bytes.Buffer
-		g.s.finish(&b)
-		g.v.Write(b.Bytes())
-	})
-}
-
-// statusModel is how a status row should show, cut the simplest way.
-func statusModel(text string, cols int) []rune {
-	rs := []rune(strings.TrimSpace(oneLine(text)))
-	if widthOf(rs) <= cols {
-		return rs
-	}
-	w := 0
-	for i, r := range rs {
-		if w+width(r) > cols-1 {
-			return append(rs[:i:i], '…')
-		}
-		w += width(r)
-	}
-	return rs
 }

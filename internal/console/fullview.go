@@ -778,3 +778,15 @@ func (v *view) selectedText(g *grid) string {
 	})
 	return strings.Join(rows, "\n")
 }
+
+// shownAfter is how long an activity goes before it shows its time.
+const shownAfter = 3 * time.Second
+
+// since says d in whole seconds, and minutes past one: "12s", "2m 05s".
+func since(d time.Duration) string {
+	sec := int(d / time.Second)
+	if sec < 60 {
+		return fmt.Sprintf("%ds", sec)
+	}
+	return fmt.Sprintf("%dm %02ds", sec/60, sec%60)
+}

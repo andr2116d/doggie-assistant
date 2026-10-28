@@ -1,33 +1,6 @@
 package console
 
-import (
-	"fmt"
-	"strings"
-)
-
-// Role is what a piece of text is to the reader. The theme gives each role
-// its look, so callers never pick colors.
-type Role uint8
-
-const (
-	// Normal text has the terminal's own look.
-	Normal Role = iota
-	// Assistant is the assistant's name before what it says.
-	Assistant
-	// User is what the user said.
-	User
-	// Muted are notes about the chat itself.
-	Muted
-	// Good is something that went well, e.g. a finished task.
-	Good
-	// Warn is something that needs the user, e.g. a question.
-	Warn
-	// Bad is something that went wrong.
-	Bad
-	// Accent marks the prompt and the activity indicator.
-	Accent
-	numRoles
-)
+import "strings"
 
 // Profile is how much color a terminal shows.
 type Profile uint8
@@ -66,76 +39,6 @@ func DetectProfile(getenv func(string) string) Profile {
 // RGB is a 24-bit color.
 type RGB struct{ R, G, B uint8 }
 
-// Look is how a role is drawn.
-type Look struct {
-	// Color is the 24-bit color, also the base of the 256-color one. Zero
-	// with ANSI zero means the terminal's own color.
-	Color RGB
-	// ANSI is the foreground in 16 colors: 30-37 or 90-97, 0 for the
-	// terminal's own.
-	ANSI              int
-	Bold, Dim, Italic bool
-}
-
-// Theme is the look of each role.
-type Theme [numRoles]Look
-
-// DefaultTheme reads on dark and light backgrounds alike. DOGGIE's warm
-// orange marks what is its own: its name, the prompt and its activity.
-var DefaultTheme = Theme{
-	Normal:    {},
-	Assistant: {Color: RGB{0xe8, 0x87, 0x3a}, ANSI: 33, Bold: true},
-	User:      {Bold: true},
-	Muted:     {Color: RGB{0x8a, 0x8f, 0x98}, ANSI: 90},
-	Good:      {Color: RGB{0x5f, 0xb8, 0x78}, ANSI: 32},
-	Warn:      {Color: RGB{0xe5, 0xb7, 0x50}, ANSI: 33},
-	Bad:       {Color: RGB{0xe0, 0x6c, 0x75}, ANSI: 31},
-	Accent:    {Color: RGB{0xe8, 0x87, 0x3a}, ANSI: 33},
-}
-
-// colored reports whether l has a color of its own.
-func (l Look) colored() bool { return l.ANSI != 0 || l.Color != (RGB{}) }
-
-// sgr is the sequence that draws l on profile p, starting from the terminal's
-// own look; empty when there is nothing to change.
-func (l Look) sgr(p Profile) string {
-	if p == NoColor {
-		return ""
-	}
-	var codes []string
-	if l.Bold {
-		codes = append(codes, "1")
-	}
-	if l.Dim {
-		codes = append(codes, "2")
-	}
-	if l.Italic {
-		codes = append(codes, "3")
-	}
-	if l.colored() {
-		codes = append(codes, colorCode(l.Color, l.ANSI, p))
-	}
-	if len(codes) == 0 {
-		return ""
-	}
-	return "\x1b[" + strings.Join(codes, ";") + "m"
-}
-
-// colorCode is the foreground parameter for c on profile p, falling back to
-// ansi in 16 colors.
-func colorCode(c RGB, ansi int, p Profile) string {
-	switch {
-	case p == TrueColor && c != (RGB{}):
-		return fmt.Sprintf("38;2;%d;%d;%d", c.R, c.G, c.B)
-	case p == ANSI256 && c != (RGB{}):
-		return fmt.Sprintf("38;5;%d", to256(c))
-	case ansi != 0:
-		return fmt.Sprint(ansi)
-	default:
-		return "39"
-	}
-}
-
 // to256 is the nearest color of the 256-color palette's 6×6×6 cube or its
 // gray ramp.
 func to256(c RGB) int {
@@ -163,12 +66,3 @@ func to256(c RGB) int {
 	}
 	return cube
 }
-
-// blend is the color t of the way from a to b, t in 0-1.
-func blend(a, b RGB, t float64) RGB {
-	mix := func(x, y uint8) uint8 { return uint8(float64(x) + (float64(y)-float64(x))*t + 0.5) }
-	return RGB{mix(a.R, b.R), mix(a.G, b.G), mix(a.B, b.B)}
-}
-
-// reset is the sequence back to the terminal's own look.
-const reset = "\x1b[0m"

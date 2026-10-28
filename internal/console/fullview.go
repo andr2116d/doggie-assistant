@@ -1,7 +1,9 @@
 package console
 
 import (
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -143,7 +145,11 @@ func (s *Screen) Reply(id, text string) {
 
 // Notice shows text under the message id, or on its own if there is none.
 func (s *Screen) Notice(id string, kind NoticeKind, text string) {
-	s.do(func(v *view) { v.convo.noteOn(id, notice{kind, text}) })
+	s.do(func(v *view) {
+		n := notice{kind, strings.TrimSpace(oneLine(text))}
+		v.convo.noteOn(id, notice{kind, text})
+		v.remember(n)
+	})
 }
 
 // SetConnection shows whether the chat is connected, and how, on the top
@@ -195,15 +201,18 @@ func (s *Screen) Close() error {
 
 // view is the state of a Screen, owned by its goroutine.
 type view struct {
-	opts   ScreenOptions
-	fs     *fullScreen
-	lk     looks
-	convo  *conversation
-	ed     *editor
-	online bool
-	status string
-	panel  bool // the user wants the panel
-	pacing bool // a reply may have text to pace in
+	opts      ScreenOptions
+	fs        *fullScreen
+	lk        looks
+	convo     *conversation
+	ed        *editor
+	online    bool
+	status    string
+	panelMode panelMode
+	tasks     []TaskView
+	moreTasks string
+	notices   []notice // the last ones that weren't only information
+	pacing    bool     // a reply may have text to pace in
 	// activity is what the assistant does, since activitySince; taskStatus
 	// replaces the hints while set.
 	activity      string
@@ -342,10 +351,13 @@ func (v *view) key(k key, q *lineQueue) {
 		v.convo.scrollBy(-(1 << 30))
 		return
 	case keyTab:
-		if g := v.ghost(); g != "" {
+		switch g := v.ghost(); {
+		case g != "":
 			v.ed.apply(key{kind: keyPaste, text: g})
-		} else {
-			v.panel = !v.panel
+		case v.showsPanel():
+			v.panelMode = panelOff
+		default:
+			v.panelMode = panelOn
 		}
 		return
 	case keyRight:
@@ -410,7 +422,7 @@ func (v *view) paint(g *grid) (int, int, bool) {
 	t := v.opts.Texts
 	width := g.W - 8 // the box's frame, margins, prompt and padding
 	rows, _, _ := inputRows(v.ed.line, v.ed.pos, max(width, 1))
-	r := layout(g.W, g.H, v.panel, len(rows))
+	r := layout(g.W, g.H, v.showsPanel(), len(rows))
 	c := chrome{
 		name: v.opts.Name, online: v.online, status: v.status, channel: t.Channel,
 		hints: t.Hints, hintsRight: t.HintsRight, tasks: t.Tasks, notices: t.Notices, tooSmall: t.TooSmall,
@@ -424,8 +436,8 @@ func (v *view) paint(g *grid) (int, int, bool) {
 	if t.Clock != nil {
 		c.clock = t.Clock(time.Now())
 	}
-	if v.taskStatus != "" {
-		c.hints = v.taskStatus
+	if v.taskStatus != "" && r.panel.empty() {
+		c.hints = v.taskStatus // where the panel doesn't show the tasks
 	}
 	// An activity shows from the first move of its dots on, so one set
 	// and cleared at once, as between two blocks of a reply, never shows.
@@ -442,6 +454,9 @@ func (v *view) paint(g *grid) (int, int, bool) {
 	}
 	v.body = r.body
 	v.convo.draw(g, r.body, v.lk, t.Newer)
+	if !r.panel.empty() {
+		v.drawPanel(g, r.panel)
+	}
 	x, y := v.drawInput(g, r.input)
 	return x, y, true
 }
@@ -507,3 +522,119 @@ func inputRows(line []rune, pos, width int) (rows [][]rune, crow, ccol int) {
 // times a second is enough to look alive. A variable so tests can change
 // it.
 var activityEvery = 300 * time.Millisecond
+
+// TaskView is a task as the panel shows it.
+type TaskView struct {
+	ID, Title string
+	// Detail tells how it goes, e.g. "5/10 s", or what it waits for.
+	Detail string
+	// Percent is how far it is, 1-100, or 0 to show no bar.
+	Percent int
+	// Waiting is set while it waits for an answer.
+	Waiting bool
+}
+
+// SetTasks shows tasks in the panel, with more below them, e.g. how many
+// run in other conversations. The panel opens by itself when there are
+// some, unless the user closed it.
+func (s *Screen) SetTasks(tasks []TaskView, more string) {
+	tasks = slices.Clone(tasks)
+	s.do(func(v *view) { v.tasks, v.moreTasks = tasks, strings.TrimSpace(oneLine(more)) })
+}
+
+// panelMode is what the user asked of the panel.
+type panelMode uint8
+
+const (
+	panelAuto panelMode = iota // shown while there are tasks
+	panelOn
+	panelOff
+)
+
+// maxPanelNotices bounds the notices the panel keeps.
+const maxPanelNotices = 8
+
+// showsPanel reports whether the panel is wanted now.
+func (v *view) showsPanel() bool {
+	switch v.panelMode {
+	case panelOn:
+		return true
+	case panelOff:
+		return false
+	}
+	return len(v.tasks) > 0 || v.moreTasks != ""
+}
+
+// remember keeps a notice for the panel, unless it is only information.
+func (v *view) remember(n notice) {
+	if n.kind == noteInfo {
+		return
+	}
+	v.notices = append(v.notices, n)
+	if len(v.notices) > maxPanelNotices {
+		v.notices = slices.Delete(v.notices, 0, 1)
+	}
+}
+
+// drawPanel draws the tasks and the last notices in the panel, below its
+// title.
+func (v *view) drawPanel(g *grid, r rect) {
+	lk := v.lk
+	x, right := r.x+2, r.x+r.w-1
+	y, bottom := r.y+3, r.y+r.h
+	room := func(rows int) bool { return y+rows <= bottom }
+	for _, t := range v.tasks {
+		rows := 1
+		if t.Percent > 0 {
+			rows++
+		}
+		if t.Detail != "" {
+			rows++
+		}
+		if !room(rows) {
+			break
+		}
+		mark, st := "●", lk.panelMark
+		if t.Waiting {
+			mark, st = "?", lk.panelWait
+		}
+		at := g.text(x, y, right, mark, st)
+		at = textIn(g, at+1, y, right, t.ID, lk.panelMuted)
+		textIn(g, at+1, y, right, t.Title, lk.panelText)
+		y++
+		if t.Percent > 0 {
+			pct := fmt.Sprintf(" %3d%%", min(t.Percent, 100))
+			w := right - x - len(pct) - 2
+			bar(g, x+2, y, w, float64(t.Percent)/100, lk.bar, lk.barRest)
+			g.text(x+2+w, y, right, pct, lk.panelMuted)
+			y++
+		}
+		if t.Detail != "" {
+			textIn(g, x+2, y, right, t.Detail, lk.panelMuted)
+			y++
+		}
+		y++
+	}
+	if v.moreTasks != "" && room(1) {
+		textIn(g, x, y, right, v.moreTasks, lk.panelMuted)
+		y += 2
+	}
+	if len(v.notices) == 0 || !room(2) {
+		return
+	}
+	textIn(g, x, y, right, v.opts.Texts.Notices, lk.panelTitle)
+	y += 2
+	for i := len(v.notices) - 1; i >= 0 && room(1); i-- {
+		n := v.notices[i]
+		mark, st := "✓", lk.panelGood
+		switch n.kind {
+		case noteWait:
+			mark, st = "?", lk.panelWait
+		case noteBad:
+			mark, st = "✗", lk.panelBad
+		}
+		at := g.text(x, y, right, mark, st)
+		textIn(g, at+1, y, right, n.text, lk.panelText)
+		y++
+	}
+}

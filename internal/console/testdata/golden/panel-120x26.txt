@@ -1,0 +1,26 @@
+ ◆ DOGGIE   ● sin conexión · terminal
+                                                                                          │
+                                                                                          │ TAREAS
+                                                                                          │
+                                                                                          │ ● t1 Recordar estirar
+                                                                                          │   ██████████──────────  50%
+                                                                                          │   5/10 s
+                                                                                          │
+                                                                                          │ ? t2 Pagar la luz
+                                                                                          │   espera tu respuesta · /a…
+                                                                                          │
+                                                                                          │ ● t3 Buscar recetas de len…
+                                                                                          │
+                                                                                          │ +1 en otras conversaciones
+                                                                                          │
+                                                                                          │ AVISOS
+                                                                                          │
+                                                                                          │ ✗ t9 failed: timed out
+                                                                                          │ ✓ t0 finished
+  ✓ t0 finished                                                                           │
+                                                                                          │
+  ✗ t9 failed: timed out                                                                  │
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ›                                                                                                                  │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  /help comandos                                                                                            Tab: panel

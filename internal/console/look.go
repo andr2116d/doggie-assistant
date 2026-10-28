@@ -39,6 +39,8 @@ type looks struct {
 	name, border                  styleID // a bubble of the assistant
 	good, wait, bad, bar, barRest styleID // marks and progress bars
 	pill                          styleID // "new messages below"
+	panelMark, panelWait          styleID // marks on the panel
+	panelGood, panelBad           styleID
 }
 
 func newLooks(t *styleTable, p palette) looks {
@@ -70,5 +72,9 @@ func newLooks(t *styleTable, p palette) looks {
 		bar:         on(p.accent, p.panel, false),
 		barRest:     on(p.line, p.panel, false),
 		pill:        on(p.accent, p.you, true),
+		panelMark:   on(p.accent, p.panel, false),
+		panelWait:   on(p.wait, p.panel, false),
+		panelGood:   on(p.good, p.panel, false),
+		panelBad:    on(p.bad, p.panel, false),
 	}
 }

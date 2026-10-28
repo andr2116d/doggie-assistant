@@ -253,3 +253,42 @@ func TestScreenBriefActivityHidden(t *testing.T) {
 		t.Error("a brief activity showed")
 	}
 }
+
+var sampleTasks = []TaskView{
+	{ID: "t1", Title: "Recordar estirar", Detail: "5/10 s", Percent: 50},
+	{ID: "t2", Title: "Pagar la luz", Detail: "espera tu respuesta · /answer t2", Waiting: true},
+	{ID: "t3", Title: "Buscar recetas de lentejas con un nombre largo"},
+}
+
+// The panel opens by itself with tasks, shows them and the last notices,
+// and Tab closes it; then, as on a narrow screen, the status tells the
+// tasks below the box.
+func TestScreenPanel(t *testing.T) {
+	s, f := openScreen(t, 120, 26, ScreenOptions{})
+	s.Notice("", NoticeGood, "t0 finished")
+	s.Notice("", NoticeBad, "t9 failed: timed out")
+	s.SetTasks(sampleTasks, "+1 en otras conversaciones")
+	s.SetStatus("· t1 Recordar estirar: 5/10 s")
+	rows := f.waitShown(t, "│ TAREAS", "● t1 Recordar estirar", "███", "50%", "? t2 Pagar la luz", "+1 en otras conversaciones", "AVISOS", "✗ t9 failed: timed out", "✓ t0 finished")
+	golden(t, "panel-120x26.txt", strings.Join(rows, "\n")+"\n")
+	if strings.Contains(strings.Join(rows, "\n"), "· t1 Recordar estirar: 5/10 s") {
+		t.Error("the status shows with the panel")
+	}
+	f.typeKeys(t, "\t")
+	f.waitGone(t, "TAREAS")
+	f.waitShown(t, "· t1 Recordar estirar: 5/10 s")
+	f.typeKeys(t, "\t")
+	f.waitShown(t, "TAREAS")
+	s.SetTasks(nil, "")
+	f.waitShown(t, "TAREAS") // opened by the user: it stays
+}
+
+func TestScreenPanelNarrow(t *testing.T) {
+	s, f := openScreen(t, 80, 20, ScreenOptions{})
+	s.SetTasks(sampleTasks, "")
+	s.SetStatus("· t1 Recordar estirar: 5/10 s")
+	f.waitShown(t, "· t1 Recordar estirar: 5/10 s")
+	if strings.Contains(strings.Join(f.shown(t), "\n"), "TAREAS") {
+		t.Error("a panel on a narrow screen")
+	}
+}

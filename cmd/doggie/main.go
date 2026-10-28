@@ -28,7 +28,8 @@ import (
 // it, it comes from the build info, e.g. with go install.
 var version = ""
 
-const usage = `doggie: a self-hosted, Jarvis-style personal assistant.
+const usage = `doggie: a self-hosted personal assistant: an LLM brain that talks and acts
+through tasks, on an event bus.
 
 Usage:
   doggie [flags]          talk with DOGGIE, starting it if needed: same as doggie chat

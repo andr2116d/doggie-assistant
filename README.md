@@ -1,29 +1,66 @@
 # DOGGIE 🐕
 
-A self-hosted, Jarvis-style personal assistant written in Go.
+[![Go](https://img.shields.io/badge/go-1.27-00ADD8?logo=go)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-DOGGIE talks with you, runs many tasks in parallel without blocking the conversation, controls your home and learns how to do new things.
+**A self-hosted personal assistant runtime in Go.** An LLM brain talks with you and acts through asynchronous tasks, on an embedded NATS JetStream event bus, with a full-screen terminal UI of its own.
 
-> **Status:** early. DOGGIE already chats in a terminal, starts tasks while it keeps talking and tells you when they end. Voice, home devices and WhatsApp come next.
+DOGGIE is a personal assistant you run on your own machine. You talk with it, and it keeps talking while it works on what you asked: every action is a task that runs in the background and reports back when it ends, fails or needs you. It is built to grow from the terminal to voice at home, WhatsApp and a web HUD, and to act on the world through tools that declare what they may do.
 
-## Goals
+> **Status:** early. DOGGIE chats in a full-screen terminal, starts tasks while it keeps talking and tells you when they end. Real tools, memory, voice, home devices and WhatsApp come next.
 
-- **Never blocks the conversation.** Every action is an async task. Keep talking while DOGGIE works, and it tells you when it's done.
-- **Interrupts like a human.** Notices are delivered at natural pauses, phrased in context.
-- **Learns.** What it figures out once with an LLM, it replays directly next time.
-- **One assistant, many channels:** voice at home, WhatsApp on the go, a web HUD and a terminal.
-- **Yours.** Self-hosted. Your configuration and data live outside the code.
+## Architecture
+
+```
+  terminal chat        satellites (voice, chat bridges, devices…)
+        │                         │  TLS + per-satellite tokens
+        ▼                         ▼
+ ┌────────────────────────────────────────────────────────────┐
+ │  NATS + JetStream event bus: typed events, commands and    │
+ │  signals, a persistent event log, positions for catch-up   │
+ └────────────────────────────────────────────────────────────┘
+        ▲                ▲                        ▲
+        │                │                        │
+ ┌──────┴───────┐ ┌──────┴────────┐       ┌───────┴────────┐
+ │    brain     │ │ task manager  │◄─────►│    workers     │
+ │ context per  │ │ one writer of │ claim │ (in process or │
+ │ turn, Claude │ │ task events,  │ report│  satellites)   │
+ │ Code CLI,    │ │ shards, time- │       └────────────────┘
+ │ MCP tools    │ │ outs, cancel  │
+ └──────────────┘ └───────────────┘
+```
+
+- **Components never import each other.** They talk only over the bus, in process or from other machines, so any of them can move out to its own process.
+- **The brain is replaceable.** DOGGIE builds the whole context of every turn (persona, tasks, recent turns) and runs the LLM as a disposable process; its tools are served over MCP.
+- **Safety lives in code, not in the prompt.** The LLM has no shell, files or web, only DOGGIE's tools, each with a risk level the server enforces. Each satellite may only speak for its own channels and run its own kinds of tasks.
+
+**Built with:** Go 1.27 · embedded [NATS server](https://github.com/nats-io/nats-server) with JetStream · the [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk) · the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI as the LLM · a terminal renderer of its own (cell diff, synchronized output, grapheme-aware text).
 
 ## What works today
 
-- **Conversation.** The brain runs on the official [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI with your own subscription. DOGGIE builds the whole context of every turn (persona, active tasks, recent turns), so the CLI process is disposable. Two warm processes wait ahead (`brain.warm`), and replies are streamed: the first words arrive in about a second, nearly all of it the model's. DOGGIE speaks as itself: asked about it, it names the model it thinks with, but it never repeats what the CLI adds about your account or machine. When your usage limit runs low or runs out, DOGGIE tells you so in your language, with when it renews.
-- **Tasks that don't block.** Ask for something and DOGGIE starts a task, keeps talking, and tells you when it ends, fails or needs an answer. Tasks report progress, can be cancelled and time out. For now, demo tasks (`demo.sleep`, `demo.ask`) stand in for real devices.
-- **Terminal chat.** Replies stream in above the line you type, which never breaks, with live task status and commands to see, answer and cancel tasks without the LLM.
-- **Locked-down LLM.** The LLM has no shell, files or web. It can only use DOGGIE's tools, and each one declares a risk level that the code enforces, not the prompt.
-- **Event bus.** An embedded NATS server with a persistent event log (7 days by default), TLS from DOGGIE's own CA and token auth. Every component talks only over the bus.
+- **Conversation.** The brain runs on the official Claude Code CLI with your own subscription. Two warm processes wait ahead (`brain.warm`), and replies are streamed: the first words arrive in about a second, nearly all of it the model's. DOGGIE speaks as itself: asked about it, it names the model it thinks with, but never repeats what the CLI adds about your account or machine. When your usage limit runs low or runs out, it tells you so in your language, with when it renews.
+- **Tasks that don't block.** Ask for something and DOGGIE starts a task, keeps talking, and tells you when it ends, fails or needs an answer. Tasks report progress, can be cancelled and time out. For now, demo tasks (`demo.sleep`, `demo.ask`) stand in for real tools.
+- **Full-screen terminal chat.** Bubbles with markdown, replies that flow in as they are written, a panel with the tasks and the latest notices, a menu of commands, scrolling, and copying with the mouse, in your language. It draws only what changed: at rest it uses no CPU.
+- **Event bus.** An embedded NATS server with a persistent event log (7 days by default), TLS from DOGGIE's own CA and token auth.
 - **Restarts lose nothing.** Interrupted tasks are reported as failed, and sentences a restart left unanswered are answered after it.
-- **Satellites.** Other processes or machines (a voice satellite, a chat bridge, a box that controls the lights) connect with their own token. Each may only speak for its own channels and run its own kinds of tasks.
+- **Satellites.** Other processes or machines connect with their own token, each limited to its own channels and kinds of tasks.
 - **Tasks in order.** Workers report to the task manager, which alone publishes task events: they are always in order, and no one can report on a task they don't run.
+
+## Project layout
+
+```
+cmd/doggie/           the binary: run, chat, task, events, say, satellite, login
+internal/bus/         the embedded bus, its typed events and the event catalog
+internal/task/        the task manager and the worker library
+internal/brain/       turns, context building, and the Claude Code provider
+internal/mcp/         the tools the LLM may use, with their risk levels
+internal/console/     the full-screen terminal UI, and plain lines for pipes
+internal/config/      the config file and where data lives
+internal/supervisor/  restarts components that fail, with backoff
+internal/demo/        demo tasks, until real tools come
+internal/heartbeat/   a component that only says it is alive
+prompts/              the system prompt and DOGGIE's own notices
+```
 
 ## Requirements
 

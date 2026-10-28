@@ -185,7 +185,7 @@ func TestDoggieRunTakesOverFromAChat(t *testing.T) {
 	ui := newFakeUI(true)
 	states := make(chan connState, 64)
 	host := newHosting(*client.config, noBrain(t))
-	conn, _, err := startHere(context.Background(), ui, client, states, host)
+	conn, _, err := startHere(context.Background(), ui, client, states, host, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

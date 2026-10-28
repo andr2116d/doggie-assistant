@@ -372,12 +372,12 @@ func TestAnswerCommandTellsWhatItAnswered(t *testing.T) {
 	id := startTask(t, c, events.TaskSpec{Kind: "demo.ask", Input: json.RawMessage(`{"question":"¿Sigo?"}`)})
 	waitStatus(t, c, id, events.StatusWaitingInput)
 	_, cmd := parseLine("/answer " + id + " sí")
-	r := cmd.run(context.Background(), c, "terminal", "terminal")
+	r := cmd.run(context.Background(), c, "terminal", "terminal", nil)
 	if !r.ok || r.answered == nil || r.answered.ID != id || r.answered.Question != "¿Sigo?" {
 		t.Errorf("result = %+v", r)
 	}
 	_, cmd = parseLine("/answer " + id + " otra vez")
-	if r := cmd.run(context.Background(), c, "terminal", "terminal"); r.ok || r.answered != nil {
+	if r := cmd.run(context.Background(), c, "terminal", "terminal", nil); r.ok || r.answered != nil {
 		t.Errorf("a failed answer = %+v", r)
 	}
 }

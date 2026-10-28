@@ -12,6 +12,7 @@ import (
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
+	"github.com/andr2116d/doggie-assistant/internal/console"
 )
 
 // minStatusInterval bounds how often the status line changes, so a task
@@ -26,7 +27,9 @@ const maxBoardTasks = 256
 // the chat loop uses it.
 type taskBoard struct {
 	thread string
-	tasks  map[string]*boardTask
+	// tr puts what the board tells in the user's language.
+	tr    translator
+	tasks map[string]*boardTask
 	// ended are tasks seen ending: a late event or an old list mustn't
 	// bring them back.
 	ended recentIDs
@@ -119,7 +122,7 @@ func (b *taskBoard) tell(info events.TaskInfo) string {
 	if !b.told.add(info.ID + "\x00" + info.Question) {
 		return ""
 	}
-	return onlyYouAnswer(info)
+	return onlyYouAnswer(b.tr, info)
 }
 
 // clear forgets the tasks, e.g. when the connection is lost: what is known
@@ -284,12 +287,12 @@ func (b *taskBoard) apply(t *boardTask, env bus.Envelope) (question string, refr
 
 // onlyYouAnswer tells the user about a question DOGGIE may not answer for
 // them.
-func onlyYouAnswer(info events.TaskInfo) string {
-	s := fmt.Sprintf("· %s asks: %q", info.ID, truncate(oneLineText(info.Question), 200))
+func onlyYouAnswer(tr translator, info events.TaskInfo) string {
+	s := "· " + tr.f("%s asks: %q", info.ID, truncate(oneLineText(info.Question), 200))
 	if len(info.Options) > 0 {
 		s += " [" + truncate(oneLineText(strings.Join(info.Options, " | ")), 100) + "]"
 	}
-	return s + ". Only you may answer it: /answer " + info.ID + " <answer>"
+	return s + tr.f(". Only you may answer it: /answer %s <answer>", info.ID)
 }
 
 // status is the status line: this conversation's tasks, and how many run
@@ -307,13 +310,13 @@ func (b *taskBoard) status() string {
 	slices.SortFunc(mine, func(x, y events.TaskInfo) int { return compareIDs(x.ID, y.ID) })
 	var parts []string
 	for _, info := range mine {
-		parts = append(parts, taskStatus(info))
+		parts = append(parts, taskStatus(b.tr, info))
 	}
 	switch {
 	case others > 0 && len(mine) > 0:
-		parts = append(parts, fmt.Sprintf("+%d elsewhere", others))
+		parts = append(parts, b.tr.f("+%d elsewhere", others))
 	case others > 0:
-		parts = append(parts, fmt.Sprintf("%s in other conversations", tasksCount(others)))
+		parts = append(parts, b.tr.f("%s in other conversations", tasksCount(b.tr, others)))
 	}
 	if len(parts) == 0 {
 		return ""
@@ -322,7 +325,7 @@ func (b *taskBoard) status() string {
 }
 
 // taskStatus is one task on the status line.
-func taskStatus(info events.TaskInfo) string {
+func taskStatus(tr translator, info events.TaskInfo) string {
 	what := info.Description
 	if what == "" {
 		what = info.Kind
@@ -330,7 +333,7 @@ func taskStatus(info events.TaskInfo) string {
 	s := info.ID + " " + truncate(oneLineText(what), 30)
 	switch {
 	case info.Status == events.StatusWaitingInput:
-		return s + ": asks (/answer " + info.ID + " …)"
+		return tr.f("%s: asks (/answer %s …)", s, info.ID)
 	case info.Progress != "":
 		s += ": " + truncate(oneLineText(info.Progress), 30)
 		if info.Percent > 0 && !strings.Contains(info.Progress, "%") {
@@ -358,7 +361,7 @@ func (c *chatState) taskEvent(ctx context.Context, conn *bus.Conn, env bus.Envel
 		c.lookup(ctx, conn, lookup, 0)
 	}
 	if question != "" {
-		c.view.note(question)
+		c.view.notice(console.NoticeWait, question)
 	}
 	c.showStatus()
 	return question != ""

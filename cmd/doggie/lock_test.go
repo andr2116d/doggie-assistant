@@ -14,7 +14,7 @@ func TestStartCoreRefusesASecondDoggie(t *testing.T) {
 	client := localDoggie(t)
 	ui := newFakeUI(false)
 	host := newHosting(*client.config, noBrain(t))
-	conn, _, err := startHere(t.Context(), ui, client, make(chan connState, 1), host)
+	conn, _, err := startHere(t.Context(), ui, client, make(chan connState, 1), host, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

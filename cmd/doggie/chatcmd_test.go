@@ -51,7 +51,7 @@ func TestCommandCheck(t *testing.T) {
 		"/Tasks":        "unknown command /Tasks;",
 	} {
 		_, cmd := parseLine(line)
-		got := cmd.check()
+		got := cmd.check(nil)
 		if (want == "") != (got == "") || !strings.Contains(got, want) {
 			t.Errorf("check(%q) = %q, want %q", line, got, want)
 		}
@@ -236,7 +236,7 @@ func waitNoActiveTasks(t *testing.T, c *bus.Conn) {
 }
 
 func TestTaskTableHasNoTrailingSpaces(t *testing.T) {
-	out := taskTable(events.TaskList{Tasks: []events.TaskInfo{{ID: "t1", TaskSpec: events.TaskSpec{Kind: "demo.sleep"}, Status: events.StatusPending}}, Total: 1}, true, "terminal", time.Now())
+	out := taskTable(events.TaskList{Tasks: []events.TaskInfo{{ID: "t1", TaskSpec: events.TaskSpec{Kind: "demo.sleep"}, Status: events.StatusPending}}, Total: 1}, true, "terminal", time.Now(), nil)
 	for _, line := range strings.Split(out, "\n") {
 		if strings.TrimRight(line, " ") != line {
 			t.Errorf("trailing spaces in %q", line)

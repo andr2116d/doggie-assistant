@@ -187,18 +187,18 @@ func TestFailureNotes(t *testing.T) {
 		{events.BrainTurnData{Error: "claudecode: Please run /login", Failure: events.FailureOther}, "claudecode: Please run /login"},
 		{events.BrainTurnData{Error: "logged before failures had kinds"}, "logged before failures had kinds"},
 	} {
-		if got := failure(tc.turn); got != tc.want {
-			t.Errorf("failure(%+v) = %q, want %q", tc.turn, got, tc.want)
+		if got := failure(nil, tc.turn); got != tc.want {
+			t.Errorf("failure(nil, %+v) = %q, want %q", tc.turn, got, tc.want)
 		}
 	}
 }
 
 // A sensitive task's question isn't in the log, and the history says so.
 func TestHistoryHidesSensitiveQuestions(t *testing.T) {
-	if got := taskNotice(&events.TurnTask{Type: events.TaskNeedsInput.Type(), TaskID: "t2", Sensitive: true}); got != "t2 asked a sensitive question" {
+	if got := taskNotice(nil, &events.TurnTask{Type: events.TaskNeedsInput.Type(), TaskID: "t2", Sensitive: true}); got != "t2 asked a sensitive question" {
 		t.Errorf("notice = %q", got)
 	}
-	if got := taskNotice(&events.TurnTask{Type: events.TaskNeedsInput.Type(), TaskID: "t3", Question: "¿Cuál?"}); got != "t3 asked: ¿Cuál?" {
+	if got := taskNotice(nil, &events.TurnTask{Type: events.TaskNeedsInput.Type(), TaskID: "t3", Question: "¿Cuál?"}); got != "t3 asked: ¿Cuál?" {
 		t.Errorf("notice = %q", got)
 	}
 }

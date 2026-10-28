@@ -100,7 +100,7 @@ func TestChatOnAScreen(t *testing.T) {
 	bus.Publish(context.Background(), brain, events.UserUtterance.With("terminal"), events.UtteranceData{ThreadID: "terminal", Channel: "terminal", Text: "desde otra ventana"})
 	ui.waitCalls(t, "elsewhere tú, en otra ventana: desde otra ventana")
 	ui.lines <- "/nope"
-	ui.waitCalls(t, `notice  0 unknown command /nope; /help lists them, and //text says text starting with "/"`)
+	ui.waitCalls(t, `notice  3 comando desconocido /nope; /help los muestra, y //texto dice un texto que empieza con "/"`)
 }
 
 func TestChatHistoryOnAScreen(t *testing.T) {
@@ -211,4 +211,47 @@ func TestBoardDoingFor(t *testing.T) {
 	if got := b.doingFor(map[string]time.Time{"s9": time.Now()}); got != "" {
 		t.Errorf("another sentence: %q", got)
 	}
+}
+
+// Every Spanish text takes the same arguments, in the same order, as the
+// English one it translates.
+func TestSpanishVerbs(t *testing.T) {
+	verbs := func(s string) []string {
+		var vs []string
+		for i := 0; i < len(s)-1; i++ {
+			if s[i] == '%' {
+				vs = append(vs, s[i:i+2])
+				i++
+			}
+		}
+		return vs
+	}
+	for en, es := range spanish {
+		if !slices.Equal(verbs(en), verbs(es)) {
+			t.Errorf("%q takes %v, its translation %q %v", en, verbs(en), es, verbs(es))
+		}
+	}
+	if got := spanish.f("%d tasks", 3); got != "3 tareas" {
+		t.Errorf("%q", got)
+	}
+	if got := translator(nil).f("100%% done"); got != "100%% done" {
+		t.Errorf("a text without arguments is kept as is: %q", got)
+	}
+}
+
+// The chat's notes on a Spanish screen are in Spanish, with their kind.
+func TestChatSaysInSpanish(t *testing.T) {
+	client := sayEnv(t, nil)
+	ui := newFakeScreen()
+	o := testChatOptions()
+	o.words = words("es")
+	states := make(chan connState, 4)
+	runChat(t, client, ui, states, o)
+	ui.waitCalls(t, "online true ")
+	states <- connState{kind: connDown}
+	ui.waitCalls(t, "notice  2 se perdió la conexión con DOGGIE; reconectando…")
+	states <- connState{kind: connUp}
+	ui.waitCalls(t, "notice  1 conectado otra vez")
+	ui.lines <- "/tasks"
+	ui.waitCalls(t, "notice  3 no pude listar las tareas: el gestor de tareas de DOGGIE no está corriendo")
 }

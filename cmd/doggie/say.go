@@ -137,7 +137,7 @@ func say(ctx context.Context, conn *bus.Conn, w io.Writer, text string, o sayOpt
 			if ev.Data.ThreadID != o.thread {
 				continue
 			}
-			if why := failure(ev.Data); why != "" {
+			if why := failure(nil, ev.Data); why != "" {
 				fmt.Fprintf(w, "doggie: the turn failed: %s\n", why)
 			}
 			if slices.ContainsFunc(ev.Data.Inputs, func(in events.TurnInput) bool { return in.EventID == meta.ID }) {
@@ -332,8 +332,13 @@ func (v *replyView) close() {
 
 // note prints a line of its own, e.g. a status, after any open block.
 func (v *replyView) note(text string) {
+	v.notice(console.NoticeInfo, text)
+}
+
+// notice is note for a notice of kind, which a screen marks and colors.
+func (v *replyView) notice(kind console.NoticeKind, text string) {
 	if v.screen != nil {
-		v.screen.Notice("", console.NoticeInfo, strings.TrimPrefix(text, "· "))
+		v.screen.Notice("", kind, strings.TrimPrefix(text, "· "))
 		return
 	}
 	if v.open != nil {

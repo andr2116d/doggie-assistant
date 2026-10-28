@@ -55,6 +55,8 @@ type chatWords struct {
 	// in other conversations.
 	waiting string
 	others  func(n int) string
+	// tr puts the chat's other texts in the language.
+	tr translator
 }
 
 // words are the chat's words in lang (BCP 47), English when it has none in
@@ -75,7 +77,7 @@ func words(lang string) chatWords {
 				Clock: spanishClock,
 			},
 			thinking: "pensando", reconnecting: "reconectando…", elsewhere: "tú, en otra ventana",
-			waiting: "espera tu respuesta",
+			waiting: "espera tu respuesta", tr: spanish,
 			others: func(n int) string {
 				if n == 1 {
 					return "+1 en otra conversación"
@@ -169,7 +171,7 @@ func (c *chatState) turnOnScreen(id string, t events.BrainTurnData) {
 	for _, in := range t.Inputs {
 		switch {
 		case in.Task != nil:
-			s.Notice("", console.NoticeInfo, taskNotice(in.Task))
+			s.Notice("", console.NoticeInfo, taskNotice(c.wordsOr().tr, in.Task))
 		case in.Said != "" && (in.Channel == "" || in.Channel == c.o.channel):
 			s.Said(in.Said)
 		case in.Said != "":
@@ -181,8 +183,8 @@ func (c *chatState) turnOnScreen(id string, t events.BrainTurnData) {
 			s.Reply(fmt.Sprintf("%s#%d", id, i), r)
 		}
 	}
-	if why := failure(t); why != "" {
-		s.Notice("", console.NoticeBad, "the turn failed: "+why)
+	if why := failure(c.wordsOr().tr, t); why != "" {
+		s.Notice("", console.NoticeBad, c.wordsOr().tr.f("the turn failed: %s", why))
 	}
 }
 
@@ -220,4 +222,9 @@ func (b *taskBoard) views(w chatWords) ([]console.TaskView, string) {
 		more = w.others(others)
 	}
 	return views, more
+}
+
+// say shows one of the chat's own notes, in the user's language.
+func (c *chatState) say(kind console.NoticeKind, format string, args ...any) {
+	c.view.notice(kind, "· "+c.wordsOr().tr.f(format, args...))
 }

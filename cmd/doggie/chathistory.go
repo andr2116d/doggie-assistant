@@ -9,6 +9,7 @@ import (
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
+	"github.com/andr2116d/doggie-assistant/internal/console"
 )
 
 // defaultHistory is how many turns of its conversation a chat shows when it
@@ -29,7 +30,7 @@ func (c *chatState) showHistory(ctx context.Context, conn *bus.Conn) {
 		turns, err = c.historyFromLog(ctx, conn)
 	}
 	if err != nil {
-		c.view.note("· could not read the conversation so far: " + err.Error())
+		c.say(console.NoticeBad, "could not read the conversation so far: %v", err)
 		return
 	}
 	type shown struct {
@@ -55,7 +56,7 @@ func (c *chatState) showHistory(ctx context.Context, conn *bus.Conn) {
 		c.historyOnScreen(turns, len(show))
 		return
 	}
-	c.view.note(fmt.Sprintf("· earlier in this conversation, from %s ago:", ago(time.Since(show[0].at))))
+	c.say(console.NoticeInfo, "earlier in this conversation, from %s ago:", ago(time.Since(show[0].at)))
 	// Not marked as seen: a catch-up reads the log from the last event seen,
 	// and skips what came before the chat opened anyway.
 	for _, t := range show {
@@ -126,7 +127,7 @@ func (c *chatState) turnLines(t events.BrainTurnData) []string {
 	for _, in := range t.Inputs {
 		switch {
 		case in.Task != nil:
-			lines = append(lines, "· "+taskNotice(in.Task))
+			lines = append(lines, "· "+taskNotice(c.wordsOr().tr, in.Task))
 		case in.Said != "":
 			who := "you"
 			if in.Channel != "" && in.Channel != c.o.channel {
@@ -140,32 +141,32 @@ func (c *chatState) turnLines(t events.BrainTurnData) []string {
 			lines = append(lines, "doggie> "+r)
 		}
 	}
-	if why := failure(t); why != "" {
-		lines = append(lines, "· the turn failed: "+why)
+	if why := failure(c.wordsOr().tr, t); why != "" {
+		lines = append(lines, "· "+c.wordsOr().tr.f("the turn failed: %s", why))
 	}
 	return lines
 }
 
 // taskNotice is a task event a turn answered, in a few words.
-func taskNotice(t *events.TurnTask) string {
+func taskNotice(tr translator, t *events.TurnTask) string {
 	what := t.TaskID
 	if t.Description != "" {
 		what += " (" + truncate(oneLineText(t.Description), 50) + ")"
 	}
 	switch t.Type {
 	case events.TaskDone.Type():
-		return what + " finished"
+		return tr.f("%s finished", what)
 	case events.TaskFailed.Type():
-		return what + " failed: " + truncate(oneLineText(t.Reason), 80)
+		return tr.f("%s failed: %s", what, truncate(oneLineText(t.Reason), 80))
 	case events.TaskCancelled.Type():
-		return what + " was cancelled"
+		return tr.f("%s was cancelled", what)
 	case events.TaskNeedsInput.Type():
 		if t.Question == "" {
-			return what + " asked a sensitive question"
+			return tr.f("%s asked a sensitive question", what)
 		}
-		return what + " asked: " + truncate(oneLineText(t.Question), 80)
+		return tr.f("%s asked: %s", what, truncate(oneLineText(t.Question), 80))
 	}
-	return what + " changed"
+	return tr.f("%s changed", what)
 }
 
 // ago is a rough age, e.g. "5m" or "3d".
@@ -178,16 +179,16 @@ func ago(d time.Duration) string {
 
 // failure tells why a turn failed, or "" if it didn't or DOGGIE said why
 // itself.
-func failure(t events.BrainTurnData) string {
+func failure(tr translator, t events.BrainTurnData) string {
 	switch {
 	case t.Error == "" || t.Failure == events.FailureUsageLimit:
 		return ""
 	case t.Failure == events.FailureTimeout:
-		return "it took too long"
+		return tr.f("it took too long")
 	case t.Failure == events.FailureNoTools:
-		return "DOGGIE's tools didn't answer"
+		return tr.f("DOGGIE's tools didn't answer")
 	case t.Failure == events.FailureNotLoggedIn:
-		return `its LLM isn't logged in; log in with claude, or run "doggie login" for the backup`
+		return tr.f(`its LLM isn't logged in; log in with claude, or run "doggie login" for the backup`)
 	}
 	return t.Error
 }

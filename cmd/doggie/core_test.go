@@ -56,7 +56,7 @@ func TestStartHereRunsDoggieUntilStopped(t *testing.T) {
 		t.Fatalf("dial before starting: %v", err)
 	}
 	host := newHosting(*client.config, noBrain(t))
-	conn, _, err := startHere(context.Background(), ui, client, states, host)
+	conn, _, err := startHere(context.Background(), ui, client, states, host, nil)
 	own := host.own
 	if err != nil || own == nil {
 		t.Fatalf("startHere: %v, own %v", err, own)
@@ -98,7 +98,7 @@ func TestStartHereRace(t *testing.T) {
 	for range 2 {
 		wg.Go(func() {
 			host := newHosting(*client.config, selected)
-			conn, _, err := startHere(context.Background(), newFakeUI(false), client, make(chan connState, 10), host)
+			conn, _, err := startHere(context.Background(), newFakeUI(false), client, make(chan connState, 10), host, nil)
 			results <- res{host, conn, err}
 		})
 	}

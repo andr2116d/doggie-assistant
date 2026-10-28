@@ -97,8 +97,15 @@ func chatCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer ui.Close()
 	o.words = words(cfg.Language)
+	// The full screen leaves nothing behind but this, after it closes.
+	leaving := "DOGGIE keeps running; doggie opens the chat again"
+	defer func() {
+		ui.Close()
+		if ui.IsInteractive() {
+			fmt.Println("· " + o.words.tr.f(leaving))
+		}
+	}()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -107,8 +114,11 @@ func chatCmd(args []string) error {
 	if *client.server == "" {
 		o.host = newHosting(*client.config, factories())
 		defer func() {
-			if o.host.own != nil && ui.IsInteractive() {
-				notice(ui, "· stopping DOGGIE...")
+			if o.host.own != nil {
+				leaving = "DOGGIE stopped"
+				if ui.IsInteractive() {
+					notice(ui, "· "+o.words.tr.f("stopping DOGGIE..."))
+				}
 			}
 			o.host.close()
 		}()
@@ -116,14 +126,14 @@ func chatCmd(args []string) error {
 	conn, url, err := dialChat(client, ui, states)
 	// DOGGIE isn't running on this machine, or never ran: start it here.
 	if (errors.Is(err, bus.ErrNoServer) || errors.Is(err, errNoToken)) && o.host != nil {
-		conn, url, err = startHere(ctx, ui, client, states, o.host)
+		conn, url, err = startHere(ctx, ui, client, states, o.host, o.words.tr)
 	}
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 	if ui.IsInteractive() {
-		notice(ui, fmt.Sprintf("· talking with DOGGIE at %s on %s; /help lists the commands, Ctrl+D quits", url, o.channel))
+		notice(ui, "· "+o.words.tr.f("talking with DOGGIE at %s on %s; /help lists the commands, Ctrl+D quits", url, o.channel))
 	}
 	return chat(ctx, conn, ui, states, o)
 }
@@ -176,7 +186,7 @@ func dialChat(client clientFlags, ui chatUI, states chan<- connState) (*bus.Conn
 
 // startHere starts DOGGIE in this process and connects the chat to it. If
 // another process started DOGGIE at the same time, it connects to that one.
-func startHere(ctx context.Context, ui chatUI, client clientFlags, states chan<- connState, host *hosting) (*bus.Conn, string, error) {
+func startHere(ctx context.Context, ui chatUI, client clientFlags, states chan<- connState, host *hosting, tr translator) (*bus.Conn, string, error) {
 	if startErr := host.start(ctx); startErr != nil {
 		// Lost a race with another start: use that DOGGIE once it listens.
 		deadline := time.Now().Add(5 * time.Second)
@@ -201,14 +211,14 @@ func startHere(ctx context.Context, ui chatUI, client clientFlags, states chan<-
 	if !ui.IsInteractive() {
 		w = os.Stderr
 	}
-	notice(w, fmt.Sprintf("· DOGGIE wasn't running: started it here, logging to %s; it stops when you quit", host.logPath))
+	notice(w, "· "+tr.f("DOGGIE wasn't running: started it here, logging to %s; it stops when you quit", host.logPath))
 	return conn, url, nil
 }
 
 // stopHere stops the DOGGIE doggie run started, on purpose.
-func stopHere(ui chatUI, own *core) {
+func stopHere(ui chatUI, own *core, tr translator) {
 	if ui.IsInteractive() {
-		notice(ui, "· stopping DOGGIE...")
+		notice(ui, "· "+tr.f("stopping DOGGIE..."))
 	}
 	stopCore(own, events.StopOnPurpose)
 }
@@ -220,7 +230,10 @@ func runWithChat(ctx context.Context, cfg config.Config, selected []factory, cli
 	if err != nil {
 		return err
 	}
-	defer ui.Close()
+	defer func() {
+		ui.Close()
+		fmt.Println("· " + words(cfg.Language).tr.f("DOGGIE stopped"))
+	}()
 	logFile, logPath, err := openLog(cfg)
 	if err != nil {
 		return err
@@ -234,7 +247,8 @@ func runWithChat(ctx context.Context, cfg config.Config, selected []factory, cli
 	if err != nil {
 		return err
 	}
-	defer stopHere(ui, own)
+	tr := words(cfg.Language).tr
+	defer stopHere(ui, own, tr)
 
 	states := make(chan connState, 64)
 	var conn *bus.Conn
@@ -249,9 +263,9 @@ func runWithChat(ctx context.Context, cfg config.Config, selected []factory, cli
 	}
 	defer conn.Close()
 	if cfg.UsingDefaults {
-		notice(ui, fmt.Sprintf("· no config file at %s, using defaults", cfg.File))
+		notice(ui, "· "+tr.f("no config file at %s, using defaults", cfg.File))
 	}
-	notice(ui, fmt.Sprintf("· DOGGIE is running, logging to %s; /help lists the commands, Ctrl+D stops it", logPath))
+	notice(ui, "· "+tr.f("DOGGIE is running, logging to %s; /help lists the commands, Ctrl+D stops it", logPath))
 	o := defaultChatOptions()
 	o.words = words(cfg.Language)
 	return chatSession(ctx, conn, ui, states, own, o)
@@ -434,7 +448,8 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 	inFlight, running, failed := 0, 0, false
 	commands := make(chan *command, 64)
 	commandsDone := make(chan commandResult, 64)
-	go commander(sctx, conn, o.thread, o.channel, commands, commandsDone)
+	c.board.tr = c.wordsOr().tr
+	go commander(sctx, conn, o.thread, o.channel, c.wordsOr().tr, commands, commandsDone)
 	if ui.IsInteractive() && o.history > 0 {
 		qctx, cancel := context.WithTimeout(sctx, 3*time.Second)
 		c.openSeq, _ = bus.LastSeq(qctx, conn)
@@ -465,15 +480,15 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 			sentence, cmd := parseLine(line)
 			switch {
 			case cmd != nil && cmd.name == "/answer" && cmd.id != "" && cmd.text == "" && ui.IsInteractive():
-				c.hidden, c.hiddenFor = ui.AskHidden(fmt.Sprintf("answer for %s (hidden): ", short(cmd.id))), cmd.id
+				c.hidden, c.hiddenFor = ui.AskHidden(c.wordsOr().tr.f("answer for %s (hidden): ", short(cmd.id))), cmd.id
 			case cmd == nil:
 				inFlight++
 				toSend <- sentence
-			case cmd.check() != "":
-				c.view.note(cmd.check())
+			case cmd.check(nil) != "":
+				c.view.notice(console.NoticeBad, cmd.check(c.wordsOr().tr))
 				failed = true
 			case cmd.name == "/help":
-				c.view.note(chatHelp)
+				c.view.note(c.wordsOr().tr.f(chatHelp))
 			default:
 				running++
 				commands <- cmd
@@ -484,7 +499,7 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 			switch {
 			case !ok:
 			case strings.TrimSpace(text) == "":
-				c.view.note("· not answered")
+				c.say(console.NoticeInfo, "not answered")
 			case c.accept(text):
 				running++
 				commands <- &command{name: "/answer", id: id, text: strings.TrimSpace(text)}
@@ -492,7 +507,14 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 		case r := <-commandsDone:
 			running--
 			failed = failed || !r.ok
-			c.view.note(r.out)
+			kind := console.NoticeBad
+			switch {
+			case r.did:
+				kind = console.NoticeGood
+			case r.ok:
+				kind = console.NoticeInfo
+			}
+			c.view.notice(kind, r.out)
 			if r.answered != nil {
 				c.board.answered(*r.answered)
 				c.showStatus()
@@ -502,7 +524,7 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 			inFlight--
 			if r.err != nil {
 				failed = true
-				c.view.note(fmt.Sprintf("· could not send %q: %v", short(r.text), r.err))
+				c.say(console.NoticeBad, "could not send %q: %v", short(r.text), r.err)
 				continue
 			}
 			if c.early.has(r.id) {
@@ -551,14 +573,14 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 			}
 		case l := <-c.lists:
 			for _, q := range c.board.merge(l) {
-				c.view.note(q)
+				c.view.notice(console.NoticeWait, q)
 				idleSince = time.Now()
 			}
 			c.showStatus()
 		case l := <-c.lookups:
 			questions, again := c.board.looked(l)
 			for _, q := range questions {
-				c.view.note(q)
+				c.view.notice(console.NoticeWait, q)
 				idleSince = time.Now()
 			}
 			if again != "" {
@@ -579,10 +601,10 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 		case <-c.handoverRequests():
 			c.handOver()
 		case <-c.handedOver:
-			c.view.note("· handed DOGGIE over")
+			c.say(console.NoticeInfo, "handed DOGGIE over")
 		case <-c.host.done():
 			own := c.host.release()
-			c.view.note(fmt.Sprintf("· the DOGGIE run here stopped: %v", own.err))
+			c.say(console.NoticeBad, "the DOGGIE run here stopped: %v", own.err)
 			if own.logFile != nil {
 				own.logFile.Close()
 			}
@@ -613,10 +635,10 @@ func (c *chatState) accept(line string) bool {
 	case line == "":
 		return false
 	case !utf8.ValidString(line):
-		c.view.note("· not sent: the text is not valid UTF-8")
+		c.say(console.NoticeBad, "not sent: the text is not valid UTF-8")
 		return false
 	case utf8.RuneCountInString(line) > events.MaxUtteranceRunes:
-		c.view.note(fmt.Sprintf("· not sent: %d characters, the limit is %d", utf8.RuneCountInString(line), events.MaxUtteranceRunes))
+		c.say(console.NoticeBad, "not sent: %d characters, the limit is %d", utf8.RuneCountInString(line), events.MaxUtteranceRunes)
 		return false
 	}
 	return true
@@ -675,11 +697,11 @@ func (c *chatState) stopping(reason string) {
 	c.stopReason = reason
 	switch reason {
 	case events.StopOnPurpose:
-		c.view.note("· DOGGIE was stopped; it's back when someone starts it (doggie run or doggie chat)")
+		c.say(console.NoticeWait, "DOGGIE was stopped; it's back when someone starts it (doggie run or doggie chat)")
 	case events.StopHandover:
-		c.view.note("· DOGGIE is moving to another process...")
+		c.say(console.NoticeInfo, "DOGGIE is moving to another process...")
 	case events.StopHostClosed:
-		c.view.note("· the chat that ran DOGGIE closed")
+		c.say(console.NoticeWait, "the chat that ran DOGGIE closed")
 	}
 }
 
@@ -705,11 +727,11 @@ func (c *chatState) takeOver(ctx context.Context) {
 	err := c.host.start(ctx)
 	switch {
 	case err == nil:
-		c.view.note(fmt.Sprintf("· DOGGIE was gone: started it here, logging to %s; it stops when you quit", c.host.logPath))
+		c.say(console.NoticeInfo, "DOGGIE was gone: started it here, logging to %s; it stops when you quit", c.host.logPath)
 	case errors.Is(err, errRunning):
 		// Another chat or doggie run took it: the connection comes back.
 	default:
-		c.view.note("· could not start DOGGIE here: " + err.Error())
+		c.say(console.NoticeBad, "could not start DOGGIE here: %v", err)
 		c.takeover = time.After(10 * time.Second)
 	}
 }
@@ -727,7 +749,7 @@ func (c *chatState) handoverRequests() <-chan struct{} {
 // the chat meanwhile. The chat stays, and reconnects to the new DOGGIE.
 func (c *chatState) handOver() {
 	own := c.host.release()
-	c.view.note("· doggie run is taking DOGGIE over; handing it over...")
+	c.say(console.NoticeInfo, "doggie run is taking DOGGIE over; handing it over...")
 	go func() {
 		stopCore(own, events.StopHandover)
 		c.handedOver <- struct{}{}
@@ -782,8 +804,8 @@ func (c *chatState) turn(ev bus.Event[events.BrainTurnData]) bool {
 		}
 	}
 	c.warned = false
-	if why := failure(ev.Data); why != "" {
-		c.view.note("· the turn failed: " + why)
+	if why := failure(c.wordsOr().tr, ev.Data); why != "" {
+		c.say(console.NoticeBad, "the turn failed: %s", why)
 	}
 	return true
 }
@@ -802,7 +824,7 @@ func (c *chatState) connection(ctx context.Context, conn *bus.Conn, s connState)
 				c.stopping(c.host.lastStop())
 			}
 			if c.stopReason == "" {
-				c.view.note("· lost the connection to DOGGIE; reconnecting...")
+				c.say(console.NoticeWait, "lost the connection to DOGGIE; reconnecting...")
 			}
 			c.online(false)
 			if c.host != nil && c.host.own == nil {
@@ -811,7 +833,7 @@ func (c *chatState) connection(ctx context.Context, conn *bus.Conn, s connState)
 		}
 	case connUp:
 		c.down, c.stopReason, c.takeover = false, "", nil
-		c.view.note("· connected again")
+		c.say(console.NoticeGood, "connected again")
 		c.online(true)
 		c.catchUp(ctx, conn)
 		listActive(ctx, conn, c.lists)
@@ -820,7 +842,7 @@ func (c *chatState) connection(ctx context.Context, conn *bus.Conn, s connState)
 		if s.err != nil {
 			reason = s.err.Error()
 		}
-		c.view.note("· DOGGIE ended the connection: " + reason)
+		c.say(console.NoticeBad, "DOGGIE ended the connection: %s", reason)
 		return fmt.Errorf("%w: connection ended: %s", errShown, reason)
 	}
 	return nil
@@ -845,7 +867,7 @@ func (c *chatState) catchUp(ctx context.Context, conn *bus.Conn) {
 	for _, typ := range []string{events.OutSpeak.Type(), events.BrainTurn.Type(), events.UserUtterance.Type() + ".*"} {
 		envs, err := bus.History(hctx, conn, since, typ)
 		if err != nil {
-			c.view.note("· could not read what was said meanwhile: " + err.Error())
+			c.say(console.NoticeBad, "could not read what was said meanwhile: %v", err)
 			return
 		}
 		missed = append(missed, envs...)
@@ -877,7 +899,7 @@ func (c *chatState) checkSlow(now time.Time) {
 		return
 	}
 	c.warned = true
-	c.view.note("· no reply yet: is DOGGIE's brain running?")
+	c.say(console.NoticeWait, "no reply yet: is DOGGIE's brain running?")
 }
 
 func (c *chatState) oldest() time.Time {

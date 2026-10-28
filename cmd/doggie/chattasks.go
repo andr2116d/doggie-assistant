@@ -417,3 +417,21 @@ func (b *taskBoard) answered(asked events.TaskInfo) {
 	t.info.Status, t.info.Question, t.info.Options = events.StatusRunning, "", nil
 	t.seen = time.Now()
 }
+
+// doingFor is what the newest task running for one of the sentences tells
+// it does, or "" if none runs.
+func (b *taskBoard) doingFor(sentences map[string]time.Time) string {
+	var newest *events.TaskInfo
+	for _, t := range b.tasks {
+		if t.info.Status != events.StatusRunning || !slices.ContainsFunc(t.info.CausedBy, func(id string) bool { _, ok := sentences[id]; return ok }) {
+			continue
+		}
+		if newest == nil || compareIDs(t.info.ID, newest.ID) > 0 {
+			newest = &t.info
+		}
+	}
+	if newest == nil {
+		return ""
+	}
+	return oneLineText(cmp.Or(newest.Description, newest.Kind))
+}

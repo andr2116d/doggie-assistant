@@ -907,11 +907,15 @@ func ended(ctx context.Context) error {
 	return errors.New("the connection to DOGGIE closed")
 }
 
-// activityNow is what DOGGIE is doing for this chat, if anything: thinking
-// while something said here waits for its answer and no reply is being
-// written, as when it uses a tool between two blocks.
+// activityNow is what DOGGIE is doing for this chat, if anything, while
+// something said here waits for its answer and no reply is being written,
+// as when it uses a tool between two blocks: the task it started for what
+// was said, or else thinking.
 func (c *chatState) activityNow(inFlight int) string {
 	if (inFlight > 0 || len(c.unanswered) > 0) && c.view.open == nil && !c.down {
+		if what := c.board.doingFor(c.unanswered); what != "" {
+			return what
+		}
 		return c.wordsOr().thinking
 	}
 	return ""

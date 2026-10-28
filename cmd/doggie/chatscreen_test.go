@@ -189,3 +189,26 @@ func TestChatTasksOnAScreen(t *testing.T) {
 	bus.Publish(ctx, client, events.TaskDone, events.TaskDoneData{TaskID: "t1"})
 	ui.waitCalls(t, "tasks t1|Recordar estirar|5/10 s|50|false ", "tasks  ")
 }
+
+func TestBoardDoingFor(t *testing.T) {
+	b := newTaskBoard("terminal")
+	start := func(id, desc string, causes ...string) {
+		b.event(env(events.TaskCreated, events.TaskInfo{ID: id, TaskSpec: events.TaskSpec{Kind: "demo.sleep", ThreadID: "terminal", Description: desc, CausedBy: causes}, Status: events.StatusPending}))
+	}
+	start("t1", "Esperar un rato", "s1")
+	sentences := map[string]time.Time{"s1": time.Now()}
+	if got := b.doingFor(sentences); got != "" {
+		t.Errorf("a pending task: %q", got)
+	}
+	b.event(env(events.TaskRunning, events.TaskRunningData{TaskID: "t1"}))
+	start("t2", "", "s1")
+	b.event(env(events.TaskRunning, events.TaskRunningData{TaskID: "t2"}))
+	start("t3", "De otra frase", "s2")
+	b.event(env(events.TaskRunning, events.TaskRunningData{TaskID: "t3"}))
+	if got := b.doingFor(sentences); got != "demo.sleep" {
+		t.Errorf("the newest task: %q", got)
+	}
+	if got := b.doingFor(map[string]time.Time{"s9": time.Now()}); got != "" {
+		t.Errorf("another sentence: %q", got)
+	}
+}

@@ -35,8 +35,9 @@ type ScreenOptions struct {
 	MaxRunes int
 	// Forget reports the submitted lines not to keep for Up and Down.
 	Forget func(line string) bool
-	// Commands are completed as they are typed, e.g. "/tasks".
-	Commands []string
+	// Commands show in a menu above the box as one is typed, and complete
+	// it.
+	Commands []Command
 	Texts    ScreenTexts
 	// Colors is how much color to use. OpenScreen sets it from the
 	// environment.
@@ -228,6 +229,10 @@ type view struct {
 	// copied, which the hints tell for a while.
 	sel      selection
 	copiedAt time.Time
+	// menuSel is the command chosen in the menu, for what was typed when
+	// it was chosen, menuLine.
+	menuSel  int
+	menuLine string
 	// paints counts the frames made, drawn or not; quiet is set by an op
 	// that changes nothing on screen, so it asks for none.
 	paints int
@@ -382,9 +387,9 @@ func (v *view) key(k key, q *lineQueue) {
 		v.convo.scrollBy(-(1 << 30))
 		return
 	case keyTab:
-		switch g := v.ghost(); {
-		case g != "":
-			v.ed.apply(key{kind: keyPaste, text: g})
+		switch c, ok := v.chosen(); {
+		case ok:
+			v.complete(c, true)
 		case v.showsPanel():
 			v.panelMode = panelOff
 		default:
@@ -392,9 +397,26 @@ func (v *view) key(k key, q *lineQueue) {
 		}
 		return
 	case keyRight:
-		if g := v.ghost(); g != "" {
-			v.ed.apply(key{kind: keyPaste, text: g})
+		if c, ok := v.chosen(); ok {
+			v.complete(c, false)
 			return
+		}
+	case keyUp, keyDown:
+		if items := v.menu(); len(items) > 0 {
+			step := 1
+			if k.kind == keyUp {
+				step = len(items) - 1
+			}
+			v.menuSel = (v.menuSel + step) % len(items)
+			return
+		}
+	case keyEnter:
+		// Enter takes the command chosen; one that needs more waits for it.
+		if c, ok := v.chosen(); ok && string(v.ed.line) != c.Name {
+			v.complete(c, true)
+			if c.Args {
+				return
+			}
 		}
 	case keyFocusIn, keyFocusOut:
 		v.unfocused = k.kind == keyFocusOut
@@ -422,30 +444,97 @@ func (v *view) key(k key, q *lineQueue) {
 	}
 }
 
-// ghost is what would complete the command being typed, if one does: the
-// rest that all the commands starting with it share.
-func (v *view) ghost() string {
+// Command is a command the user may type, as the menu shows it.
+type Command struct {
+	Name string // e.g. "/tasks"
+	Hint string // what it does, in a few words
+	// Args is set when it takes more after its name, e.g. a task's id.
+	Args bool
+}
+
+// maxMenuRows bounds the commands the menu shows at once.
+const maxMenuRows = 6
+
+// menu is the commands starting with what is typed, while a command is
+// being typed at the end of one line: none once it is typed whole.
+func (v *view) menu() []Command {
 	line := string(v.ed.line)
-	if v.ed.hidden || !strings.HasPrefix(line, "/") || strings.ContainsAny(line, " \n") || v.ed.pos != len(v.ed.line) {
+	if v.ed.hidden || !strings.HasPrefix(line, "/") || strings.ContainsRune(line, '\n') || v.ed.pos != len(v.ed.line) {
+		return nil
+	}
+	var items []Command
+	for _, c := range v.opts.Commands {
+		if strings.HasPrefix(c.Name, line) {
+			items = append(items, c)
+		}
+	}
+	if len(items) == 1 && items[0].Name == line {
+		return nil
+	}
+	if line != v.menuLine { // what is typed changed: back to the first
+		v.menuLine, v.menuSel = line, 0
+	}
+	v.menuSel = min(v.menuSel, max(len(items)-1, 0))
+	return items
+}
+
+// chosen is the command chosen in the menu, if it shows.
+func (v *view) chosen() (Command, bool) {
+	items := v.menu()
+	if len(items) == 0 {
+		return Command{}, false
+	}
+	return items[v.menuSel], true
+}
+
+// complete types command c whole, and a space after it if it takes more
+// and spaced is set.
+func (v *view) complete(c Command, spaced bool) {
+	line := c.Name
+	if c.Args && spaced {
+		line += " "
+	}
+	v.ed.set([]rune(line))
+}
+
+// ghost is the rest of the command chosen in the menu, shown after what
+// is typed.
+func (v *view) ghost() string {
+	c, ok := v.chosen()
+	if !ok {
 		return ""
 	}
-	common := ""
-	for _, c := range v.opts.Commands {
-		if !strings.HasPrefix(c, line) || c == line {
-			continue
-		}
-		rest := c[len(line):]
-		if common == "" {
-			common = rest
-			continue
-		}
-		n := 0
-		for n < len(common) && n < len(rest) && common[n] == rest[n] {
-			n++
-		}
-		common = common[:n]
+	return strings.TrimPrefix(c.Name, string(v.ed.line))
+}
+
+// drawMenu draws the commands being typed in a card above the input box,
+// the one chosen marked.
+func (v *view) drawMenu(g *grid, r regions, items []Command) {
+	lk := v.lk
+	nameW, hintW := 0, 0
+	for _, c := range items {
+		nameW, hintW = max(nameW, textWidth(c.Name)), max(hintW, textWidth(c.Hint))
 	}
-	return common
+	rows := min(len(items), maxMenuRows, r.input.y-r.body.y-2)
+	if rows < 1 {
+		return
+	}
+	w := min(nameW+hintW+7, r.input.w-4)
+	box := rect{r.input.x + 2, r.input.y - rows - 2, w, rows + 2}
+	g.fill(box.x, box.y, box.w, box.h, lk.base)
+	border(g, box, lk.box)
+	first := min(max(v.menuSel-rows+1, 0), len(items)-rows) // keep the chosen one in sight
+	for i := range rows {
+		c := items[first+i]
+		y := box.y + 1 + i
+		name, hint := lk.prompt, lk.muted
+		if first+i == v.menuSel {
+			g.fill(box.x+1, y, box.w-2, 1, lk.you)
+			name, hint = lk.menuName, lk.menuHint
+		}
+		x := g.text(box.x+2, y, box.x+box.w-2, c.Name, name)
+		textIn(g, max(x+2, box.x+2+nameW+3), y, box.x+box.w-2, c.Hint, hint)
+	}
 }
 
 // paint draws the whole screen, and returns where the cursor goes.
@@ -489,6 +578,9 @@ func (v *view) paint(g *grid) (int, int, bool) {
 	v.convo.draw(g, r.body, v.lk, t.Newer)
 	if !r.panel.empty() {
 		v.drawPanel(g, r.panel)
+	}
+	if items := v.menu(); len(items) > 0 {
+		v.drawMenu(g, r, items)
 	}
 	if v.sel.on {
 		v.highlight(g)

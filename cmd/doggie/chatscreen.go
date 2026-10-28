@@ -19,9 +19,6 @@ type chatScreen interface {
 	Close() error
 }
 
-// chatCommands are completed as they are typed.
-var chatCommands = []string{"/tasks", "/tasks all", "/answer", "/cancel", "/help"}
-
 // openChatUI opens the chat's UI: a full screen on a terminal, plain lines
 // otherwise.
 func openChatUI(cfg config.Config) (chatScreen, error) {
@@ -40,7 +37,7 @@ func screenOptions(cfg config.Config) console.ScreenOptions {
 	}
 	return console.ScreenOptions{
 		Name: name, MaxRunes: events.MaxUtteranceRunes, Forget: isAnswer,
-		Commands: chatCommands, Texts: words(cfg.Language).screen,
+		Commands: words(cfg.Language).commands, Texts: words(cfg.Language).screen,
 	}
 }
 
@@ -57,6 +54,8 @@ type chatWords struct {
 	others  func(n int) string
 	// tr puts the chat's other texts in the language.
 	tr translator
+	// commands are the chat's commands, as the menu shows them.
+	commands []console.Command
 }
 
 // words are the chat's words in lang (BCP 47), English when it has none in
@@ -78,6 +77,13 @@ func words(lang string) chatWords {
 			},
 			thinking: "pensando", reconnecting: "reconectando…", elsewhere: "tú, en otra ventana",
 			waiting: "espera tu respuesta", tr: spanish,
+			commands: []console.Command{
+				{Name: "/tasks", Hint: "las tareas en curso"},
+				{Name: "/tasks all", Hint: "también las últimas que terminaron"},
+				{Name: "/answer", Hint: "responder tú la pregunta de una tarea", Args: true},
+				{Name: "/cancel", Hint: "cancelar una tarea", Args: true},
+				{Name: "/help", Hint: "la lista de comandos"},
+			},
 			others: func(n int) string {
 				if n == 1 {
 					return "+1 en otra conversación"
@@ -97,6 +103,13 @@ func words(lang string) chatWords {
 		},
 		thinking: "thinking", reconnecting: "reconnecting…", elsewhere: "you, elsewhere",
 		waiting: "waits for your answer",
+		commands: []console.Command{
+			{Name: "/tasks", Hint: "the tasks in progress"},
+			{Name: "/tasks all", Hint: "also the last ones that ended"},
+			{Name: "/answer", Hint: "answer a task's question yourself", Args: true},
+			{Name: "/cancel", Hint: "cancel a task", Args: true},
+			{Name: "/help", Hint: "the list of commands"},
+		},
 		others: func(n int) string {
 			if n == 1 {
 				return "+1 in another conversation"

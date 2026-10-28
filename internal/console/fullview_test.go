@@ -93,9 +93,9 @@ func TestScreenTalks(t *testing.T) {
 }
 
 func TestScreenMultilineAndCompletion(t *testing.T) {
-	s, f := openScreen(t, 60, 20, ScreenOptions{Commands: []string{"/tasks", "/tasks all", "/help"}})
+	s, f := openScreen(t, 60, 20, ScreenOptions{Commands: testCommands})
 	f.typeKeys(t, "/ta")
-	f.waitShown(t, "/tasks") // the rest shows as a hint
+	f.waitShown(t, "› /tasks") // the rest shows as a hint
 	f.typeKeys(t, "\t\r")
 	if l, _ := next(t, s.Lines()); l != "/tasks" {
 		t.Errorf("completed %q", l)
@@ -388,4 +388,41 @@ func TestScreenAsksForTheSize(t *testing.T) {
 	if strings.Contains(strings.Join(f.shown(t), "\n"), "TAREAS") {
 		t.Error("a panel at 80 columns")
 	}
+}
+
+var testCommands = []Command{
+	{Name: "/tasks", Hint: "tareas en curso"},
+	{Name: "/tasks all", Hint: "también las que terminaron"},
+	{Name: "/answer", Hint: "responder una pregunta", Args: true},
+	{Name: "/help", Hint: "la lista de comandos"},
+}
+
+// Typing a / shows the commands with what they do, narrowed as more is
+// typed; Up and Down choose, and Enter takes the one chosen, leaving one
+// that needs more to be finished.
+func TestScreenCommandMenu(t *testing.T) {
+	s, f := openScreen(t, 70, 24, ScreenOptions{Commands: testCommands})
+	f.typeKeys(t, "/")
+	f.waitShown(t, "tareas en curso", "/tasks all", "también las que terminaron", "/answer", "/help", "la lista de comandos")
+	f.typeKeys(t, "ta")
+	f.waitGone(t, "la lista de comandos")
+	f.typeKeys(t, "\x1b[B\r") // Down to "/tasks all", Enter
+	if l, _ := next(t, s.Lines()); l != "/tasks all" {
+		t.Errorf("Enter took %q", l)
+	}
+	f.typeKeys(t, "/an\r")
+	f.waitShown(t, "› /answer")
+	f.waitGone(t, "responder una pregunta") // typed whole: the menu goes
+	f.typeKeys(t, "t3 sí\r")
+	if l, _ := next(t, s.Lines()); l != "/answer t3 sí" {
+		t.Errorf("an answer %q", l)
+	}
+	// Typed whole, Enter sends it as it is.
+	f.typeKeys(t, "/tasks\r")
+	if l, _ := next(t, s.Lines()); l != "/tasks" {
+		t.Errorf("/tasks became %q", l)
+	}
+	// Up and Down go back to the history once no menu shows.
+	f.typeKeys(t, "\x1b[A")
+	f.waitShown(t, "› /tasks")
 }

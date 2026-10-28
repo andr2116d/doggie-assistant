@@ -255,3 +255,23 @@ func TestChatSaysInSpanish(t *testing.T) {
 	ui.lines <- "/tasks"
 	ui.waitCalls(t, "notice  3 no pude listar las tareas: el gestor de tareas de DOGGIE no está corriendo")
 }
+
+// Every command the chat runs is in the menu, in both languages, with
+// what it does.
+func TestMenuCommands(t *testing.T) {
+	for _, lang := range []string{"en", "es"} {
+		var names []string
+		for _, c := range words(lang).commands {
+			if c.Hint == "" {
+				t.Errorf("%s: %s has no hint", lang, c.Name)
+			}
+			names = append(names, c.Name)
+			if _, cmd := parseLine(c.Name); cmd == nil {
+				t.Errorf("%s: %s isn't a command", lang, c.Name)
+			}
+		}
+		if !slices.Equal(names, []string{"/tasks", "/tasks all", "/answer", "/cancel", "/help"}) {
+			t.Errorf("%s: %q", lang, names)
+		}
+	}
+}

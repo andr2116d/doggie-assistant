@@ -38,6 +38,7 @@ type looks struct {
 	good, wait, bad            styleID // how things went
 	pill                       styleID // "new messages below"
 	line, cardTitle            styleID // rules and the panel's cards
+	menuName, menuHint         styleID // the command chosen in the menu
 	selected                   styleID // text marked with the mouse
 	// Markdown in a reply.
 	bold, italic, code, heading styleID
@@ -68,6 +69,8 @@ func newLooks(t *styleTable, p palette) looks {
 		pill:        on(p.accent, p.you, true),
 		line:        on(p.line, p.bg, false),
 		cardTitle:   on(p.muted, p.bg, true),
+		menuName:    on(p.accent, p.you, true),
+		menuHint:    on(p.muted, p.you, false),
 		selected:    on(p.fg, p.accentLine, false),
 		bold:        on(p.fg, p.bg, true),
 		italic:      t.id(Style{Fg: p.fg, Bg: p.bg, Italic: true}),

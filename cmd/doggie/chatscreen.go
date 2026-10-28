@@ -74,7 +74,7 @@ func words(lang string) chatWords {
 					}
 					return fmt.Sprintf("↓ %d nuevos", n)
 				},
-				Clock: spanishClock,
+				Clock: spanishClock, Copied: "✓ copiado",
 			},
 			thinking: "pensando", reconnecting: "reconectando…", elsewhere: "tú, en otra ventana",
 			waiting: "espera tu respuesta", tr: spanish,
@@ -91,8 +91,9 @@ func words(lang string) chatWords {
 			Online: "online", Offline: "offline", Channel: "terminal",
 			Hints: "/help commands · ↑ history · Ctrl+D quit", HintsRight: "Tab: panel",
 			Tasks: "TASKS", Notices: "NOTICES", TooSmall: "Make the window bigger\nto talk with me",
-			Newer: func(n int) string { return fmt.Sprintf("↓ %d new", n) },
-			Clock: func(t time.Time) string { return t.Format("Mon Jan 2 · 15:04") },
+			Newer:  func(n int) string { return fmt.Sprintf("↓ %d new", n) },
+			Clock:  func(t time.Time) string { return t.Format("Mon Jan 2 · 15:04") },
+			Copied: "✓ copied",
 		},
 		thinking: "thinking", reconnecting: "reconnecting…", elsewhere: "you, elsewhere",
 		waiting: "waits for your answer",

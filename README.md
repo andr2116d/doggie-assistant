@@ -85,36 +85,34 @@ In a terminal, `doggie run` opens a chat with DOGGIE right there,
 
 ### Talk to it
 
-Type a sentence and press Enter. Keep typing while DOGGIE answers or works: a spinner shows while it thinks, replies flow in at a steady pace as they are written, notices about tasks arrive when they happen, and the tasks in progress show on a line just above the one you type:
+The chat fills the terminal. Type a sentence and press Enter, and keep typing while DOGGIE answers or works: replies flow in as they are written, the tasks in progress show in a panel on the right, and notices arrive when they happen:
 
 ```
-› Remind me in 10 seconds to stretch, and tell me a short joke meanwhile.
-
-DOGGIE  On it.
-
-DOGGIE  Timer's running. Meanwhile: I told my computer I needed a break,
-        and it sent me a vacation of cookies I couldn't refuse. I'll let
-        you know when it's time to stretch.
-· t1 Remind to stretch in 10 secon…: 5/10 s (50%)
-› _
+ ◆ DOGGIE   ● online · terminal                                          Wed Oct 28 · 21:40
+                                                                    │
+                     Remind me in 10 seconds to stretch, and tell   │ TASKS
+                     me a short joke meanwhile.                     │
+                                                                    │ ● t1 Remind to stretch
+  DOGGIE                                                            │   ██████████─────────  50%
+  ╭──────────────────────────────────────────────────────────╮      │   5/10 s
+  │ On it: the timer is running. Meanwhile, a joke: why did  │      │
+  │ the math book look sad? It had too many problems.         │      │
+  ╰──────────────────────────────────────────────────────────╯      │
+ ╭──────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ›                                                                                        │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+  /help commands · ↑ history · Ctrl+D quit                                       Tab: panel
 ```
 
-A moment later the status line is gone and the notice is in. Then a sensitive task, started here with `doggie task start -thread terminal -sensitive demo.ask ...`, asks for a confirmation only you may give:
+- What you say goes on the right; DOGGIE's replies on the left, in violet bubbles, as markdown (**bold**, *italic*, `code`, lists, blocks of code). While it thinks, three dots move below the last message, with what it is doing.
+- The input box takes several lines: Alt+Enter or Ctrl+J start a new one. A command being typed shows the rest of it in grey; Tab or Right takes it.
+- Page Up and Page Down, Shift+Up and Shift+Down, Ctrl+Home and Ctrl+End, and the mouse wheel scroll the conversation. Scrolled up, the view stays where it is and tells how many messages came below.
+- Drag with the mouse to mark text: letting go copies it, without the bubbles' frames. Shift-drag (Option-drag in iTerm2) selects with the terminal instead.
+- The panel opens by itself while there are tasks, and Tab hides or shows it; under 100 columns the tasks show below the box instead. A task that waits for your answer is amber.
+- The chat's own words follow `language` in the config (English and Spanish for now). Colors follow the terminal: 24-bit with `COLORTERM=truecolor`, 256 or the terminal's own 16 otherwise, and none with `NO_COLOR` set.
+- At rest the chat uses no CPU: it draws only what changed, and only when something did. Leaving it puts the terminal back as it was, with one line telling whether DOGGIE stopped or keeps running.
 
-```
-DOGGIE  Time to stretch, Alex. Your ten seconds are up, and the joke was
-        better than the cookies deserved.
-· t2 asks: "Pay 40 EUR now?" [yes | no]. Only you may answer it: /answer t2 <answer>
-
-DOGGIE  The electricity bill task is asking whether to pay 40 EUR now. Only
-        you can answer that, so please reply to it yourself, directly, with
-        yes or no. I can't answer it for you.
-
-› /answer t2 yes
-· answered t2
-```
-
-Colors follow the terminal: 24-bit with `COLORTERM=truecolor`, 256 or the terminal's own 16 otherwise, and none with `NO_COLOR` set. Piped, the chat prints plain `doggie>` lines.
+Piped, without a terminal, the chat reads lines and prints plain `doggie>` lines instead.
 
 On opening, the chat shows the last 5 turns of the conversation (`-history`, `0` for none).
 

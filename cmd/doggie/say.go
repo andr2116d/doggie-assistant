@@ -166,8 +166,10 @@ type replyView struct {
 	w io.Writer
 	// p, if set, prints replies with looks, under the assistant's name, in
 	// place of plain "doggie>" lines on w.
-	p       printer
-	name    string
+	p    printer
+	name string
+	// screen, if set, shows each block as a bubble of its own instead.
+	screen  replyScreen
 	printed map[blockKey]string // what is on screen, by block
 	pending map[blockKey]string // leading whitespace, not shown yet
 	open    *blockKey           // the block on the current line, if any
@@ -249,6 +251,10 @@ func (v *replyView) delta(k blockKey, text string) {
 	if v.done.has(k.id()) {
 		return
 	}
+	if v.screen != nil {
+		v.screenDelta(k, text)
+		return
+	}
 	if v.open != nil && *v.open != k {
 		v.close()
 	}
@@ -278,6 +284,10 @@ func (v *replyView) delta(k blockKey, text string) {
 
 func (v *replyView) block(k blockKey, text string) {
 	v.done.add(k.id())
+	if v.screen != nil {
+		v.screenBlock(k, text)
+		return
+	}
 	p, shown := v.printed[k]
 	delete(v.printed, k)
 	delete(v.pending, k)
@@ -322,6 +332,10 @@ func (v *replyView) close() {
 
 // note prints a line of its own, e.g. a status, after any open block.
 func (v *replyView) note(text string) {
+	if v.screen != nil {
+		v.screen.Notice("", console.NoticeInfo, strings.TrimPrefix(text, "· "))
+		return
+	}
 	if v.open != nil {
 		v.close()
 	}

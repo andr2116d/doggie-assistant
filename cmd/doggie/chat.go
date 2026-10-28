@@ -59,6 +59,8 @@ type chatOptions struct {
 	// host, if set, lets the chat run DOGGIE in its own process when none
 	// runs on this machine.
 	host *hosting
+	// words are the chat's own words, in the user's language.
+	words chatWords
 	// publish sends a sentence; nil means bus.Publish.
 	publish func(context.Context, *bus.Conn, bus.Subject[events.UtteranceData], events.UtteranceData) (bus.Meta, error)
 }
@@ -87,11 +89,16 @@ func chatCmd(args []string) error {
 		o.thread = o.channel
 	}
 
-	ui, err := openChatUI()
+	cfg, err := config.Load(*client.config)
+	if err != nil {
+		return err
+	}
+	ui, err := openChatUI(cfg)
 	if err != nil {
 		return err
 	}
 	defer ui.Close()
+	o.words = words(cfg.Language)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -125,10 +132,6 @@ func chatCmd(args []string) error {
 // tells its own sentences apart from those said in its thread elsewhere.
 var chatName = fmt.Sprintf("chat-%d", os.Getpid())
 
-func openChatUI() (*console.Console, error) {
-	return console.Open(os.Stdin, os.Stdout, chatConsole)
-}
-
 // chatConsole is how the chat's console edits: answers, which may carry
 // secrets, aren't kept for Up and Down.
 var chatConsole = console.Options{
@@ -145,11 +148,11 @@ type activityUI interface {
 	SetActivity(text string)
 }
 
-// thinking is the activity shown while DOGGIE works on what was said.
-const thinking = "thinking"
-
 // chatView prints replies on ui: with looks on a console that has them.
 func chatView(ui chatUI) *replyView {
+	if s, ok := ui.(replyScreen); ok {
+		return newScreenView(s)
+	}
 	if p, ok := ui.(printer); ok && ui.IsInteractive() {
 		return newStyledView(p, assistantName)
 	}
@@ -213,7 +216,7 @@ func stopHere(ui chatUI, own *core) {
 // runWithChat runs DOGGIE with its chat in this terminal: logs go to a file,
 // and quitting the chat stops DOGGIE.
 func runWithChat(ctx context.Context, cfg config.Config, selected []factory, client clientFlags) error {
-	ui, err := openChatUI()
+	ui, err := openChatUI(cfg)
 	if err != nil {
 		return err
 	}
@@ -249,7 +252,9 @@ func runWithChat(ctx context.Context, cfg config.Config, selected []factory, cli
 		notice(ui, fmt.Sprintf("· no config file at %s, using defaults", cfg.File))
 	}
 	notice(ui, fmt.Sprintf("· DOGGIE is running, logging to %s; /help lists the commands, Ctrl+D stops it", logPath))
-	return chatSession(ctx, conn, ui, states, own, defaultChatOptions())
+	o := defaultChatOptions()
+	o.words = words(cfg.Language)
+	return chatSession(ctx, conn, ui, states, own, o)
 }
 
 // chatSession runs the chat. own, if set, is the DOGGIE this process runs:
@@ -415,6 +420,7 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 	}
 	defer ui.SetStatus("")
 	defer c.showActivity("")
+	c.online(true)
 	listActive(sctx, conn, c.lists)
 	toSend := make(chan string, 64)
 	results := make(chan sent, 64)
@@ -746,6 +752,13 @@ func (c *chatState) saidElsewhere(env bus.Envelope) bool {
 	if channel == c.o.channel {
 		who = "you (elsewhere)"
 	}
+	if s := c.view.screen; s != nil {
+		if who == "you (elsewhere)" {
+			who = c.wordsOr().elsewhere
+		}
+		s.SaidElsewhere(who, ev.Data.Text)
+		return true
+	}
 	c.view.note(fmt.Sprintf("%s> %s", who, oneLineText(ev.Data.Text)))
 	return true
 }
@@ -791,6 +804,7 @@ func (c *chatState) connection(ctx context.Context, conn *bus.Conn, s connState)
 			if c.stopReason == "" {
 				c.view.note("· lost the connection to DOGGIE; reconnecting...")
 			}
+			c.online(false)
 			if c.host != nil && c.host.own == nil {
 				c.takeover = time.After(takeoverDelay + jitter())
 			}
@@ -798,6 +812,7 @@ func (c *chatState) connection(ctx context.Context, conn *bus.Conn, s connState)
 	case connUp:
 		c.down, c.stopReason, c.takeover = false, "", nil
 		c.view.note("· connected again")
+		c.online(true)
 		c.catchUp(ctx, conn)
 		listActive(ctx, conn, c.lists)
 	case connClosed:
@@ -897,7 +912,7 @@ func ended(ctx context.Context) error {
 // written, as when it uses a tool between two blocks.
 func (c *chatState) activityNow(inFlight int) string {
 	if (inFlight > 0 || len(c.unanswered) > 0) && c.view.open == nil && !c.down {
-		return thinking
+		return c.wordsOr().thinking
 	}
 	return ""
 }

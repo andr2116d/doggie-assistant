@@ -51,6 +51,10 @@ func (c *chatState) showHistory(ctx context.Context, conn *bus.Conn) {
 	if len(show) == 0 {
 		return
 	}
+	if c.view.screen != nil {
+		c.historyOnScreen(turns, len(show))
+		return
+	}
 	c.view.note(fmt.Sprintf("· earlier in this conversation, from %s ago:", ago(time.Since(show[0].at))))
 	// Not marked as seen: a catch-up reads the log from the last event seen,
 	// and skips what came before the chat opened anyway.
@@ -186,4 +190,18 @@ func failure(t events.BrainTurnData) string {
 		return `its LLM isn't logged in; log in with claude, or run "doggie login" for the backup`
 	}
 	return t.Error
+}
+
+// historyOnScreen shows the last n turns of the thread from before the
+// chat opened, as the screen shows them live.
+func (c *chatState) historyOnScreen(turns []events.PastTurn, n int) {
+	var mine []events.PastTurn
+	for _, t := range turns {
+		if t.Turn.ThreadID == c.o.thread && c.beforeOpening(t) && len(c.turnLines(t.Turn)) > 0 {
+			mine = append(mine, t)
+		}
+	}
+	for i, t := range mine[max(len(mine)-n, 0):] {
+		c.turnOnScreen(fmt.Sprintf("past:%d", i), t.Turn)
+	}
 }

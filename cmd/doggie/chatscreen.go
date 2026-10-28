@@ -1,0 +1,167 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/andr2116d/doggie-assistant/internal/bus/events"
+	"github.com/andr2116d/doggie-assistant/internal/config"
+	"github.com/andr2116d/doggie-assistant/internal/console"
+)
+
+// chatScreen is the UI the chat opens on its terminal, closed when it ends.
+type chatScreen interface {
+	chatUI
+	Close() error
+}
+
+// chatCommands are completed as they are typed.
+var chatCommands = []string{"/tasks", "/tasks all", "/answer", "/cancel", "/help"}
+
+// openChatUI opens the chat's UI: a full screen on a terminal, plain lines
+// otherwise.
+func openChatUI(cfg config.Config) (chatScreen, error) {
+	if !console.IsTerminal(os.Stdin, os.Stdout) {
+		return console.Plain(os.Stdin, os.Stdout), nil
+	}
+	return console.OpenScreen(os.Stdin, os.Stdout, screenOptions(cfg))
+}
+
+// screenOptions are the full screen's options for cfg's assistant and
+// language.
+func screenOptions(cfg config.Config) console.ScreenOptions {
+	name := cfg.Assistant.Name
+	if name == "" {
+		name = assistantName
+	}
+	return console.ScreenOptions{
+		Name: name, MaxRunes: chatConsole.MaxRunes, Forget: isAnswer,
+		Commands: chatCommands, Texts: words(cfg.Language).screen,
+	}
+}
+
+// chatWords are the chat's own words in one language.
+type chatWords struct {
+	screen   console.ScreenTexts
+	thinking string
+	// reconnecting is the connection while it is lost; elsewhere labels
+	// what the user said in another chat of the same channel.
+	reconnecting, elsewhere string
+}
+
+// words are the chat's words in lang (BCP 47), English when it has none in
+// that language.
+func words(lang string) chatWords {
+	if base, _, _ := strings.Cut(strings.ToLower(lang), "-"); base == "es" {
+		return chatWords{
+			screen: console.ScreenTexts{
+				Online: "en línea", Offline: "sin conexión", Channel: "terminal",
+				Hints: "/help comandos · ↑ historial · Ctrl+D salir", HintsRight: "Tab: panel",
+				Tasks: "TAREAS", Notices: "AVISOS", TooSmall: "Agranda la ventana\npara hablar conmigo",
+				Newer: func(n int) string {
+					if n == 1 {
+						return "↓ 1 nuevo"
+					}
+					return fmt.Sprintf("↓ %d nuevos", n)
+				},
+				Clock: spanishClock,
+			},
+			thinking: "pensando", reconnecting: "reconectando…", elsewhere: "tú, en otra ventana",
+		}
+	}
+	return chatWords{
+		screen: console.ScreenTexts{
+			Online: "online", Offline: "offline", Channel: "terminal",
+			Hints: "/help commands · ↑ history · Ctrl+D quit", HintsRight: "Tab: panel",
+			Tasks: "TASKS", Notices: "NOTICES", TooSmall: "Make the window bigger\nto talk with me",
+			Newer: func(n int) string { return fmt.Sprintf("↓ %d new", n) },
+			Clock: func(t time.Time) string { return t.Format("Mon Jan 2 · 15:04") },
+		},
+		thinking: "thinking", reconnecting: "reconnecting…", elsewhere: "you, elsewhere",
+	}
+}
+
+// spanishClock says t as "mar 28 oct · 21:40".
+func spanishClock(t time.Time) string {
+	days := [...]string{"dom", "lun", "mar", "mié", "jue", "vie", "sáb"}
+	months := [...]string{"ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"}
+	return fmt.Sprintf("%s %d %s · %s", days[t.Weekday()], t.Day(), months[t.Month()-1], t.Format("15:04"))
+}
+
+// replyScreen shows each block of a reply as a bubble of its own, as a
+// full screen does.
+type replyScreen interface {
+	Stream(id, text string)
+	Reply(id, text string)
+	Notice(id string, kind console.NoticeKind, text string)
+	Said(text string)
+	SaidElsewhere(label, text string)
+	SetConnection(online bool, status string)
+}
+
+// newScreenView is a replyView that shows replies on s, a bubble per block.
+func newScreenView(s replyScreen) *replyView {
+	v := newReplyView(nil)
+	v.screen = s
+	return v
+}
+
+// screenDelta shows a piece of block k on the screen.
+func (v *replyView) screenDelta(k blockKey, text string) {
+	v.screen.Stream(k.id(), text)
+	v.open = &k
+}
+
+// screenBlock ends block k on the screen with its whole text.
+func (v *replyView) screenBlock(k blockKey, text string) {
+	v.screen.Reply(k.id(), text)
+	if v.open != nil && *v.open == k {
+		v.open = nil
+	}
+}
+
+// online shows on the screen, if there is one, whether the chat is
+// connected.
+func (c *chatState) online(up bool) {
+	if s := c.view.screen; s != nil {
+		status := ""
+		if !up {
+			status = c.wordsOr().reconnecting
+		}
+		s.SetConnection(up, status)
+	}
+}
+
+// wordsOr is the chat's words, English if none were set.
+func (c *chatState) wordsOr() chatWords {
+	if c.o.words.thinking == "" {
+		return words("")
+	}
+	return c.o.words
+}
+
+// turnOnScreen shows a past turn on the screen as it showed live: what was
+// said, the tasks it heard of and the replies.
+func (c *chatState) turnOnScreen(id string, t events.BrainTurnData) {
+	s := c.view.screen
+	for _, in := range t.Inputs {
+		switch {
+		case in.Task != nil:
+			s.Notice("", console.NoticeInfo, taskNotice(in.Task))
+		case in.Said != "" && (in.Channel == "" || in.Channel == c.o.channel):
+			s.Said(in.Said)
+		case in.Said != "":
+			s.SaidElsewhere(in.Channel, in.Said)
+		}
+	}
+	for i, r := range t.Replies {
+		if r = strings.TrimSpace(r); r != "" {
+			s.Reply(fmt.Sprintf("%s#%d", id, i), r)
+		}
+	}
+	if why := failure(t); why != "" {
+		s.Notice("", console.NoticeBad, "the turn failed: "+why)
+	}
+}

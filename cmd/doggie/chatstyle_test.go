@@ -90,14 +90,14 @@ func TestChatShowsThinking(t *testing.T) {
 	runChat(t, client, ui, make(chan connState), testChatOptions())
 	ui.lines <- "busca algo"
 	brain, cause := <-brains, <-causes
-	waitActivities(t, ui, thinking)
+	waitActivities(t, ui, words("").thinking)
 
 	bus.Emit(brain, events.OutSpeakDelta, events.SpeakDeltaData{ThreadID: "terminal", Channel: "terminal", Text: "Busco ", CausedBy: cause})
-	waitActivities(t, ui, thinking, "")
+	waitActivities(t, ui, words("").thinking, "")
 	bus.Publish(context.Background(), brain, events.OutSpeak, events.SpeakData{ThreadID: "terminal", Channel: "terminal", Text: "Busco ya."}, bus.CausedBy(cause))
-	waitActivities(t, ui, thinking, "", thinking)
+	waitActivities(t, ui, words("").thinking, "", words("").thinking)
 	bus.Publish(context.Background(), brain, events.BrainTurn, events.BrainTurnData{ThreadID: "terminal", Inputs: []events.TurnInput{{EventID: cause}}, Replies: []string{"Busco ya."}}, bus.CausedBy(cause))
-	waitActivities(t, ui, thinking, "", thinking, "")
+	waitActivities(t, ui, words("").thinking, "", words("").thinking, "")
 	ui.waitPrinted(t, "DOGGIE  Busco ya.\n")
 }
 

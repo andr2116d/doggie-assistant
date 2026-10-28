@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -415,4 +416,42 @@ func TestPainterClearsFirst(t *testing.T) {
 	if out := string(p.frame(&g, 0, 0, false)); !strings.Contains(out, "\x1b[2J") {
 		t.Errorf("after invalidate: %q", out)
 	}
+}
+
+// textByClusters is grid.text without its fast path for simple runes.
+func textByClusters(b *grid, x, y, limit int, s string, st styleID) int {
+	limit = min(limit, b.W)
+	it := graphemes.FromString(sanitize(s, false))
+	for it.Next() && x < limit {
+		g := safeCluster(it.Value())
+		w := clusterWidth(g)
+		if g == "" || w == 0 {
+			continue
+		}
+		if x+w > limit {
+			break
+		}
+		if g == " " {
+			g = ""
+		}
+		b.put(x, y, g, w, st)
+		x += w
+	}
+	return x
+}
+
+// The fast path for simple runes writes what splitting into clusters does.
+func FuzzTextFastPath(f *testing.F) {
+	f.Add("Listo, te aviso en tres minutos ñandú ¿qué? é 日本 👍🏽 ­̀x", uint8(30))
+	f.Fuzz(func(t *testing.T, s string, w uint8) {
+		cols := 1 + int(w)%60
+		var fast, slow grid
+		fast.resize(cols, 1)
+		slow.resize(cols, 1)
+		a := fast.text(0, 0, cols, s, 0)
+		b := textByClusters(&slow, 0, 0, cols, s, 0)
+		if a != b || !slices.Equal(fast.cells, slow.cells) {
+			t.Fatalf("%q: fast %q (%d), clusters %q (%d)", s, screenText(&fast), a, screenText(&slow), b)
+		}
+	})
 }

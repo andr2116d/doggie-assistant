@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/clipperhouse/uax29/v2/graphemes"
 	"github.com/mattn/go-runewidth"
@@ -214,8 +215,13 @@ func (b *grid) put(x, y int, text string, w int, s styleID) bool {
 	if !b.in(x, y) || x+w > b.W || w < 1 || w > 2 {
 		return false
 	}
-	b.splitWide(x, y)
-	b.splitWide(x+w, y)
+	i := y*b.W + x
+	if b.cells[i].w == 0 {
+		b.splitWide(x, y)
+	}
+	if x+w < b.W && b.cells[i+w].w == 0 {
+		b.splitWide(x+w, y)
+	}
 	b.set(x, y, glyph{text: text, w: uint8(w), s: s})
 	if w == 2 {
 		b.set(x+1, y, glyph{s: s})
@@ -229,14 +235,22 @@ func (b *grid) put(x, y int, text string, w int, s styleID) bool {
 // cluster that doesn't fit before limit ends the text there.
 func (b *grid) text(x, y, limit int, s string, st styleID) int {
 	limit = min(limit, b.W)
-	it := graphemes.FromString(s)
-	for it.Next() && x < limit {
-		g := safeCluster(it.Value())
-		if g == "" {
-			continue
+	s = sanitize(s, false)
+	for i := 0; i < len(s) && x < limit; {
+		var g string
+		var w int
+		if r, size := utf8.DecodeRuneInString(s[i:]); simple(r) && (i+size == len(s) || simple(firstRune(s[i+size:]))) {
+			g, w = s[i:i+size], runewidth.RuneWidth(r)
+			i += size
+		} else {
+			it := graphemes.FromString(s[i:])
+			it.Next()
+			g = it.Value()
+			i += len(g)
+			g = safeCluster(g)
+			w = clusterWidth(g)
 		}
-		w := clusterWidth(g)
-		if w == 0 {
+		if g == "" || w == 0 {
 			continue
 		}
 		if x+w > limit {
@@ -281,9 +295,49 @@ func clusterWidth(g string) int { return min(runewidth.StringWidth(g), 2) }
 // textWidth is how many columns s takes, cluster by cluster.
 func textWidth(s string) int {
 	w := 0
-	it := graphemes.FromString(s)
+	it := graphemes.FromString(sanitize(s, false))
 	for it.Next() {
 		w += clusterWidth(safeCluster(it.Value()))
 	}
 	return w
+}
+
+// sanitize is s as it may reach a terminal: valid UTF-8, tabs as spaces,
+// without control characters but, if keepNewlines, newlines. Cleaning the
+// whole text before splitting it keeps an invalid byte from joining the
+// cluster next to it.
+func sanitize(s string, keepNewlines bool) string {
+	clean := true
+	for _, r := range s {
+		if r == '\uFFFD' || r == '\t' || !printable(r) && !(keepNewlines && r == '\n') {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t':
+			return ' '
+		case r == '\n' && keepNewlines:
+			return r
+		case r == '\uFFFD' || !printable(r):
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(s, ""))
+}
+
+// simple reports whether r is a printable rune below the combining marks:
+// next to another such rune it is a grapheme cluster of its own, so text,
+// in Latin scripts mostly, needs no cluster splitting.
+func simple(r rune) bool {
+	return r >= 0x20 && r < 0x300 && r != 0x7f && (r < 0x80 || r >= 0xa0) && r != 0xad
+}
+
+func firstRune(s string) rune {
+	r, _ := utf8.DecodeRuneInString(s)
+	return r
 }

@@ -117,7 +117,7 @@ func bar(g *grid, x, y, w int, done float64, fill, rest styleID) {
 // reach the terminal.
 func clusters(s string) []string {
 	var out []string
-	it := graphemes.FromString(s)
+	it := graphemes.FromString(sanitize(s, false))
 	for it.Next() {
 		if c := safeCluster(it.Value()); c != "" && clusterWidth(c) > 0 {
 			out = append(out, c)
@@ -140,4 +140,17 @@ func tooSmallNote(g *grid, st styleID, note string) {
 		}
 		textIn(g, centered(rect{0, 0, g.W, g.H}, textWidth(l)), y+i, g.W, l, st)
 	}
+}
+
+// hline draws a rule w cells wide from x on row y, between the ends left
+// and right.
+func hline(g *grid, x, y, w int, left, right string, st styleID) {
+	if w < 2 {
+		return
+	}
+	g.put(x, y, left, 1, st)
+	for i := 1; i < w-1; i++ {
+		g.put(x+i, y, "─", 1, st)
+	}
+	g.put(x+w-1, y, right, 1, st)
 }

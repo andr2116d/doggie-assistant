@@ -1,0 +1,464 @@
+package console
+
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// sender is who a message comes from.
+type sender uint8
+
+const (
+	fromUser      sender = iota // said here
+	fromAssistant               // the assistant's reply
+	fromElsewhere               // said in this conversation on another channel
+	fromChat                    // the chat's own note
+)
+
+// noteKind is what a notice tells, which picks its mark and color.
+type noteKind uint8
+
+const (
+	noteInfo noteKind = iota
+	noteGood
+	noteWait
+	noteBad
+)
+
+// notice is a line about something, e.g. a task, under the message that
+// caused it or on its own.
+type notice struct {
+	kind noteKind
+	text string
+}
+
+// message is one block of the conversation: a bubble, or a note.
+type message struct {
+	id    string
+	from  sender
+	label string // who said it, for fromElsewhere
+	kind  noteKind
+	text  string // all of it so far
+	shown int    // bytes of text on screen; fewer while it is paced in
+	open  bool   // still being written
+	notes []notice
+	wrap  wrapCache
+	buf   strings.Builder // holds text, to grow it in place
+}
+
+// wrapCache keeps a message's lines at one width.
+type wrapCache struct {
+	width int
+	// from is where the last line wrapped starts, in bytes of text: the
+	// lines before it, in stable, can't change as text grows. wrapped is
+	// set when that line began at a break.
+	from    int
+	wrapped bool
+	stable  []string
+	stableW int      // the widest of stable, in columns
+	lines   []string // stable and the lines from from, for text[:shown]
+	w       int      // the widest of lines
+	shown   int      // what lines covers; -1 when stale
+}
+
+// lines are the message's shown text wrapped to width. As text comes in
+// only its last line is wrapped again.
+func (m *message) lines(width int) []string {
+	width = max(width, 2)
+	c := &m.wrap
+	if c.width == width && c.shown == m.shown {
+		return c.lines
+	}
+	if c.width != width || c.shown < 0 || m.shown < c.from {
+		*c = wrapCache{width: width, stable: c.stable[:0]}
+	}
+	text := m.text[:m.shown]
+	known := len(c.stable)
+	for {
+		i := strings.IndexByte(text[c.from:], '\n')
+		if i < 0 {
+			break
+		}
+		c.stable, _ = wrapParagraph(c.stable, text[c.from:c.from+i], width, c.wrapped)
+		c.from, c.wrapped = c.from+i+1, false
+	}
+	all, last := wrapParagraph(c.stable, text[c.from:], width, c.wrapped)
+	c.stable, c.lines = all[:len(all)-1], all
+	for _, l := range c.stable[known:] {
+		c.stableW = max(c.stableW, textWidth(l))
+	}
+	c.w = max(c.stableW, textWidth(all[len(all)-1]))
+	if last > 0 {
+		c.from, c.wrapped = c.from+last, true
+	}
+	c.shown = m.shown
+	return c.lines
+}
+
+// appendText adds text, cleaned, to the end. The text grows in place, so a
+// reply that comes in many pieces isn't copied whole for each.
+func (m *message) appendText(text string, paced bool) {
+	if m.buf.Len() != len(m.text) { // text was set without buf
+		m.buf.Reset()
+		m.buf.WriteString(m.text)
+	}
+	m.buf.WriteString(sanitize(text, true))
+	m.text = m.buf.String()
+	if !paced {
+		m.shown = len(m.text)
+	}
+}
+
+// linesWidth is how wide the widest of the message's lines at width is.
+func (m *message) linesWidth(width int) int {
+	m.lines(width)
+	return m.wrap.w
+}
+
+// setText replaces the text, cleaned of what mustn't reach the terminal.
+// Text that only grows keeps what is wrapped and what is on screen.
+func (m *message) setText(text string, paced bool) {
+	text = sanitize(text, true)
+	if !strings.HasPrefix(text, m.text) {
+		m.wrap.shown = -1
+		m.shown = min(m.shown, commonPrefix(m.text, text))
+	}
+	m.buf.Reset()
+	m.buf.WriteString(text)
+	m.text = m.buf.String()
+	if !paced {
+		m.shown = len(text)
+	}
+}
+
+// commonPrefix is how many bytes a and b start with alike, whole runes.
+func commonPrefix(a, b string) int {
+	i := 0
+	for i < len(a) && i < len(b) {
+		r, n := utf8.DecodeRuneInString(a[i:])
+		if r2, n2 := utf8.DecodeRuneInString(b[i:]); r2 != r || n2 != n {
+			break
+		}
+		i += n
+	}
+	return i
+}
+
+// maxMessages bounds the messages kept: past it the oldest go, and are
+// asked for again when scrolled back to.
+const maxMessages = 500
+
+// conversation is the messages of the chat and the view on them.
+type conversation struct {
+	name string // the assistant's, above its bubbles
+	msgs []*message
+	byID map[string]*message
+	// scroll is how many rows the view is above the newest; 0 follows
+	// what comes. When scrolled, anchor is the message at the view's
+	// bottom and anchorRows how many of its rows are below the view, so
+	// the view stays put while messages come, go or rewrap.
+	scroll     int
+	anchor     *message
+	anchorRows int
+	unseen     int // messages that came while scrolled up
+	// top is set when the view reached the oldest message kept.
+	top     bool
+	heights []int // of each message, reused by draw
+}
+
+func newConversation(name string) *conversation {
+	return &conversation{name: name, byID: map[string]*message{}}
+}
+
+// add appends m, dropping the oldest message past maxMessages.
+func (c *conversation) add(m *message) {
+	c.msgs = append(c.msgs, m)
+	if m.id != "" {
+		c.byID[m.id] = m
+	}
+	if c.scroll > 0 {
+		c.unseen++
+	}
+	if len(c.msgs) > maxMessages {
+		old := c.msgs[0]
+		c.msgs[0] = nil
+		c.msgs = c.msgs[1:]
+		if old.id != "" && c.byID[old.id] == old {
+			delete(c.byID, old.id)
+		}
+		if c.anchor == old {
+			c.anchor = nil
+		}
+	}
+}
+
+// say adds what someone said, or a note, shown whole at once.
+func (c *conversation) say(from sender, label, text string, kind noteKind) {
+	m := &message{from: from, label: label, kind: kind}
+	m.setText(text, false)
+	c.add(m)
+}
+
+// stream adds text to the assistant's reply id, starting it if new. The
+// text is paced in.
+func (c *conversation) stream(id, text string) {
+	m := c.byID[id]
+	if m == nil {
+		m = &message{id: id, from: fromAssistant, open: true}
+		c.add(m)
+	}
+	m.appendText(text, true)
+}
+
+// finish ends the reply id with its whole text, which corrects what
+// came in pieces. A reply never streamed shows at once.
+func (c *conversation) finish(id, text string) {
+	m := c.byID[id]
+	if m == nil {
+		m = &message{id: id, from: fromAssistant}
+		c.add(m)
+		m.setText(text, false)
+		return
+	}
+	m.setText(text, true)
+	m.open = false
+}
+
+// noteOn adds a notice under the message id, or on its own if there is
+// no such message.
+func (c *conversation) noteOn(id string, n notice) {
+	if m := c.byID[id]; m != nil && id != "" {
+		m.notes = append(m.notes, n)
+		return
+	}
+	c.say(fromChat, "", n.text, n.kind)
+}
+
+// older puts messages from before the oldest one kept in front, as long
+// as fewer than maxMessages are kept.
+func (c *conversation) older(msgs []*message) {
+	room := maxMessages - len(c.msgs)
+	if room <= 0 || len(msgs) == 0 {
+		return
+	}
+	msgs = msgs[max(len(msgs)-room, 0):]
+	for _, m := range msgs {
+		if m.id != "" {
+			c.byID[m.id] = m
+		}
+		m.setText(m.text, false)
+	}
+	c.msgs = append(append([]*message(nil), msgs...), c.msgs...)
+	c.top = false
+}
+
+// pace shows more of the replies paced in, and reports whether any still
+// has more to show.
+func (c *conversation) pace() bool {
+	more := false
+	for _, m := range c.msgs {
+		if m.shown >= len(m.text) {
+			continue
+		}
+		rest := m.text[m.shown:]
+		n := utf8.RuneCountInString(rest)
+		step := max(minStep, (n*int(frameEvery)+int(catchUp)-1)/int(catchUp))
+		if n > maxBacklog {
+			step = n
+		}
+		for i := 0; i < step && m.shown < len(m.text); i++ {
+			_, size := utf8.DecodeRuneInString(m.text[m.shown:])
+			m.shown += size
+		}
+		more = more || m.shown < len(m.text)
+	}
+	return more
+}
+
+// scrollBy moves the view up by rows, down if negative.
+func (c *conversation) scrollBy(rows int) {
+	c.scroll = max(c.scroll+rows, 0)
+	c.anchor = nil
+	if c.scroll == 0 {
+		c.unseen = 0
+	}
+}
+
+// Measures of the conversation, in columns.
+const (
+	maxReplyCols = 76 // text of a reply, for reading comfort
+	maxSaidCols  = 64 // text of what someone said
+)
+
+// widths are how wide the text of each kind of bubble may be in a
+// conversation cols wide.
+func widths(cols int) (reply, said int) {
+	return min(cols-4, maxReplyCols), min(cols*3/4, maxSaidCols) - 2
+}
+
+// named reports whether message i shows the assistant's name above it:
+// when it starts a run of the assistant's bubbles.
+func (c *conversation) named(i int) bool {
+	return c.msgs[i].from == fromAssistant && (i == 0 || c.msgs[i-1].from != fromAssistant)
+}
+
+// height is how many rows message i takes in a conversation cols wide.
+func (c *conversation) height(i, cols int) int {
+	m := c.msgs[i]
+	reply, said := widths(cols)
+	switch m.from {
+	case fromAssistant:
+		h := len(m.lines(reply)) + 2 + len(m.notes)
+		if c.named(i) {
+			h++
+		}
+		return h
+	case fromElsewhere:
+		return len(m.lines(said)) + 1
+	case fromUser:
+		return len(m.lines(said))
+	default:
+		return len(m.lines(cols - 2))
+	}
+}
+
+// draw draws the view of the conversation in body. newer tells how many
+// messages came while scrolled up, e.g. "↓ 3 new".
+func (c *conversation) draw(g *grid, body rect, lk looks, newer func(n int) string) {
+	cols := body.w - 2*conversationX
+	if cols < 8 || body.h < 1 {
+		return
+	}
+	c.heights = c.heights[:0]
+	total := 0
+	for i := range c.msgs {
+		h := c.height(i, cols)
+		c.heights = append(c.heights, h)
+		total += h + 1 // and the gap above it
+	}
+	heights := c.heights
+	if c.scroll > 0 && c.anchor != nil {
+		below, found := 0, false
+		for i := len(c.msgs) - 1; i >= 0; i-- {
+			if c.msgs[i] == c.anchor {
+				found = true
+				break
+			}
+			below += heights[i] + 1
+		}
+		if found {
+			c.scroll = below + c.anchorRows
+		}
+	}
+	c.scroll = min(c.scroll, max(total-body.h, 0))
+	if c.scroll == 0 {
+		c.unseen = 0
+	}
+	viewBottom := body.y + body.h
+	bottom := viewBottom + c.scroll // where the newest message ends
+	c.anchor, c.top = nil, true
+	for i := len(c.msgs) - 1; i >= 0; i-- {
+		top := bottom - heights[i]
+		if top < viewBottom && c.anchor == nil && c.scroll > 0 {
+			c.anchor, c.anchorRows = c.msgs[i], max(bottom-viewBottom, 0)
+		}
+		if top < viewBottom {
+			c.drawMessage(g, i, body.x+conversationX, top, cols, body, lk)
+		}
+		bottom = top - 1
+		if bottom <= body.y {
+			c.top = i == 0
+			break
+		}
+	}
+	if c.scroll > 0 && c.unseen > 0 && newer != nil {
+		pill := " " + newer(c.unseen) + " "
+		w := textWidth(pill)
+		textIn(g, centered(body, w), body.y+body.h-1, body.x+body.w, pill, lk.pill)
+	}
+}
+
+// drawMessage draws message i from row top, x and cols wide, showing only
+// the rows within clip.
+func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk looks) {
+	m := c.msgs[i]
+	visible := func(y int) bool { return y >= clip.y && y < clip.y+clip.h }
+	reply, said := widths(cols)
+	y := top
+	switch m.from {
+	case fromAssistant:
+		if c.named(i) {
+			if visible(y) {
+				textIn(g, x, y, x+cols, c.name, lk.name)
+			}
+			y++
+		}
+		lines := m.lines(reply)
+		w := max(m.linesWidth(reply), 1) + 4 // the borders and a space inside each
+		if visible(y) {
+			hline(g, x, y, w, "╭", "╮", lk.border)
+		}
+		y++
+		for _, l := range lines {
+			if visible(y) {
+				g.text(x, y, x+1, "│", lk.border)
+				g.text(x+2, y, x+w-2, l, lk.text)
+				g.text(x+w-1, y, x+w, "│", lk.border)
+			}
+			y++
+		}
+		if visible(y) {
+			hline(g, x, y, w, "╰", "╯", lk.border)
+		}
+		y++
+		for _, n := range m.notes {
+			if visible(y) {
+				drawNotice(g, x+2, y, x+cols, n, lk)
+			}
+			y++
+		}
+	case fromUser, fromElsewhere:
+		lines := m.lines(said)
+		w := m.linesWidth(said)
+		left := x + cols - (w + 2)
+		if m.from == fromElsewhere {
+			if visible(y) {
+				textRight(g, x, x+cols, y, m.label, lk.muted)
+			}
+			y++
+		}
+		for _, l := range lines {
+			if visible(y) {
+				g.fill(left, y, w+2, 1, lk.you)
+				g.text(left+1, y, left+1+w, l, lk.you)
+			}
+			y++
+		}
+	default:
+		for j, l := range m.lines(cols - 2) {
+			if visible(y) {
+				if j == 0 {
+					drawNotice(g, x, y, x+cols, notice{m.kind, l}, lk)
+				} else {
+					textIn(g, x+2, y, x+cols, l, lk.muted)
+				}
+			}
+			y++
+		}
+	}
+}
+
+// drawNotice draws a notice's mark and its text on one row.
+func drawNotice(g *grid, x, y, limit int, n notice, lk looks) {
+	mark, st := "·", lk.muted
+	switch n.kind {
+	case noteGood:
+		mark, st = "✓", lk.good
+	case noteWait:
+		mark, st = "?", lk.wait
+	case noteBad:
+		mark, st = "✗", lk.bad
+	}
+	x = g.text(x, y, limit, mark, st)
+	textIn(g, x+1, y, limit, n.text, lk.muted)
+}

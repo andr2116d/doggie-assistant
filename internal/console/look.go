@@ -38,6 +38,7 @@ type looks struct {
 	you                           styleID // a bubble of what the user said
 	name, border                  styleID // a bubble of the assistant
 	good, wait, bad, bar, barRest styleID // marks and progress bars
+	pill                          styleID // "new messages below"
 }
 
 func newLooks(t *styleTable, p palette) looks {
@@ -68,5 +69,6 @@ func newLooks(t *styleTable, p palette) looks {
 		bad:         on(p.bad, p.bg, false),
 		bar:         on(p.accent, p.panel, false),
 		barRest:     on(p.line, p.panel, false),
+		pill:        on(p.accent, p.you, true),
 	}
 }

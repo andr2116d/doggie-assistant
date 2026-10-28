@@ -1,0 +1,30 @@
+ ◆ DOGGIE   ● en línea · terminal                                                                    mar 28 oct · 21:40
+                                                                                          │
+                                                                                          │ TAREAS
+                                                                                          │
+                                                                                          │
+                                                                                          │
+                                                                                          │
+                                                                                          │
+                                Recuérdame en 10 minutos sacar la ropa de la lavadora y   │
+                                cuéntame un chiste corto                                  │
+                                                                                          │
+  DOGGIE                                                                                  │
+  ╭────────────────────────────────╮                                                      │
+  │ Listo, te aviso en 10 minutos. │                                                      │
+  ╰────────────────────────────────╯                                                      │
+    ✓ temporizador «ropa» · 10:00                                                         │
+                                                                                          │
+  ╭──────────────────────────────────────────────────────────────────────╮                │
+  │ Ahí va: ¿por qué el libro de matemáticas estaba triste? Porque tenía │                │
+  │ demasiados problemas. 📚                                             │                │
+  ╰──────────────────────────────────────────────────────────────────────╯                │
+                                                                                          │
+                                                                           voice:kitchen  │
+                                                    ¿y mañana a qué hora es mi reunión?   │
+                                                                                          │
+  ? lost the connection to DOGGIE; reconnecting…                                          │
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ›                                                                                                                  │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  /help comandos · ↑ historial · Ctrl+D salir                                                               Tab: panel

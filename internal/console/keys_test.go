@@ -2,6 +2,7 @@ package console
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -104,5 +105,28 @@ func TestDecoderBoundsPaste(t *testing.T) {
 	got := d.feed([]byte(pasteEnd + "a"))
 	if len(got) != 2 || got[0].kind != keyPaste || len(got[0].text) != maxPaste || got[1] != r('a') {
 		t.Errorf("end of a huge paste: %d keys", len(got))
+	}
+}
+
+func TestFullScreenKeys(t *testing.T) {
+	d := decoder{full: true}
+	got := d.feed([]byte("\x1b[5~\x1b[6~\x1b[1;2A\x1b[1;2B\x1b[1;5H\x1b[1;5F\x1b[I\x1b[O\t\x1b\ra\nb\r\n"))
+	want := []keyKind{keyPageUp, keyPageDown, keyScrollUp, keyScrollDown, keyTop, keyBottom, keyFocusIn, keyFocusOut, keyTab, keyNewline, keyRune, keyNewline, keyRune, keyEnter}
+	var kinds []keyKind
+	for _, k := range got {
+		kinds = append(kinds, k.kind)
+	}
+	if !slices.Equal(kinds, want) {
+		t.Errorf("%v, want %v", kinds, want)
+	}
+	p := decoder{full: true}
+	keys := p.feed([]byte("\x1b[200~uno\r\ndos\tx\x1b[31m\x1b[201~"))
+	if len(keys) != 1 || keys[0].text != "uno\ndos x[31m" {
+		t.Errorf("paste %+v", keys)
+	}
+	// The same bytes in the inline console keep their old meaning.
+	var inline decoder
+	if k := inline.feed([]byte("\t\n\x1b[1;5H")); len(k) != 3 || k[0].r != ' ' || k[1].kind != keyEnter || k[2].kind != keyHome {
+		t.Errorf("inline %+v", k)
 	}
 }

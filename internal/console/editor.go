@@ -38,6 +38,9 @@ type editor struct {
 	hidden       bool
 	hiddenPrompt []rune
 	stashed      []rune
+
+	// multiline lets the line hold newlines, from Alt+Enter or a paste.
+	multiline bool
 }
 
 func newEditor(maxRunes int, forget func(string) bool) *editor {
@@ -68,6 +71,11 @@ func (e *editor) apply(k key) (act action, line string) {
 		return e.insert([]rune{k.r}), ""
 	case keyPaste:
 		return e.insert([]rune(k.text)), ""
+	case keyNewline:
+		if !e.multiline || e.hidden {
+			return actRefused, ""
+		}
+		return e.insert([]rune{'\n'}), ""
 	case keyEnter:
 		line = string(e.line)
 		switch {
@@ -100,9 +108,11 @@ func (e *editor) apply(k key) (act action, line string) {
 	case keyWordRight:
 		e.pos = e.wordEnd()
 	case keyHome:
-		e.pos = 0
+		for e.pos = min(e.pos, len(e.line)); e.pos > 0 && e.line[e.pos-1] != '\n'; e.pos-- {
+		}
 	case keyEnd:
-		e.pos = len(e.line)
+		for ; e.pos < len(e.line) && e.line[e.pos] != '\n'; e.pos++ {
+		}
 	case keyKillStart:
 		e.line = slices.Delete(e.line, 0, e.pos)
 		e.pos = 0
@@ -115,6 +125,9 @@ func (e *editor) apply(k key) (act action, line string) {
 	case keyUp, keyDown:
 		if e.hidden {
 			return actRefused, "" // the history would show in the hidden line
+		}
+		if e.moveLine(k.kind == keyUp) {
+			return actNone, ""
 		}
 		if k.kind == keyUp {
 			e.browse(-1)
@@ -153,7 +166,7 @@ func (e *editor) apply(k key) (act action, line string) {
 // insert puts rs at the cursor, as much as fits. Control characters are
 // dropped: the line is drawn as is.
 func (e *editor) insert(rs []rune) action {
-	rs = slices.DeleteFunc(slices.Clone(rs), func(r rune) bool { return !printable(r) })
+	rs = slices.DeleteFunc(slices.Clone(rs), func(r rune) bool { return !printable(r) && (r != '\n' || !e.multiline) })
 	if len(rs) == 0 {
 		return actNone
 	}
@@ -239,5 +252,40 @@ func isBlank(s string) bool {
 			return false
 		}
 	}
+	return true
+}
+
+// moveLine moves the cursor to the line above, or below, at the same rune
+// in it as far as it goes, and reports whether there was such a line.
+func (e *editor) moveLine(up bool) bool {
+	start := e.pos
+	for start > 0 && e.line[start-1] != '\n' {
+		start--
+	}
+	col := e.pos - start
+	if up {
+		if start == 0 {
+			return false
+		}
+		prev := start - 1
+		for prev > 0 && e.line[prev-1] != '\n' {
+			prev--
+		}
+		e.pos = min(prev+col, start-1)
+		return true
+	}
+	end := e.pos
+	for end < len(e.line) && e.line[end] != '\n' {
+		end++
+	}
+	if end == len(e.line) {
+		return false
+	}
+	next := end + 1
+	stop := next
+	for stop < len(e.line) && e.line[stop] != '\n' {
+		stop++
+	}
+	e.pos = min(next+col, stop)
 	return true
 }

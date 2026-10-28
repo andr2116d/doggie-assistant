@@ -2,6 +2,7 @@ package console
 
 import (
 	"bytes"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -28,6 +29,17 @@ const (
 	keyInterrupt
 	keyEOF
 	keyRedraw
+	// Keys of the full screen only.
+	keyNewline // Alt+Enter or Ctrl+J: a new line in what is typed
+	keyTab
+	keyPageUp
+	keyPageDown
+	keyScrollUp   // Shift+Up
+	keyScrollDown // Shift+Down
+	keyTop        // Ctrl+Home
+	keyBottom     // Ctrl+End
+	keyFocusIn    // the window got the focus
+	keyFocusOut
 )
 
 // key is a keystroke, or text pasted at once.
@@ -55,6 +67,9 @@ type decoder struct {
 	pasting bool
 	paste   []byte
 	afterCR bool // a "\n" right after "\r" is the same Enter
+	// full decodes the keys of the full screen: Tab, a new line, scrolling
+	// and focus, and pastes keep their newlines.
+	full bool
 	// skipping drops the rest of an escape sequence too long to keep, up
 	// to its final byte.
 	skipping bool
@@ -96,7 +111,11 @@ func (d *decoder) readPaste(keys *[]key) bool {
 		d.keepPaste(d.buf[:i])
 		d.buf = d.buf[i+len(pasteEnd):]
 		d.pasting = false
-		if text := oneLine(string(d.paste)); text != "" {
+		text := oneLine(string(d.paste))
+		if d.full {
+			text = pasted(string(d.paste))
+		}
+		if text != "" {
 			*keys = append(*keys, key{kind: keyPaste, text: text})
 		}
 		d.paste = nil
@@ -129,13 +148,19 @@ func (d *decoder) next() (k *key, n int, ok bool) {
 		d.afterCR = true
 		return &key{kind: keyEnter}, 1, true
 	case '\n':
-		if afterCR {
+		switch {
+		case afterCR:
 			return nil, 1, true
+		case d.full:
+			return &key{kind: keyNewline}, 1, true
 		}
 		return &key{kind: keyEnter}, 1, true
 	case 0x7f, 0x08:
 		return &key{kind: keyBackspace}, 1, true
 	case '\t':
+		if d.full {
+			return &key{kind: keyTab}, 1, true
+		}
 		return &key{kind: keyRune, r: ' '}, 1, true
 	}
 	if b < 0x20 {
@@ -202,6 +227,10 @@ func (d *decoder) escape() (*key, int, bool) {
 			return &key{kind: kind}, 3, true
 		}
 		return nil, 3, true
+	case '\r':
+		if d.full {
+			return &key{kind: keyNewline}, 2, true // Alt+Enter
+		}
 	case 'b':
 		return &key{kind: keyWordLeft}, 2, true // Alt+B
 	case 'f':
@@ -245,17 +274,33 @@ func (d *decoder) csi() (*key, int, bool) {
 			return &key{kind: keyEnd}, n, true
 		case "3":
 			return &key{kind: keyDelete}, n, true
+		case "5", "6":
+			if d.full {
+				return &key{kind: map[string]keyKind{"5": keyPageUp, "6": keyPageDown}[params]}, n, true
+			}
 		}
 		return nil, n, true
 	}
 	// Modifiers come as "1;5" (Ctrl), "1;3" (Alt): Ctrl or Alt with an
 	// arrow moves by words.
 	word := params == "1;5" || params == "1;3" || params == "5"
+	shift, ctrl := d.full && params == "1;2", d.full && params == "1;5"
 	switch final {
 	case 'A':
+		if shift {
+			return &key{kind: keyScrollUp}, n, true
+		}
 		return &key{kind: keyUp}, n, true
 	case 'B':
+		if shift {
+			return &key{kind: keyScrollDown}, n, true
+		}
 		return &key{kind: keyDown}, n, true
+	case 'I', 'O':
+		if params == "" && d.full {
+			return &key{kind: map[byte]keyKind{'I': keyFocusIn, 'O': keyFocusOut}[final]}, n, true
+		}
+		return nil, n, true
 	case 'C':
 		if word {
 			return &key{kind: keyWordRight}, n, true
@@ -267,9 +312,22 @@ func (d *decoder) csi() (*key, int, bool) {
 		}
 		return &key{kind: keyLeft}, n, true
 	case 'H':
+		if ctrl {
+			return &key{kind: keyTop}, n, true
+		}
 		return &key{kind: keyHome}, n, true
 	case 'F':
+		if ctrl {
+			return &key{kind: keyBottom}, n, true
+		}
 		return &key{kind: keyEnd}, n, true
 	}
 	return nil, n, true
+}
+
+// pasted is pasted text as the full screen keeps it: clean, with its lines,
+// "\r\n" and "\r" as "\n", tabs as spaces.
+func pasted(text string) string {
+	text = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(text)
+	return sanitize(text, true)
 }

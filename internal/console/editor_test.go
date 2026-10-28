@@ -206,3 +206,45 @@ func TestHiddenLine(t *testing.T) {
 		t.Error("Ctrl+C on a hidden line quit")
 	}
 }
+
+func TestEditorLines(t *testing.T) {
+	e := newEditor(0, nil)
+	e.multiline = true
+	for _, k := range []key{{kind: keyRune, r: 'a'}, {kind: keyRune, r: 'b'}, {kind: keyNewline}, {kind: keyPaste, text: "cde\nf"}} {
+		e.apply(k)
+	}
+	if string(e.line) != "ab\ncde\nf" || e.pos != len(e.line) {
+		t.Fatalf("%q at %d", string(e.line), e.pos)
+	}
+	e.apply(key{kind: keyUp}) // from after "f" to after "c"
+	if e.pos != 4 {
+		t.Errorf("up: at %d", e.pos)
+	}
+	e.apply(key{kind: keyEnd}) // the end of "cde"
+	if e.pos != 6 {
+		t.Errorf("end: at %d", e.pos)
+	}
+	e.apply(key{kind: keyUp}) // past the end of the shorter line above
+	if e.pos != 2 {
+		t.Errorf("up again: at %d", e.pos)
+	}
+	e.pos = 0
+	if e.moveLine(true) {
+		t.Error("moved above the first line")
+	}
+	e.pos = len(e.line)
+	if e.moveLine(false) {
+		t.Error("moved below the last line")
+	}
+	if act, line := e.apply(key{kind: keyEnter}); act != actSubmit || line != "ab\ncde\nf" {
+		t.Errorf("submit %v %q", act, line)
+	}
+	single := newEditor(0, nil)
+	if act, _ := single.apply(key{kind: keyNewline}); act != actRefused {
+		t.Error("a single-line editor took a newline")
+	}
+	single.apply(key{kind: keyPaste, text: "a\nb"})
+	if string(single.line) != "ab" {
+		t.Errorf("single-line paste kept a newline: %q", string(single.line))
+	}
+}

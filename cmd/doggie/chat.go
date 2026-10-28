@@ -101,7 +101,7 @@ func chatCmd(args []string) error {
 		o.host = newHosting(*client.config, factories())
 		defer func() {
 			if o.host.own != nil && ui.IsInteractive() {
-				fmt.Fprintln(ui, "· stopping DOGGIE...")
+				notice(ui, "· stopping DOGGIE...")
 			}
 			o.host.close()
 		}()
@@ -116,7 +116,7 @@ func chatCmd(args []string) error {
 	}
 	defer conn.Close()
 	if ui.IsInteractive() {
-		fmt.Fprintf(ui, "· talking with DOGGIE at %s on %s; /help lists the commands, Ctrl+D quits\n", url, o.channel)
+		notice(ui, fmt.Sprintf("· talking with DOGGIE at %s on %s; /help lists the commands, Ctrl+D quits", url, o.channel))
 	}
 	return chat(ctx, conn, ui, states, o)
 }
@@ -131,7 +131,30 @@ func openChatUI() (*console.Console, error) {
 
 // chatConsole is how the chat's console edits: answers, which may carry
 // secrets, aren't kept for Up and Down.
-var chatConsole = console.Options{Prompt: "you> ", MaxRunes: events.MaxUtteranceRunes, Forget: isAnswer}
+var chatConsole = console.Options{
+	Prompt: "› ", PromptRole: console.Accent, EchoGap: true,
+	MaxRunes: events.MaxUtteranceRunes, Forget: isAnswer,
+}
+
+// assistantName is the name replies show under.
+const assistantName = "DOGGIE"
+
+// activityUI shows that DOGGIE is working on something, as an interactive
+// console does.
+type activityUI interface {
+	SetActivity(text string)
+}
+
+// thinking is the activity shown while DOGGIE works on what was said.
+const thinking = "thinking"
+
+// chatView prints replies on ui: with looks on a console that has them.
+func chatView(ui chatUI) *replyView {
+	if p, ok := ui.(printer); ok && ui.IsInteractive() {
+		return newStyledView(p, assistantName)
+	}
+	return newReplyView(ui)
+}
 
 // dialChat connects the chat to the bus, reporting what happens to the
 // connection on states.
@@ -175,14 +198,14 @@ func startHere(ctx context.Context, ui chatUI, client clientFlags, states chan<-
 	if !ui.IsInteractive() {
 		w = os.Stderr
 	}
-	fmt.Fprintf(w, "· DOGGIE wasn't running: started it here, logging to %s; it stops when you quit\n", host.logPath)
+	notice(w, fmt.Sprintf("· DOGGIE wasn't running: started it here, logging to %s; it stops when you quit", host.logPath))
 	return conn, url, nil
 }
 
 // stopHere stops the DOGGIE doggie run started, on purpose.
 func stopHere(ui chatUI, own *core) {
 	if ui.IsInteractive() {
-		fmt.Fprintln(ui, "· stopping DOGGIE...")
+		notice(ui, "· stopping DOGGIE...")
 	}
 	stopCore(own, events.StopOnPurpose)
 }
@@ -223,9 +246,9 @@ func runWithChat(ctx context.Context, cfg config.Config, selected []factory, cli
 	}
 	defer conn.Close()
 	if cfg.UsingDefaults {
-		fmt.Fprintf(ui, "· no config file at %s, using defaults\n", cfg.File)
+		notice(ui, fmt.Sprintf("· no config file at %s, using defaults", cfg.File))
 	}
-	fmt.Fprintf(ui, "· DOGGIE is running, logging to %s; /help lists the commands, Ctrl+D stops it\n", logPath)
+	notice(ui, fmt.Sprintf("· DOGGIE is running, logging to %s; /help lists the commands, Ctrl+D stops it", logPath))
 	return chatSession(ctx, conn, ui, states, own, defaultChatOptions())
 }
 
@@ -328,6 +351,8 @@ type chatState struct {
 	takeover <-chan time.Time
 	// handedOver fires once a DOGGIE run here is handed over.
 	handedOver chan struct{}
+	// activity is what the chat shows DOGGIE doing, if anything.
+	activity string
 
 	board *taskBoard
 	// lists and lookups deliver what the board asked for.
@@ -380,7 +405,7 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 	}
 
 	c := &chatState{
-		ui: ui, view: newReplyView(ui), o: o, self: conn.Name(), host: o.host,
+		ui: ui, view: chatView(ui), o: o, self: conn.Name(), host: o.host,
 		handedOver: make(chan struct{}, 1),
 		unanswered: map[string]time.Time{},
 		started:    time.Now(),
@@ -389,6 +414,7 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 		lookups:    make(chan boardLookup, maxBoardTasks),
 	}
 	defer ui.SetStatus("")
+	defer c.showActivity("")
 	listActive(sctx, conn, c.lists)
 	toSend := make(chan string, 64)
 	results := make(chan sent, 64)
@@ -414,6 +440,7 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 	// idleSince is the last activity, for a piped chat to know when to stop.
 	idleSince := time.Now()
 	for {
+		c.showActivity(c.activityNow(inFlight))
 		select {
 		case <-ctx.Done():
 			return nil
@@ -863,4 +890,39 @@ func ended(ctx context.Context) error {
 		return nil
 	}
 	return errors.New("the connection to DOGGIE closed")
+}
+
+// activityNow is what DOGGIE is doing for this chat, if anything: thinking
+// while something said here waits for its answer and no reply is being
+// written, as when it uses a tool between two blocks.
+func (c *chatState) activityNow(inFlight int) string {
+	if (inFlight > 0 || len(c.unanswered) > 0) && c.view.open == nil && !c.down {
+		return thinking
+	}
+	return ""
+}
+
+// showActivity shows text as DOGGIE's activity, if it changed and the UI
+// can show one.
+func (c *chatState) showActivity(text string) {
+	a, ok := c.ui.(activityUI)
+	if !ok || text == c.activity {
+		return
+	}
+	c.activity = text
+	a.SetActivity(text)
+}
+
+// notice prints one of the chat's own notes on w, muted on a console with
+// looks.
+func notice(w io.Writer, text string) {
+	p, styled := w.(printer)
+	if ui, ok := w.(interface{ IsInteractive() bool }); !ok || !ui.IsInteractive() {
+		styled = false
+	}
+	if !styled {
+		fmt.Fprintln(w, text)
+		return
+	}
+	p.Print(console.Text{Text: text + "\n", Role: console.Muted, Wrap: true})
 }

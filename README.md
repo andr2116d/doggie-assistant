@@ -85,25 +85,36 @@ In a terminal, `doggie run` opens a chat with DOGGIE right there,
 
 ### Talk to it
 
-Type a sentence and press Enter. Keep typing while DOGGIE answers or works: replies show as they are written, notices about tasks arrive when they happen, and the tasks in progress show on a line just above the one you type:
+Type a sentence and press Enter. Keep typing while DOGGIE answers or works: a spinner shows while it thinks, replies flow in at a steady pace as they are written, notices about tasks arrive when they happen, and the tasks in progress show on a line just above the one you type:
 
 ```
-you> Remind me in 10 seconds to stretch, and tell me a short joke meanwhile.
-doggie> On it.
-doggie> Timer's running. Meanwhile: I told my computer I needed a break, and it sent me a vacation of cookies I couldn't refuse. I'll let you know when it's time to stretch.
+› Remind me in 10 seconds to stretch, and tell me a short joke meanwhile.
+
+DOGGIE  On it.
+
+DOGGIE  Timer's running. Meanwhile: I told my computer I needed a break,
+        and it sent me a vacation of cookies I couldn't refuse. I'll let
+        you know when it's time to stretch.
 · t1 Remind to stretch in 10 secon…: 5/10 s (50%)
-you> _
+› _
 ```
 
 A moment later the status line is gone and the notice is in. Then a sensitive task, started here with `doggie task start -thread terminal -sensitive demo.ask ...`, asks for a confirmation only you may give:
 
 ```
-doggie> Time to stretch, Alex. Your ten seconds are up, and the joke was better than the cookies deserved.
+DOGGIE  Time to stretch, Alex. Your ten seconds are up, and the joke was
+        better than the cookies deserved.
 · t2 asks: "Pay 40 EUR now?" [yes | no]. Only you may answer it: /answer t2 <answer>
-doggie> The electricity bill task is asking whether to pay 40 EUR now. Only you can answer that, so please reply to it yourself, directly, with yes or no. I can't answer it for you.
-you> /answer t2 yes
+
+DOGGIE  The electricity bill task is asking whether to pay 40 EUR now. Only
+        you can answer that, so please reply to it yourself, directly, with
+        yes or no. I can't answer it for you.
+
+› /answer t2 yes
 · answered t2
 ```
+
+Colors follow the terminal: 24-bit with `COLORTERM=truecolor`, 256 or the terminal's own 16 otherwise, and none with `NO_COLOR` set. Piped, the chat prints plain `doggie>` lines.
 
 On opening, the chat shows the last 5 turns of the conversation (`-history`, `0` for none).
 

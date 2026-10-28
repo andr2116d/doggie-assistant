@@ -7,11 +7,12 @@ import (
 )
 
 // Full-screen modes: the alternate screen, so leaving puts the terminal back
-// as it was; a hidden cursor; bracketed paste; and focus reports, so
-// animations can rest while the window is in the background.
+// as it was; a hidden cursor; bracketed paste; focus reports, so animations
+// can rest while the window is in the background; and the mouse, reported
+// as SGR, its moves only with a button down.
 const (
-	enterFull = "\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[?1004h"
-	leaveFull = "\x1b[?1004l\x1b[?2004l\x1b[0m\x1b[?25h\x1b[?1049l"
+	enterFull = "\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[?1004h\x1b[?1002h\x1b[?1006h"
+	leaveFull = "\x1b[?1006l\x1b[?1002l\x1b[?1004l\x1b[?2004l\x1b[0m\x1b[?25h\x1b[?1049l"
 )
 
 // maxGap is how many unchanged cells a frame writes again rather than move

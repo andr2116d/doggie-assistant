@@ -2,6 +2,7 @@ package console
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -40,14 +41,32 @@ const (
 	keyBottom     // Ctrl+End
 	keyFocusIn    // the window got the focus
 	keyFocusOut
+	keyMouse // a mouse button or wheel, in mouse
 )
 
 // key is a keystroke, or text pasted at once.
 type key struct {
-	kind keyKind
-	r    rune   // keyRune
-	text string // keyPaste, already one clean line
+	kind  keyKind
+	r     rune   // keyRune
+	text  string // keyPaste, already one clean line
+	mouse mouseEvent
 }
+
+// mouseEvent is what the mouse did, at a cell counted from 0.
+type mouseEvent struct {
+	x, y int
+	// button is 0 for the left one, 1 the middle, 2 the right, or a
+	// wheel: wheelUp or wheelDown.
+	button int
+	// drag is set when it moved with the button down; release when the
+	// button went up.
+	drag, release bool
+}
+
+const (
+	wheelUp   = 64
+	wheelDown = 65
+)
 
 const (
 	pasteStart = "\x1b[200~"
@@ -263,6 +282,12 @@ func (d *decoder) csi() (*key, int, bool) {
 	}
 	params := string(d.buf[2:i])
 	n := i + 1
+	if d.full && strings.HasPrefix(params, "<") && (final == 'M' || final == 'm') {
+		if m, ok := sgrMouse(params[1:], final == 'm'); ok {
+			return &key{kind: keyMouse, mouse: m}, n, true
+		}
+		return nil, n, true
+	}
 	if final == '~' {
 		switch params {
 		case "200":
@@ -330,4 +355,25 @@ func (d *decoder) csi() (*key, int, bool) {
 func pasted(text string) string {
 	text = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(text)
 	return sanitize(text, true)
+}
+
+// sgrMouse decodes the parameters of an SGR mouse report, "b;x;y": the
+// button and its modifiers, and the 1-based cell.
+func sgrMouse(params string, release bool) (mouseEvent, bool) {
+	parts := strings.Split(params, ";")
+	if len(parts) != 3 {
+		return mouseEvent{}, false
+	}
+	var n [3]int
+	for i, p := range parts {
+		v, err := strconv.Atoi(p)
+		if err != nil || v < 0 || v > 1<<16 {
+			return mouseEvent{}, false
+		}
+		n[i] = v
+	}
+	b := n[0] &^ (4 | 8 | 16) // without Shift, Alt and Ctrl
+	m := mouseEvent{x: n[1] - 1, y: n[2] - 1, release: release, drag: b&32 != 0}
+	m.button = b &^ 32
+	return m, m.x >= 0 && m.y >= 0
 }

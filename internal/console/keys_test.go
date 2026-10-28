@@ -130,3 +130,30 @@ func TestFullScreenKeys(t *testing.T) {
 		t.Errorf("inline %+v", k)
 	}
 }
+
+func TestMouseKeys(t *testing.T) {
+	d := decoder{full: true}
+	keys := d.feed([]byte("\x1b[<0;5;3M\x1b[<32;9;4M\x1b[<0;9;4m\x1b[<64;1;1M\x1b[<65;1;1M\x1b[<4;2;2M\x1b[<0;99999999;1M\x1b[<0;0;1M"))
+	var got []mouseEvent
+	for _, k := range keys {
+		if k.kind != keyMouse {
+			t.Fatalf("not a mouse key: %+v", k)
+		}
+		got = append(got, k.mouse)
+	}
+	want := []mouseEvent{
+		{x: 4, y: 2},
+		{x: 8, y: 3, drag: true},
+		{x: 8, y: 3, release: true},
+		{button: wheelUp},
+		{button: wheelDown},
+		{x: 1, y: 1}, // with Shift
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("%+v\nwant %+v", got, want)
+	}
+	var inline decoder
+	if k := inline.feed([]byte("\x1b[<0;5;3Ma")); len(k) != 1 || k[0].r != 'a' {
+		t.Errorf("the inline console took a mouse report: %+v", k)
+	}
+}

@@ -312,3 +312,63 @@ func paints(s *Screen) int {
 	s.do(func(v *view) { v.quiet = true; n <- v.paints })
 	return <-n
 }
+
+// Dragging over a reply marks it and copies its text, without the frame
+// of its bubble; the wheel scrolls.
+func TestScreenCopies(t *testing.T) {
+	copied := make(chan string, 4)
+	old := copyText
+	copyText = func(_ Terminal, text string) { copied <- text }
+	t.Cleanup(func() { copyText = old })
+	texts := testTexts
+	texts.Copied = "copiado"
+	s, f := openScreen(t, 60, 16, ScreenOptions{Texts: texts})
+	s.Reply("r", "Listo, te aviso en tres minutos.")
+	rows := f.waitShown(t, "│ Listo, te aviso en tres minutos. │")
+	y := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, "Listo") })
+	x := strings.Index(rows[y], "│")
+	// From the frame on the left, over the row, to past the frame below.
+	f.typeKeys(t, fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<32;%d;%dM\x1b[<32;%d;%dM\x1b[<0;%d;%dm", x+1, y, x+5, y+1, 59, y+2, 59, y+2))
+	select {
+	case got := <-copied:
+		if got != "Listo, te aviso en tres minutos." {
+			t.Errorf("copied %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing copied")
+	}
+	f.waitShown(t, "copiado")
+	// A click alone copies nothing, and a key clears what was marked.
+	f.typeKeys(t, fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<0;%d;%dm", x+3, y+1, x+3, y+1))
+	f.typeKeys(t, "a")
+	select {
+	case got := <-copied:
+		t.Errorf("a click copied %q", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	for i := range 20 {
+		s.Reply(fmt.Sprint(i), fmt.Sprintf("relleno %d", i))
+	}
+	f.waitShown(t, "relleno 19")
+	f.typeKeys(t, "\x1b[<64;5;5M\x1b[<64;5;5M\x1b[<64;5;5M")
+	f.waitGone(t, "relleno 19")
+}
+
+func TestSelectedTextKeepsInnerLines(t *testing.T) {
+	v := &view{body: rect{0, 0, 20, 4}}
+	var g grid
+	g.resize(20, 4)
+	g.text(0, 0, 20, "╭──────────╮", 0)
+	g.text(0, 1, 20, "│ uno dos  │", 0)
+	g.text(0, 2, 20, "│ tres     │", 0)
+	g.text(0, 3, 20, "╰──────────╯", 0)
+	v.sel = selection{on: true, ax: 0, ay: 0, bx: 19, by: 3}
+	if got := v.selectedText(&g); got != "uno dos\ntres" {
+		t.Errorf("%q", got)
+	}
+	// Backwards, from the end to the start, it is the same.
+	v.sel = selection{on: true, ax: 19, ay: 3, bx: 0, by: 0}
+	if got := v.selectedText(&g); got != "uno dos\ntres" {
+		t.Errorf("backwards %q", got)
+	}
+}

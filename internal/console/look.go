@@ -41,6 +41,7 @@ type looks struct {
 	pill                          styleID // "new messages below"
 	panelMark, panelWait          styleID // marks on the panel
 	panelGood, panelBad           styleID
+	selected                      styleID // text marked with the mouse
 }
 
 func newLooks(t *styleTable, p palette) looks {
@@ -76,5 +77,6 @@ func newLooks(t *styleTable, p palette) looks {
 		panelWait:   on(p.wait, p.panel, false),
 		panelGood:   on(p.good, p.panel, false),
 		panelBad:    on(p.bad, p.panel, false),
+		selected:    on(p.fg, p.accentLine, false),
 	}
 }

@@ -21,6 +21,8 @@ type ScreenTexts struct {
 	TooSmall          string // alone on a screen too small for the chat
 	// Newer tells how many messages came while scrolled up.
 	Newer func(n int) string
+	// Copied tells, for a moment, that what was marked was copied.
+	Copied string
 	// Clock tells the time on the top bar; nil shows none.
 	Clock func(time.Time) string
 }
@@ -221,6 +223,10 @@ type view struct {
 	// unfocused is set while the window is in the background, where
 	// nothing needs to move.
 	unfocused bool
+	// sel is the text marked with the mouse; copiedAt when it was last
+	// copied, which the hints tell for a while.
+	sel      selection
+	copiedAt time.Time
 	// paints counts the frames made, drawn or not; quiet is set by an op
 	// that changes nothing on screen, so it asks for none.
 	paints int
@@ -284,6 +290,11 @@ func (s *Screen) loop(t Terminal, v *view) {
 				continue
 			}
 			for _, k := range dec.feed(p) {
+				if k.kind == keyMouse {
+					v.mouse(k.mouse, t, s)
+					continue
+				}
+				v.sel = selection{} // a key ends what was marked
 				v.key(k, &q)
 			}
 			want()
@@ -448,6 +459,9 @@ func (v *view) paint(g *grid) (int, int, bool) {
 	if v.taskStatus != "" && r.panel.empty() {
 		c.hints = v.taskStatus // where the panel doesn't show the tasks
 	}
+	if time.Since(v.copiedAt) < copiedFor && t.Copied != "" {
+		c.hints = t.Copied
+	}
 	// An activity shows from the first move of its dots on, so one set
 	// and cleared at once, as between two blocks of a reply, never shows.
 	v.convo.activity = ""
@@ -465,6 +479,9 @@ func (v *view) paint(g *grid) (int, int, bool) {
 	v.convo.draw(g, r.body, v.lk, t.Newer)
 	if !r.panel.empty() {
 		v.drawPanel(g, r.panel)
+	}
+	if v.sel.on {
+		v.highlight(g)
 	}
 	x, y := v.drawInput(g, r.input)
 	return x, y, true
@@ -646,4 +663,118 @@ func (v *view) drawPanel(g *grid, r rect) {
 		textIn(g, at+1, y, right, n.text, lk.panelText)
 		y++
 	}
+}
+
+// selection is text marked with the mouse, from the cell where the drag
+// started to where it is, in the conversation.
+type selection struct {
+	on, dragging   bool
+	ax, ay, bx, by int
+}
+
+// ordered is the selection's start and end, in reading order.
+func (s selection) ordered() (x0, y0, x1, y1 int) {
+	if s.ay < s.by || s.ay == s.by && s.ax <= s.bx {
+		return s.ax, s.ay, s.bx, s.by
+	}
+	return s.bx, s.by, s.ax, s.ay
+}
+
+// wheelRows is how many rows a turn of the wheel scrolls.
+const wheelRows = 3
+
+// copiedFor is how long the hints tell what was copied.
+const copiedFor = 2 * time.Second
+
+// mouse applies what the mouse did: the wheel scrolls, and a drag with the
+// left button marks text in the conversation, copied when it ends.
+func (v *view) mouse(m mouseEvent, t Terminal, s *Screen) {
+	b := v.body
+	inBody := m.x >= b.x && m.x < b.x+b.w && m.y >= b.y && m.y < b.y+b.h
+	clamp := func(x, y int) (int, int) {
+		return min(max(x, b.x), b.x+b.w-1), min(max(y, b.y), b.y+b.h-1)
+	}
+	switch {
+	case m.button == wheelUp, m.button == wheelDown:
+		rows := wheelRows
+		if m.button == wheelDown {
+			rows = -rows
+		}
+		v.convo.scrollBy(rows)
+		v.sel = selection{} // what was marked moves away
+	case m.button != 0:
+	case m.release:
+		if v.sel.dragging && v.sel.on {
+			if text := v.selectedText(&v.fs.g); text != "" {
+				copyText(t, text)
+				v.copiedAt = time.Now()
+				time.AfterFunc(copiedFor, func() { s.do(func(*view) {}) }) // to take the note away
+			}
+		}
+		v.sel.dragging = false
+	case m.drag:
+		if v.sel.dragging {
+			v.sel.bx, v.sel.by = clamp(m.x, m.y)
+			v.sel.on = v.sel.bx != v.sel.ax || v.sel.by != v.sel.ay
+		}
+	case inBody:
+		v.sel = selection{dragging: true, ax: m.x, ay: m.y, bx: m.x, by: m.y}
+	default:
+		v.sel = selection{}
+	}
+}
+
+// selectedRange calls f for each row of the selection with the columns
+// selected on it, [from, to).
+func (v *view) selectedRange(f func(y, from, to int)) {
+	x0, y0, x1, y1 := v.sel.ordered()
+	left, right := v.body.x, v.body.x+v.body.w
+	for y := y0; y <= y1; y++ {
+		from, to := left, right
+		if y == y0 {
+			from = x0
+		}
+		if y == y1 {
+			to = x1 + 1
+		}
+		f(y, from, to)
+	}
+}
+
+// highlight draws the selection over what is on screen.
+func (v *view) highlight(g *grid) {
+	v.selectedRange(func(y, from, to int) {
+		for x := from; x < min(to, g.W); x++ {
+			c := *g.at(x, y)
+			c.s = v.lk.selected
+			g.set(x, y, c)
+		}
+	})
+}
+
+// boxRunes are the frames of the bubbles, left out of what is copied.
+const boxRunes = "│╭╮╰╯─"
+
+// selectedText is the text selected on g, row by row, without the frames
+// of the bubbles and the blanks around them.
+func (v *view) selectedText(g *grid) string {
+	var rows []string
+	v.selectedRange(func(y, from, to int) {
+		var b strings.Builder
+		for x := from; x < min(to, g.W); x++ {
+			c := g.at(x, y)
+			switch {
+			case c.w == 0:
+			case c.text == "":
+				b.WriteByte(' ')
+			default:
+				b.WriteString(c.text)
+			}
+		}
+		row := strings.Trim(b.String(), " "+boxRunes)
+		if row != "" {
+			rows = append(rows, row)
+		}
+	})
+	return strings.Join(rows, "\n")
 }

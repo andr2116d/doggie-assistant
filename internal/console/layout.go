@@ -1,0 +1,143 @@
+package console
+
+import (
+	"strings"
+
+	"github.com/clipperhouse/uax29/v2/graphemes"
+)
+
+// rect is a part of the screen: w columns by h rows from x, y.
+type rect struct{ x, y, w, h int }
+
+func (r rect) empty() bool { return r.w <= 0 || r.h <= 0 }
+
+// The full screen's measures, in columns and rows.
+const (
+	panelCols     = 30  // the side panel, with its rule
+	panelMinCols  = 100 // narrower screens hide the panel
+	maxInputRows  = 6   // the input box grows up to these lines, then scrolls
+	fullMinCols   = 40  // smaller screens only ask to be made bigger
+	fullMinRows   = 10
+	conversationX = 2 // margin of the conversation on each side
+)
+
+// regions are where each part of the full screen goes. A region that
+// doesn't show is empty.
+type regions struct {
+	header, body, panel, input, footer rect
+	// tooSmall is set when the screen can't hold the chat at all.
+	tooSmall bool
+}
+
+// layout places the parts on a w×h screen: a bar on top, the input box
+// with inputRows lines (1 to maxInputRows) and a row of hints at the
+// bottom, and between them the conversation, with the panel on its right
+// when withPanel is set and the screen is wide enough.
+func layout(w, h int, withPanel bool, inputRows int) regions {
+	if w < fullMinCols || h < fullMinRows {
+		return regions{tooSmall: true}
+	}
+	inputRows = min(max(inputRows, 1), maxInputRows, h-fullMinRows+1)
+	var r regions
+	r.header = rect{0, 0, w, 1}
+	r.footer = rect{0, h - 1, w, 1}
+	r.input = rect{0, h - 1 - (inputRows + 2), w, inputRows + 2}
+	body := rect{0, 1, w, r.input.y - 1}
+	if withPanel && w >= panelMinCols {
+		r.panel = rect{w - panelCols, body.y, panelCols, body.h}
+		body.w -= panelCols
+	}
+	r.body = body
+	return r
+}
+
+// textIn writes s from x on row y of g, up to column limit, cut with "…"
+// when it doesn't fit, and returns the column after it.
+func textIn(g *grid, x, y, limit int, s string, st styleID) int {
+	if textWidth(s) <= limit-x {
+		return g.text(x, y, limit, s, st)
+	}
+	if limit-x < 1 {
+		return x
+	}
+	x = g.text(x, y, limit-1, s, st)
+	return g.text(x, y, limit, "…", st)
+}
+
+// textRight writes s ending just before column end, cut if it doesn't fit
+// after column start, and returns the column it begins at.
+func textRight(g *grid, start, end, y int, s string, st styleID) int {
+	w := min(textWidth(s), end-start)
+	x := end - w
+	textIn(g, x, y, end, s, st)
+	return x
+}
+
+// border draws a rounded frame on the edge of r.
+func border(g *grid, r rect, st styleID) {
+	if r.w < 2 || r.h < 2 {
+		return
+	}
+	right, bottom := r.x+r.w-1, r.y+r.h-1
+	g.put(r.x, r.y, "╭", 1, st)
+	g.put(right, r.y, "╮", 1, st)
+	g.put(r.x, bottom, "╰", 1, st)
+	g.put(right, bottom, "╯", 1, st)
+	for x := r.x + 1; x < right; x++ {
+		g.put(x, r.y, "─", 1, st)
+		g.put(x, bottom, "─", 1, st)
+	}
+	for y := r.y + 1; y < bottom; y++ {
+		g.put(r.x, y, "│", 1, st)
+		g.put(right, y, "│", 1, st)
+	}
+}
+
+// eighths are the blocks a progress bar ends in, an eighth of a cell each.
+var eighths = []string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"}
+
+// bar draws a progress bar w cells wide from x on row y, done of the way
+// (0 to 1), to an eighth of a cell.
+func bar(g *grid, x, y, w int, done float64, fill, rest styleID) {
+	done = min(max(done, 0), 1)
+	n := int(done*float64(w*8) + 0.5)
+	for i := range w {
+		switch {
+		case n >= 8*(i+1):
+			g.put(x+i, y, "█", 1, fill)
+		case n > 8*i:
+			g.put(x+i, y, eighths[n-8*i], 1, fill)
+		default:
+			g.put(x+i, y, "─", 1, rest)
+		}
+	}
+}
+
+// clusters splits s into its grapheme clusters, without what mustn't
+// reach the terminal.
+func clusters(s string) []string {
+	var out []string
+	it := graphemes.FromString(s)
+	for it.Next() {
+		if c := safeCluster(it.Value()); c != "" && clusterWidth(c) > 0 {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// centered is the column where text w columns wide starts centered in r.
+func centered(r rect, w int) int { return r.x + max((r.w-w)/2, 0) }
+
+// tooSmallNote is shown alone on a screen too small for the chat.
+func tooSmallNote(g *grid, st styleID, note string) {
+	g.fill(0, 0, g.W, g.H, st)
+	lines := strings.Split(note, "\n")
+	y := max((g.H-len(lines))/2, 0)
+	for i, l := range lines {
+		if y+i >= g.H {
+			break
+		}
+		textIn(g, centered(rect{0, 0, g.W, g.H}, textWidth(l)), y+i, g.W, l, st)
+	}
+}

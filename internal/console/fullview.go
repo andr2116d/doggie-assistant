@@ -221,6 +221,10 @@ type view struct {
 	// unfocused is set while the window is in the background, where
 	// nothing needs to move.
 	unfocused bool
+	// paints counts the frames made, drawn or not; quiet is set by an op
+	// that changes nothing on screen, so it asks for none.
+	paints int
+	quiet  bool
 	// inputScroll is the first row of what is typed shown in the box.
 	inputScroll int
 	body        rect // where the conversation was last drawn
@@ -266,7 +270,8 @@ func (s *Screen) loop(t Terminal, v *view) {
 			pace.start(frameEvery)
 			v.pacing = false
 		}
-		if v.activity != "" && !v.unfocused {
+		// The dots move only where they can be seen: in front, at the bottom.
+		if v.activity != "" && !v.unfocused && v.convo.scroll == 0 {
 			anim.start(activityEvery)
 		} else {
 			anim.stop()
@@ -284,7 +289,10 @@ func (s *Screen) loop(t Terminal, v *view) {
 			want()
 		case op := <-s.ops:
 			op(v)
-			want()
+			if !v.quiet {
+				want()
+			}
+			v.quiet = false
 		case ask := <-s.hides:
 			if q.hidden != nil {
 				q.hidden <- "" // replaced
@@ -419,6 +427,7 @@ func (v *view) ghost() string {
 
 // paint draws the whole screen, and returns where the cursor goes.
 func (v *view) paint(g *grid) (int, int, bool) {
+	v.paints++
 	t := v.opts.Texts
 	width := g.W - 8 // the box's frame, margins, prompt and padding
 	rows, _, _ := inputRows(v.ed.line, v.ed.pos, max(width, 1))

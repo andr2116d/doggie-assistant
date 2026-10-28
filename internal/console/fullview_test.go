@@ -229,6 +229,18 @@ func TestScreenActivity(t *testing.T) {
 		t.Errorf("%d frames drawn in the background", n)
 	}
 	f.typeKeys(t, "\x1b[I")
+	// Scrolled up, the dots are out of sight: nothing moves either.
+	for i := range 30 {
+		s.Reply(fmt.Sprint("m", i), "relleno")
+	}
+	f.typeKeys(t, "\x1b[5~")
+	time.Sleep(50 * time.Millisecond)
+	beforePaints := paints(s)
+	time.Sleep(150 * time.Millisecond)
+	if n := paints(s) - beforePaints; n > 0 {
+		t.Errorf("%d frames made scrolled up", n)
+	}
+	f.typeKeys(t, "\x1b[1;5F")
 	s.SetActivity("")
 	f.waitGone(t, "revisando tu agenda")
 	s.SetStatus("⏱ ropa 7:41 · +1 elsewhere")
@@ -291,4 +303,12 @@ func TestScreenPanelNarrow(t *testing.T) {
 	if strings.Contains(strings.Join(f.shown(t), "\n"), "TAREAS") {
 		t.Error("a panel on a narrow screen")
 	}
+}
+
+// paints is how many frames s made, drawn or not: each is the screen
+// waking up.
+func paints(s *Screen) int {
+	n := make(chan int)
+	s.do(func(v *view) { v.quiet = true; n <- v.paints })
+	return <-n
 }

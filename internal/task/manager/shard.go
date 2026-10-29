@@ -484,10 +484,19 @@ func (s *shard) alive(id string) {
 // without being able to report (crash, power loss, network cut).
 func (s *shard) checkLiveness(ctx context.Context) {
 	limit := heartbeatTolerance * s.opts.HeartbeatInterval
-	for _, t := range s.sorted() {
+	// Only active tasks beat: going through them, not through every task
+	// kept, keeps the check cheap however many tasks ended today.
+	var silent []*task.Task
+	for id, last := range s.lastBeat {
+		if t, ok := s.tasks[id]; ok && time.Since(last) > limit {
+			silent = append(silent, t)
+		}
+	}
+	sortByID(silent)
+	for _, t := range silent {
 		last, ok := s.lastBeat[t.ID()]
-		if !ok || t.Status().Terminal() || time.Since(last) <= limit {
-			continue
+		if !ok || t.Status().Terminal() {
+			continue // failing a task before it cancelled this one
 		}
 		s.fail(ctx, t, fmt.Sprintf("worker stopped responding: no heartbeat for %s", time.Since(last).Round(time.Millisecond)))
 		s.controlWorker(ctx, t, events.TaskControl{Action: events.ControlCancel, Reason: "no heartbeat"})
@@ -617,12 +626,17 @@ func (s *shard) sorted() []*task.Task {
 	for _, t := range s.tasks {
 		out = append(out, t)
 	}
-	slices.SortFunc(out, func(a, b *task.Task) int {
+	sortByID(out)
+	return out
+}
+
+// sortByID puts tasks in creation order.
+func sortByID(tasks []*task.Task) {
+	slices.SortFunc(tasks, func(a, b *task.Task) int {
 		na, _ := idNumber(a.ID())
 		nb, _ := idNumber(b.ID())
 		return na - nb
 	})
-	return out
 }
 
 // checkCausedBy bounds what a task says caused it: it is logged.

@@ -65,7 +65,7 @@ prompts/              the system prompt and DOGGIE's own notices
 ## Requirements
 
 - Linux or macOS.
-- [Go](https://go.dev/dl/) 1.27.1 or newer.
+- [Go](https://go.dev/dl/) 1.27.3 or newer.
 - The `claude` CLI, logged in with a Claude subscription: run `claude` once and log in. DOGGIE removes `ANTHROPIC_API_KEY` from the CLI's environment, so it always uses that login.
 
 ## Install

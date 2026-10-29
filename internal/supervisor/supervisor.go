@@ -106,7 +106,7 @@ func (s *Supervisor) supervise(ctx context.Context, c Component) {
 		log.Debug("starting")
 		started := time.Now()
 		runCtx, cancelRun := context.WithCancel(ctx)
-		err, stack := runSafely(runCtx, c)
+		stack, err := runSafely(runCtx, c)
 		cancelRun()
 
 		if ctx.Err() != nil {
@@ -140,12 +140,12 @@ func (s *Supervisor) supervise(ctx context.Context, c Component) {
 }
 
 // runSafely runs c and turns a panic into an error plus its stack trace.
-func runSafely(ctx context.Context, c Component) (err error, stack []byte) {
+func runSafely(ctx context.Context, c Component) (stack []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic: %v", r)
 			stack = debug.Stack()
 		}
 	}()
-	return c.Run(ctx), nil
+	return nil, c.Run(ctx)
 }

@@ -442,7 +442,7 @@ func textByClusters(b *grid, x, y, limit int, s string, st styleID) int {
 
 // The fast path for simple runes writes what splitting into clusters does.
 func FuzzTextFastPath(f *testing.F) {
-	f.Add("Listo, te aviso en tres minutos ñandú ¿qué? é 日本 👍🏽 ­̀x", uint8(30))
+	f.Add("Listo, te aviso en tres minutos ñandú ¿qué? é 日本 👍🏽 \u00ad̀x", uint8(30))
 	f.Fuzz(func(t *testing.T, s string, w uint8) {
 		cols := 1 + int(w)%60
 		var fast, slow grid

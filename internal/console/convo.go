@@ -549,7 +549,6 @@ func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk l
 		if visible(y) {
 			hline(g, left, y, w, "╰", "╯", lk.youEdge)
 		}
-		y++
 	default:
 		for j, l := range m.lines(cols - 2) {
 			if visible(y) {

@@ -90,15 +90,6 @@ func crash(h *hosting) {
 	own.logFile.Close()
 }
 
-func dataDir(t *testing.T, client clientFlags) string {
-	t.Helper()
-	cfg, err := config.Load(*client.config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cfg.DataDir
-}
-
 func TestChatTakesOverADoggieThatDied(t *testing.T) {
 	fastTakeover(t)
 	client := localDoggie(t)

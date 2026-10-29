@@ -11,12 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -68,13 +70,99 @@ func EnsureTLS(dir string, hosts []string, now time.Time) (TLSFiles, error) {
 	return files, issueServerCert(files, ca, caKey, hosts, now)
 }
 
-// ServerTLSConfig loads the server certificate for the NATS server.
-func ServerTLSConfig(files TLSFiles) (*tls.Config, error) {
+// ServerTLS returns the NATS server's TLS config, serving the certificate in
+// dir, made by EnsureTLS for hosts(). DOGGIE runs for months and its
+// addresses change, so the certificate is reissued while it runs: when it
+// nears expiry, or when a satellite reaches the server through a name or
+// address it doesn't cover and hosts() now lists, e.g. a Tailscale address
+// that came up after DOGGIE did. Names that hosts() doesn't list are never
+// added, so a client can't have certificates made for whatever it asks.
+func ServerTLS(dir string, hosts func() []string, log *slog.Logger) (*tls.Config, error) {
+	s := &certSource{dir: dir, hosts: hosts, log: log, now: time.Now}
+	if err := s.load(hosts()); err != nil {
+		return nil, err
+	}
+	// No Certificates: with one, crypto/tls skips GetCertificate for
+	// clients that dial an IP, which send no server name.
+	return &tls.Config{GetCertificate: s.get, MinVersion: tls.VersionTLS13}, nil
+}
+
+// certSource serves the server certificate and reissues it when needed.
+// Handshakes run concurrently: mu guards the fields below it.
+type certSource struct {
+	dir   string
+	hosts func() []string
+	log   *slog.Logger
+	now   func() time.Time
+
+	mu      sync.Mutex
+	cert    *tls.Certificate
+	covered []string // the hosts cert was made for
+}
+
+func (s *certSource) get(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	asked := askedHost(hello)
+	expiring := s.now().Add(renewBefore).After(s.cert.Leaf.NotAfter)
+	if !expiring && (asked == "" || s.cert.Leaf.VerifyHostname(asked) == nil) {
+		return s.cert, nil
+	}
+	hosts := s.hosts()
+	if !expiring && slices.Equal(hosts, s.covered) {
+		return s.cert, nil // not one of DOGGIE's names: the client fails to verify it
+	}
+	if err := s.load(hosts); err != nil {
+		s.log.Warn("bus: could not reissue the server certificate; serving the old one", "err", err)
+		return s.cert, nil
+	}
+	s.log.Info("bus: server certificate reissued", "hosts", hosts, "for", asked)
+	return s.cert, nil
+}
+
+// load makes sure dir holds a certificate for hosts and loads it. A key
+// that doesn't match its certificate, e.g. after a crash between writing
+// one and the other, is replaced with a new pair.
+func (s *certSource) load(hosts []string) error {
+	files, err := EnsureTLS(s.dir, hosts, s.now())
+	if err != nil {
+		return err
+	}
 	cert, err := tls.LoadX509KeyPair(files.Cert, files.Key)
 	if err != nil {
-		return nil, fmt.Errorf("bus: load server certificate: %w", err)
+		if rerr := os.Remove(files.Cert); rerr != nil {
+			return fmt.Errorf("bus: load server certificate: %w", err)
+		}
+		if files, err = EnsureTLS(s.dir, hosts, s.now()); err != nil {
+			return err
+		}
+		if cert, err = tls.LoadX509KeyPair(files.Cert, files.Key); err != nil {
+			return fmt.Errorf("bus: load server certificate: %w", err)
+		}
 	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}, nil
+	if cert.Leaf == nil { // only filled in by default
+		if cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0]); err != nil {
+			return fmt.Errorf("bus: parse server certificate: %w", err)
+		}
+	}
+	s.cert, s.covered = &cert, hosts
+	return nil
+}
+
+// askedHost is the name or address a client reached the server by: the
+// name it asked for, or, as clients that dial an IP send none, the local
+// address of the connection.
+func askedHost(hello *tls.ClientHelloInfo) string {
+	if hello.ServerName != "" {
+		return hello.ServerName
+	}
+	if hello.Conn == nil {
+		return ""
+	}
+	if addr, ok := hello.Conn.LocalAddr().(*net.TCPAddr); ok {
+		return addr.IP.String()
+	}
+	return ""
 }
 
 // TLSHosts lists the names and addresses the server certificate must cover:
@@ -232,9 +320,15 @@ func writeKey(path string, key *ecdsa.PrivateKey) error {
 	return writePEM(path, "EC PRIVATE KEY", der, 0o600)
 }
 
+// writePEM replaces path at once, so a crash never leaves half a file.
 func writePEM(path, typ string, der []byte, perm os.FileMode) error {
 	data := pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: der})
-	if err := os.WriteFile(path, data, perm); err != nil {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return fmt.Errorf("bus: write %s: %w", path, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("bus: write %s: %w", path, err)
 	}
 	return nil

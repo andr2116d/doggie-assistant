@@ -16,7 +16,6 @@ import (
 	"slices"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
@@ -153,11 +152,9 @@ func startBus(ctx context.Context, cfg config.Config, log *slog.Logger) (*bus.Se
 	}
 	tlsOn := cfg.Bus.Listen != "" && cfg.Bus.TLS.Enabled
 	if tlsOn {
-		files, err := bus.EnsureTLS(tlsDir(cfg), bus.TLSHosts(cfg.Bus.Listen, cfg.Bus.TLS.ExtraHosts), time.Now())
-		if err != nil {
-			return nil, err
-		}
-		if opts.TLS, err = bus.ServerTLSConfig(files); err != nil {
+		hosts := func() []string { return bus.TLSHosts(cfg.Bus.Listen, cfg.Bus.TLS.ExtraHosts) }
+		var err error
+		if opts.TLS, err = bus.ServerTLS(tlsDir(cfg), hosts, log); err != nil {
 			return nil, err
 		}
 	} else if cfg.Bus.Listen != "" && !isLoopback(cfg.Bus.Listen) {

@@ -117,28 +117,33 @@ To run DOGGIE on its own, so chats come and go:
 doggie run
 ```
 
-In a terminal, `doggie run` opens a chat with DOGGIE right there,
- and its logs go to `~/.local/share/doggie/doggie.log`. Ctrl+D quits the chat and stops DOGGIE. To print the logs instead, e.g. under a service manager, use `doggie run --no-chat`.
+In a terminal, `doggie run` opens a chat with DOGGIE right there, and its logs go to `~/.local/share/doggie/doggie.log`. Ctrl+D quits the chat and stops DOGGIE. To print the logs instead, e.g. under a service manager, use `doggie run --no-chat`.
 
 ### Talk to it
 
 The chat fills the terminal. Type a sentence and press Enter, and keep typing while DOGGIE answers or works: replies flow in as they are written, the tasks in progress show in a panel on the right, and notices arrive when they happen:
 
 ```
- ◆ DOGGIE   ● online · terminal                                          Wed Oct 28 · 21:40
-                                                                    │
-                     Remind me in 10 seconds to stretch, and tell   │ TASKS
-                     me a short joke meanwhile.                     │
-                                                                    │ ● t1 Remind to stretch
-  DOGGIE                                                            │   ██████████─────────  50%
-  ╭──────────────────────────────────────────────────────────╮      │   5/10 s
-  │ On it: the timer is running. Meanwhile, a joke: why did  │      │
-  │ the math book look sad? It had too many problems.         │      │
-  ╰──────────────────────────────────────────────────────────╯      │
- ╭──────────────────────────────────────────────────────────────────────────────────────────╮
- │ ›                                                                                        │
- ╰──────────────────────────────────────────────────────────────────────────────────────────╯
-  /help commands · ↑ history · Ctrl+D quit                                       Tab: panel
+ ◆ DOGGIE   ● online · terminal                                                      Wed Oct 28 · 21:40
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                         ╭─ TASKS ────────────────────╮
+                                                                         │ ● Remind to stretch    50% │
+                                                                         │   ━━━━━━━━━━━━──────────── │
+                                                                         │ t1 · 5/10 s                │
+                    ╭────────────────────────────────────────────────╮   ╰────────────────────────────╯
+                    │  Remind me in 10 seconds to stretch, and tell  │
+                    │  me a short joke meanwhile.                    │
+                    ╰────────────────────────────────────────────────╯
+
+  DOGGIE
+  ╭───────────────────────────────────────────────────────────────╮
+  │  On it: the timer is running. Meanwhile, a joke: why did the  │
+  │  math book look sad? It had too many problems.                │
+  ╰───────────────────────────────────────────────────────────────╯
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ›                                                                                                  │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  /help commands · ↑ history · Ctrl+D quit                                                  Tab: panel
 ```
 
 - What you say goes on the right; DOGGIE's replies on the left, in violet bubbles, as markdown (**bold**, *italic*, `code`, lists, blocks of code). While it thinks, three dots move below the last message, with what it is doing.
@@ -224,9 +229,9 @@ DOGGIE_BUS_USER=kitchen DOGGIE_BUS_TOKEN=<token> DOGGIE_BUS_CA=ca.pem \
 
 For the shared token, leave out `DOGGIE_BUS_USER` and pass the contents of `bus.token` from the data dir.
 
-## Architecture
+## Components and roadmap
 
-- A modular monolith in Go with an embedded NATS event bus. Components never import each other, so any of them can move to its own process. Heavy or fragile pieces run as satellites.
+- A modular monolith in Go: heavy or fragile pieces run as satellites.
 - `doggie run` starts every component: `heartbeat`, `tasks` (the task manager), `demo` (demo tasks) and `brain`. Pick some with `--only` or `--except`.
 - A three-level brain: local reflexes → learned skills → LLM (through official CLIs, with tools exposed over MCP). Only the LLM level exists so far.
 

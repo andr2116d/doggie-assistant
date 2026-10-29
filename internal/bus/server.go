@@ -30,6 +30,16 @@ const (
 	EventLogStream = "EVENTS"
 )
 
+// Pings find links that went silent, as when a laptop sleeps or a tunnel
+// drops without closing: both ends ping every pingInterval, and drop a peer
+// that leaves more than maxPingsOut unanswered, so a dead link shows within
+// about (maxPingsOut+1) × pingInterval. They are variables so tests can
+// shorten them.
+var (
+	pingInterval = 10 * time.Second
+	maxPingsOut  = 2
+)
+
 // Options configures the embedded server.
 type Options struct {
 	// Listen is host:port for TCP clients. Empty means in-process only.
@@ -86,6 +96,8 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		StoreDir:                   opts.StoreDir,
 		NoSigs:                     true,
 		DisableJetStreamBanner:     true,
+		PingInterval:               pingInterval,
+		MaxPingsOut:                maxPingsOut,
 	}
 	if opts.TLS != nil {
 		sopts.TLS = true
@@ -270,6 +282,8 @@ func Dial(url string, opts DialOptions) (*Conn, error) {
 		nats.UserInfo(user, opts.Token),
 		nats.Name(opts.Name),
 		nats.MaxReconnects(-1),
+		nats.PingInterval(pingInterval),
+		nats.MaxPingsOutstanding(maxPingsOut),
 		errorHandler(opts.Log, opts.Name),
 	}
 	if opts.CAFile != "" {

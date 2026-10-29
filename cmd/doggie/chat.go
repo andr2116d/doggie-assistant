@@ -52,7 +52,9 @@ type chatOptions struct {
 	replyTimeout time.Duration
 	// slowReply is when to tell the user a sentence got no answer yet.
 	slowReply time.Duration
-	// sendTimeout bounds publishing one sentence.
+	// sendTimeout bounds publishing one sentence. While the connection is
+	// down, the publish waits for it, so what is said meanwhile goes out
+	// once it is back.
 	sendTimeout time.Duration
 	// history is how many past turns an interactive chat shows on opening.
 	history int
@@ -67,7 +69,7 @@ type chatOptions struct {
 
 func defaultChatOptions() chatOptions {
 	return chatOptions{channel: "terminal", thread: "terminal", wait: 20 * time.Second,
-		replyTimeout: 3 * time.Minute, slowReply: 20 * time.Second, sendTimeout: 5 * time.Second, history: defaultHistory}
+		replyTimeout: 3 * time.Minute, slowReply: 20 * time.Second, sendTimeout: 10 * time.Minute, history: defaultHistory}
 }
 
 func chatCmd(args []string) error {
@@ -473,6 +475,9 @@ func chat(ctx context.Context, conn *bus.Conn, ui chatUI, states <-chan connStat
 			case cmd != nil && cmd.name == "/answer" && cmd.id != "" && cmd.text == "" && ui.IsInteractive():
 				c.hidden, c.hiddenFor = ui.AskHidden(c.wordsOr().tr.f("answer for %s (hidden): ", short(cmd.id))), cmd.id
 			case cmd == nil:
+				if c.down {
+					c.say(console.NoticeWait, "no connection: it goes out when DOGGIE is back")
+				}
 				inFlight++
 				toSend <- sentence
 			case cmd.check(nil) != "":
@@ -649,7 +654,11 @@ func sender(ctx context.Context, conn *bus.Conn, subject bus.Subject[events.Utte
 		pctx, cancel := context.WithTimeout(ctx, o.sendTimeout)
 		meta, err := publish(pctx, conn, subject, events.UtteranceData{ThreadID: o.thread, Channel: o.channel, Text: text})
 		cancel()
-		if err != nil && ctx.Err() == nil {
+		switch {
+		case err == nil || ctx.Err() != nil:
+		case errors.Is(err, bus.ErrDisconnected):
+			err = fmt.Errorf("the connection to DOGGIE didn't come back within %s", o.sendTimeout)
+		default:
 			err = fmt.Errorf("DOGGIE did not confirm it (is it running, and may this connection speak for %s?)", o.channel)
 		}
 		select {

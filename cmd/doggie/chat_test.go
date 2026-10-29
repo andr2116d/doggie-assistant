@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -439,5 +440,36 @@ func TestChatCatchesUpSentencesSaidElsewhere(t *testing.T) {
 	c.catchUp(ctx, client)
 	if got := ui.printed(); got != "you (elsewhere)> my own\ndoggie> reply\n" {
 		t.Errorf("printed %q", got)
+	}
+}
+
+// What is said while the connection is down is sent once it is back, and
+// the chat says so instead of calling it a failure.
+func TestChatSendsWhatWasSaidOfflineOnceBack(t *testing.T) {
+	ui := newFakeUI(true)
+	states := make(chan connState, 10)
+	back := make(chan struct{})
+	o := testChatOptions()
+	var sent atomic.Int32
+	o.publish = func(ctx context.Context, conn *bus.Conn, s bus.Subject[events.UtteranceData], d events.UtteranceData) (bus.Meta, error) {
+		<-back // bus.Publish waits for the link like this
+		sent.Add(1)
+		return bus.Publish(ctx, conn, s, d)
+	}
+	runChat(t, sayEnv(t, nil), ui, states, o)
+	states <- connState{kind: connDown}
+	ui.waitPrinted(t, "· lost the connection to DOGGIE; reconnecting...\n")
+	ui.lines <- "recuérdame comprar pan"
+	ui.waitPrinted(t, "· no connection: it goes out when DOGGIE is back\n")
+
+	states <- connState{kind: connUp}
+	close(back)
+	ui.waitPrinted(t, "· connected again\n")
+	deadline := time.Now().Add(5 * time.Second)
+	for sent.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if strings.Contains(ui.printed(), "could not send") || sent.Load() != 1 {
+		t.Errorf("sent %d times, printed %q", sent.Load(), ui.printed())
 	}
 }

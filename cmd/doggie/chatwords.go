@@ -33,6 +33,7 @@ var spanish = translator{
 	"doggie run is taking DOGGIE over; handing it over...": "doggie run se queda con DOGGIE; se lo paso…",
 	"the turn failed: %s":                                  "el turno falló: %s",
 	"lost the connection to DOGGIE; reconnecting...":       "se perdió la conexión con DOGGIE; reconectando…",
+	"no connection: it goes out when DOGGIE is back":       "sin conexión: sale cuando DOGGIE vuelva",
 	"connected again":                                      "conectado otra vez",
 	"DOGGIE ended the connection: %s":                      "DOGGIE cerró la conexión: %s",
 	"could not read what was said meanwhile: %v":           "no pude leer lo que se dijo mientras tanto: %v",

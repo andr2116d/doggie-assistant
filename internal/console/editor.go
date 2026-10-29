@@ -50,7 +50,7 @@ func (e *editor) hide(prompt string) {
 	if !e.hidden {
 		e.stashed = e.line
 	}
-	e.hidden, e.hiddenPrompt = true, []rune(oneLine(prompt))
+	e.hidden, e.hiddenPrompt = true, []rune(OneLine(prompt))
 	e.set(nil)
 }
 

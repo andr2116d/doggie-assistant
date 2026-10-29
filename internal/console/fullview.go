@@ -150,7 +150,7 @@ func (s *Screen) Reply(id, text string) {
 // Notice shows text under the message id, or on its own if there is none.
 func (s *Screen) Notice(id string, kind NoticeKind, text string) {
 	s.do(func(v *view) {
-		n := notice{kind, strings.TrimSpace(oneLine(text))}
+		n := notice{kind, strings.TrimSpace(OneLine(text))}
 		v.convo.noteOn(id, notice{kind, text})
 		v.remember(n)
 	})
@@ -167,7 +167,7 @@ func (s *Screen) SetConnection(online bool, status string) {
 // text removes it.
 func (s *Screen) SetActivity(text string) {
 	s.do(func(v *view) {
-		text = strings.TrimSpace(oneLine(text))
+		text = strings.TrimSpace(OneLine(text))
 		if text != "" && v.activity == "" {
 			v.activitySince = time.Now()
 		}
@@ -178,7 +178,7 @@ func (s *Screen) SetActivity(text string) {
 // SetStatus shows text, e.g. the tasks running, below the input box in
 // place of the hints; empty text brings the hints back.
 func (s *Screen) SetStatus(text string) {
-	s.do(func(v *view) { v.taskStatus = strings.TrimSpace(oneLine(text)) })
+	s.do(func(v *view) { v.taskStatus = strings.TrimSpace(OneLine(text)) })
 }
 
 // AskHidden has the user type the next line unseen, after prompt, as a
@@ -672,7 +672,7 @@ type TaskView struct {
 // some, unless the user closed it.
 func (s *Screen) SetTasks(tasks []TaskView, more string) {
 	tasks = slices.Clone(tasks)
-	s.do(func(v *view) { v.tasks, v.moreTasks = tasks, strings.TrimSpace(oneLine(more)) })
+	s.do(func(v *view) { v.tasks, v.moreTasks = tasks, strings.TrimSpace(OneLine(more)) })
 }
 
 // panelMode is what the user asked of the panel.

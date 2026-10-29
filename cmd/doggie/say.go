@@ -75,6 +75,7 @@ func sayCmd(args []string, stdout io.Writer) error {
 // say publishes text as an utterance and prints what the brain says in the
 // thread until the turn has ended and wait has passed with nothing new.
 func say(ctx context.Context, conn *bus.Conn, w io.Writer, text string, o sayOptions) error {
+	w = console.Safe(w) // the model's words may carry what it read
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Subscribe first, so no reply is missed.

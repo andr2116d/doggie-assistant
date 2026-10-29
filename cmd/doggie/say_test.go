@@ -226,3 +226,21 @@ func TestRecentIDsForgetsTheOldest(t *testing.T) {
 		t.Error("a forgotten id is not new again")
 	}
 }
+
+// The model's words reach the owner's terminal: escape sequences in them,
+// put there by text the model read, don't.
+func TestSayKeepsControlCharactersOut(t *testing.T) {
+	client := sayEnv(t, func(ctx context.Context, c *bus.Conn, u bus.Event[events.UtteranceData]) {
+		reply(ctx, c, u.Data.ThreadID, u.ID, []string{"hola\x1b]0;owned\x07\nlínea dos\u009b2J"}, "")
+	})
+	var out bytes.Buffer
+	if err := say(context.Background(), client, &out, "hola", sayOptions{channel: "terminal", thread: "terminal", wait: 100 * time.Millisecond, replyTimeout: 5 * time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.SplitSeq(strings.TrimSuffix(out.String(), "\n"), "\n") {
+		assertNoControl(t, line)
+	}
+	if want := "doggie> hola]0;owned\nlínea dos2J\n"; out.String() != want {
+		t.Errorf("printed %q, want %q", out.String(), want)
+	}
+}

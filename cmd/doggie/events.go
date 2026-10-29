@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
+	"github.com/andr2116d/doggie-assistant/internal/console"
 )
 
 // eventsCmd connects to a running DOGGIE over TCP and prints its events:
@@ -46,11 +47,14 @@ func eventsCmd(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// printEnvelope prints env on one line. Any satellite chooses its events'
+// fields, and JSON may hold line breaks between values, so all of it is
+// printed without control characters.
 func printEnvelope(w io.Writer, env bus.Envelope) {
 	cause := ""
 	if env.CausedBy != "" {
-		cause = " cause=" + env.CausedBy
+		cause = " cause=" + console.OneLine(env.CausedBy)
 	}
 	fmt.Fprintf(w, "%s %-20s src=%s%s %s\n",
-		env.Time.Local().Format("15:04:05.000"), env.Type, env.Source, cause, env.Data)
+		env.Time.Local().Format("15:04:05.000"), console.OneLine(env.Type), console.OneLine(env.Source), cause, console.OneLine(string(env.Data)))
 }

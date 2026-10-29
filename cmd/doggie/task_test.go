@@ -224,3 +224,20 @@ func TestParseTaskFlagOrder(t *testing.T) {
 		t.Error("unknown subcommand accepted")
 	}
 }
+
+// Workers on satellites write their tasks' progress and errors: the table
+// shows them without their control characters.
+func TestPrintTasksKeepsControlCharactersOut(t *testing.T) {
+	var buf bytes.Buffer
+	now := time.Now()
+	printTasks(&buf, []events.TaskInfo{
+		{ID: "t1", Kind: "demo.sleep", Status: events.StatusRunning, Progress: "half\x1b[2J\nfake row", CreatedAt: now},
+		{ID: "t2", Kind: "demo.sleep", Status: events.StatusFailed, Error: "\x1b]52;c;aGk=\x07boom", CreatedAt: now},
+	}, now)
+	for line := range strings.SplitSeq(strings.TrimSuffix(buf.String(), "\n"), "\n") {
+		assertNoControl(t, line)
+	}
+	if n := strings.Count(buf.String(), "\n"); n != 3 {
+		t.Errorf("printed %d lines, want 3:\n%s", n, buf.String())
+	}
+}

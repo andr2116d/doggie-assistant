@@ -14,6 +14,7 @@ import (
 
 	"github.com/andr2116d/doggie-assistant/internal/bus"
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
+	"github.com/andr2116d/doggie-assistant/internal/console"
 )
 
 const taskUsage = `Usage:
@@ -178,7 +179,7 @@ func printTasks(w io.Writer, tasks []events.TaskInfo, now time.Time) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tKIND\tSTATUS\tAGE\tDETAIL")
 	for _, t := range tasks {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Kind, t.Status, age(now.Sub(t.CreatedAt)), truncate(detail(t), 70))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Kind, t.Status, age(now.Sub(t.CreatedAt)), truncate(console.OneLine(detail(t)), 70))
 	}
 	tw.Flush()
 }

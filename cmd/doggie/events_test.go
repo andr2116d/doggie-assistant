@@ -76,3 +76,25 @@ func TestPrintEnvelope(t *testing.T) {
 		}
 	}
 }
+
+// Any satellite chooses its events' fields: none of them may reach the
+// terminal as escape sequences or as extra lines.
+func TestPrintEnvelopeKeepsControlCharactersOut(t *testing.T) {
+	var buf bytes.Buffer
+	printEnvelope(&buf, bus.Envelope{
+		Meta: bus.Meta{Type: "task.done\x1b[2J", Source: "sat\x1b]0;owned\x07\nfake line", CausedBy: "01\u009bABC", Time: time.Now()},
+		Data: json.RawMessage("{\"ok\":\r\ntrue}"),
+	})
+	assertNoControl(t, strings.TrimSuffix(buf.String(), "\n"))
+}
+
+// assertNoControl fails if s holds a character that a terminal could take
+// as a command, a newline included.
+func assertNoControl(t *testing.T, s string) {
+	t.Helper()
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || r >= 0x80 && r <= 0x9f {
+			t.Fatalf("%q holds the control character %U", s, r)
+		}
+	}
+}

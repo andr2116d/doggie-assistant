@@ -139,7 +139,7 @@ func say(ctx context.Context, conn *bus.Conn, w io.Writer, text string, o sayOpt
 				continue
 			}
 			if why := failure(nil, ev.Data); why != "" {
-				fmt.Fprintf(w, "doggie: the turn failed: %s\n", why)
+				view.note("doggie: the turn failed: " + why) // after any line left open
 			}
 			if slices.ContainsFunc(ev.Data.Inputs, func(in events.TurnInput) bool { return in.EventID == meta.ID }) {
 				answered = true

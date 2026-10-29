@@ -244,3 +244,19 @@ func TestSayKeepsControlCharactersOut(t *testing.T) {
 		t.Errorf("printed %q, want %q", out.String(), want)
 	}
 }
+
+// A turn that fails halfway through a block says so on a line of its own.
+func TestSayReportsAFailureAfterPartOfAReply(t *testing.T) {
+	client := sayEnv(t, func(ctx context.Context, c *bus.Conn, u bus.Event[events.UtteranceData]) {
+		bus.Emit(c, events.OutSpeakDelta, events.SpeakDeltaData{ThreadID: u.Data.ThreadID, Channel: "terminal", Text: "La historia", CausedBy: u.ID})
+		time.Sleep(50 * time.Millisecond)
+		reply(ctx, c, u.Data.ThreadID, u.ID, nil, "llm: turn timed out")
+	})
+	var out bytes.Buffer
+	if err := say(context.Background(), client, &out, "hola", sayOptions{channel: "terminal", thread: "terminal", wait: 100 * time.Millisecond, replyTimeout: 5 * time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "doggie> La historia\ndoggie: the turn failed:"; !strings.HasPrefix(out.String(), want) {
+		t.Errorf("printed %q, want it to start with %q", out.String(), want)
+	}
+}

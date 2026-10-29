@@ -48,9 +48,8 @@ type proc struct {
 }
 
 // spawn starts a claude process with its own MCP client, on the owner's
-// login or the backup one. It is ready for its
-// turn as soon as it returns: the CLI connects to the tools while it waits
-// for input.
+// login or the backup one. It is ready for its turn as soon as it returns:
+// the CLI connects to the tools while it waits for input.
 func (p *Provider) spawn(backup bool) (*proc, error) {
 	client, err := p.opts.Tools.NewClient()
 	if err != nil {
@@ -93,9 +92,9 @@ func (p *Provider) spawn(backup bool) (*proc, error) {
 }
 
 // args lock the CLI down: no built-in tools, only DOGGIE's MCP server, no
-// settings, sessions or slash commands, and DOGGIE's own system prompt. Files carry the system prompt and the MCP config, since
-// one argument is limited to 128 KiB on Linux and any local user can read
-// the command line.
+// settings, sessions or slash commands, and DOGGIE's own system prompt.
+// Files carry the system prompt and the MCP config, since one argument is
+// limited to 128 KiB on Linux and any local user can read the command line.
 func (p *Provider) args(cfgFile string) []string {
 	return []string{
 		"-p",

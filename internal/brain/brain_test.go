@@ -181,11 +181,11 @@ func TestSensitiveQuestionsAreTheUsers(t *testing.T) {
 		}
 		// The LLM gets the question, from the manager when it is a
 		// sensitive task's, but the logged turn only keeps the others'.
-		if !strings.Contains(inputOf(in), "¿Qué perfil?") {
+		if !strings.Contains(inputOf(in), "¿Qué lista?") {
 			t.Errorf("sensitive %v: the prompt lacks the question:\n%s", spec.Sensitive, inputOf(in))
 		}
 		logged, _ := json.Marshal(turn.Data.Inputs)
-		if got := strings.Contains(string(logged), "¿Qué perfil?"); got == spec.Sensitive {
+		if got := strings.Contains(string(logged), "¿Qué lista?"); got == spec.Sensitive {
 			t.Errorf("sensitive %v: the logged turn has the question = %v: %s", spec.Sensitive, got, logged)
 		}
 	}
@@ -197,10 +197,10 @@ func TestQuestionsAndFailuresAreAnnounced(t *testing.T) {
 	h.nextTurn()
 	ask, _ := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "demo.ask", ThreadID: "th"})
 	turn := h.nextTurn()
-	if task := turn.Data.Inputs[0].Task; task == nil || task.Type != "task.needs_input" || task.Question != "¿Qué perfil?" || len(task.Options) != 2 {
+	if task := turn.Data.Inputs[0].Task; task == nil || task.Type != "task.needs_input" || task.Question != "¿Qué lista?" || len(task.Options) != 2 {
 		t.Fatalf("question turn = %+v", turn.Data.Inputs)
 	}
-	mustContain(t, h.fake.requests()[1].Input, "needs an answer: <data>¿Qué perfil?</data> Options: <data>Ana | Luis</data>")
+	mustContain(t, h.fake.requests()[1].Input, "needs an answer: <data>¿Qué lista?</data> Options: <data>Compras | Trabajo</data>")
 
 	// A failure (here the task kind has no worker) is told too.
 	if _, err := bus.Request(context.Background(), h.client, events.StartTask, events.TaskSpec{Kind: "nobody.serves", ThreadID: "th"}); err == nil {
@@ -321,9 +321,9 @@ func TestUnknownTasksAreLookedUpInOrder(t *testing.T) {
 	if turn := h.nextTurn(); turn.Data.Inputs[0].Task == nil || turn.Data.Inputs[0].Task.Type != "task.needs_input" {
 		t.Fatalf("caught-up turn = %+v", turn.Data.Inputs)
 	}
-	bus.Request(context.Background(), h.client, events.AnswerTask, events.TaskAnswer{TaskID: ask.TaskID, Answer: "Luis"})
+	bus.Request(context.Background(), h.client, events.AnswerTask, events.TaskAnswer{TaskID: ask.TaskID, Answer: "Trabajo"})
 	turn := h.nextTurn()
-	if task := turn.Data.Inputs[0].Task; task == nil || task.Type != "task.done" || task.Kind != "demo.ask" || string(task.Result) != `{"answer":"Luis"}` {
+	if task := turn.Data.Inputs[0].Task; task == nil || task.Type != "task.done" || task.Kind != "demo.ask" || string(task.Result) != `{"answer":"Trabajo"}` {
 		t.Errorf("inputs = %+v", turn.Data.Inputs)
 	}
 

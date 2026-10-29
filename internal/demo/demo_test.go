@@ -107,15 +107,15 @@ func TestSleepRejectsBadInput(t *testing.T) {
 
 func TestAskReturnsTheAnswer(t *testing.T) {
 	c := setup(t)
-	id := start(t, c, "demo.ask", `{"question":"¿Qué perfil?","options":["Andreé","Invitado"]}`)
+	id := start(t, c, "demo.ask", `{"question":"¿Qué lista?","options":["Compras","Trabajo"]}`)
 	info := waitFor(t, c, id, events.StatusWaitingInput)
-	if info.Question != "¿Qué perfil?" || strings.Join(info.Options, ",") != "Andreé,Invitado" {
+	if info.Question != "¿Qué lista?" || strings.Join(info.Options, ",") != "Compras,Trabajo" {
 		t.Errorf("unexpected question: %+v", info)
 	}
-	if _, err := bus.Request(context.Background(), c, events.AnswerTask, events.TaskAnswer{TaskID: id, Answer: "Andreé"}); err != nil {
+	if _, err := bus.Request(context.Background(), c, events.AnswerTask, events.TaskAnswer{TaskID: id, Answer: "Compras"}); err != nil {
 		t.Fatal(err)
 	}
-	if info := waitFor(t, c, id, events.StatusDone); string(info.Result) != `{"answer":"Andreé"}` {
+	if info := waitFor(t, c, id, events.StatusDone); string(info.Result) != `{"answer":"Compras"}` {
 		t.Errorf("Result = %s", info.Result)
 	}
 }

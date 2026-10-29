@@ -139,7 +139,7 @@ func TestBuildInvalidUTF8(t *testing.T) {
 }
 
 func TestBuildEvents(t *testing.T) {
-	task := events.TaskInfo{ID: "t9", TaskSpec: events.TaskSpec{Kind: "demo.ask", Description: "Elegir perfil"}}
+	task := events.TaskInfo{ID: "t9", TaskSpec: events.TaskSpec{Kind: "demo.ask", Description: "Elegir lista"}}
 	secret := task
 	secret.Sensitive = true
 	for name, tt := range map[string]struct {
@@ -160,8 +160,8 @@ func TestBuildEvents(t *testing.T) {
 		"cancelled, no why": {TaskEvent{Type: "task.cancelled", Task: task}, []string{"was cancelled.</event>"}, nil},
 		"cancelled elsewhere": {TaskEvent{Type: "task.cancelled", Task: task, Channel: "voice:kitchen", Reason: "ya no"},
 			[]string{"was cancelled by someone on voice:kitchen: <data>ya no</data>."}, nil},
-		"needs input": {TaskEvent{Type: "task.needs_input", Task: task, Question: "¿Qué perfil?", Options: []string{"Ana", "Luis"}},
-			[]string{"needs an answer: <data>¿Qué perfil?</data> Options: <data>Ana | Luis</data>"}, nil},
+		"needs input": {TaskEvent{Type: "task.needs_input", Task: task, Question: "¿Qué lista?", Options: []string{"Compras", "Trabajo"}},
+			[]string{"needs an answer: <data>¿Qué lista?</data> Options: <data>Compras | Trabajo</data>"}, nil},
 		"needs input, no options": {TaskEvent{Type: "task.needs_input", Task: task, Question: "¿Cuál?"}, []string{"<data>¿Cuál?</data></event>"}, []string{"Options", "Only the user"}},
 		"needs input, sensitive": {TaskEvent{Type: "task.needs_input", Task: secret, Question: "¿Confirmas?"},
 			[]string{"<data>¿Confirmas?</data> Only the user can answer it, directly: you can't answer it for them.</event>"}, nil},

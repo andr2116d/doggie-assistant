@@ -314,24 +314,24 @@ func TestAnswerTask(t *testing.T) {
 	_, cs := h.bound("th")
 	var started startTaskOut
 	callOK(t, cs, "start_task", map[string]any{
-		"kind": "demo.ask", "description": "Elegir perfil", "input": map[string]any{"question": "¿Qué perfil?", "options": []string{"Ana", "Luis"}},
+		"kind": "demo.ask", "description": "Elegir lista", "input": map[string]any{"question": "¿Qué lista?", "options": []string{"Compras", "Trabajo"}},
 	}, &started)
 	h.waitStatus(started.TaskID, events.StatusWaitingInput)
 
 	var v taskView
 	callOK(t, cs, "get_task", map[string]any{"task_id": started.TaskID}, &v)
-	if v.Question != "¿Qué perfil?" || len(v.Options) != 2 || v.Status != "waiting_input" {
+	if v.Question != "¿Qué lista?" || len(v.Options) != 2 || v.Status != "waiting_input" {
 		t.Errorf("waiting task view = %+v", v)
 	}
 
 	var ok okOut
-	callOK(t, cs, "answer_task", map[string]any{"task_id": started.TaskID, "answer": "  Luis  "}, &ok)
+	callOK(t, cs, "answer_task", map[string]any{"task_id": started.TaskID, "answer": "  Trabajo  "}, &ok)
 	info := h.waitStatus(started.TaskID, events.StatusDone)
-	if string(info.Result) != `{"answer":"Luis"}` {
+	if string(info.Result) != `{"answer":"Trabajo"}` {
 		t.Errorf("result = %s, want the trimmed answer", info.Result)
 	}
 	// It no longer waits for an answer.
-	mustContain(t, callErr(t, cs, "answer_task", map[string]any{"task_id": started.TaskID, "answer": "Ana"}), "not waiting")
+	mustContain(t, callErr(t, cs, "answer_task", map[string]any{"task_id": started.TaskID, "answer": "Compras"}), "not waiting")
 }
 
 func TestAnswerTaskRejectsBadAnswers(t *testing.T) {

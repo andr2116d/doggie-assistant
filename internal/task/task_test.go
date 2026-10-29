@@ -136,16 +136,16 @@ func TestApplyFoldsEvents(t *testing.T) {
 	for _, env := range []bus.Envelope{
 		envelope(t, events.TaskRunning.Type(), events.TaskRef{TaskID: "t1"}),
 		envelope(t, events.TaskProgress.Type(), events.TaskProgressData{TaskID: "t1", Message: "half", Percent: 50}),
-		envelope(t, events.TaskNeedsInput.Type(), events.TaskNeedsInputData{TaskID: "t1", Question: "profile?", Options: []string{"Andreé"}}),
+		envelope(t, events.TaskNeedsInput.Type(), events.TaskNeedsInputData{TaskID: "t1", Question: "list?", Options: []string{"Groceries"}}),
 		envelope(t, events.TaskRunning.Type(), events.TaskRef{TaskID: "t1"}),
-		envelope(t, events.TaskDone.Type(), events.TaskDoneData{TaskID: "t1", Result: json.RawMessage(`{"answer":"Andreé"}`)}),
+		envelope(t, events.TaskDone.Type(), events.TaskDoneData{TaskID: "t1", Result: json.RawMessage(`{"answer":"Compras"}`)}),
 	} {
 		if err := tk.Apply(env); err != nil {
 			t.Fatalf("apply %s: %v", env.Type, err)
 		}
 	}
 	info := tk.Info()
-	if info.Status != events.StatusDone || string(info.Result) != `{"answer":"Andreé"}` || info.Progress != "half" {
+	if info.Status != events.StatusDone || string(info.Result) != `{"answer":"Compras"}` || info.Progress != "half" {
 		t.Errorf("unexpected state: %+v", info)
 	}
 	if !info.UpdatedAt.Equal(t0.Add(time.Hour)) {

@@ -245,27 +245,27 @@ func TestStartRejectsInvalidRequests(t *testing.T) {
 func TestProgressQuestionAndAnswer(t *testing.T) {
 	h := newHarness(t, testOptions(), map[string]worker.Func{
 		"test.ask": func(ctx context.Context, t *worker.Task) (any, error) {
-			if err := t.Progress(ctx, "looking for profiles", 50); err != nil {
+			if err := t.Progress(ctx, "looking for lists", 50); err != nil {
 				return nil, err
 			}
-			answer, err := t.Ask(ctx, "Which profile?", "Andreé", "Guest")
+			answer, err := t.Ask(ctx, "Which list?", "Groceries", "Work")
 			if err != nil {
 				return nil, err
 			}
-			return map[string]string{"profile": answer}, nil
+			return map[string]string{"list": answer}, nil
 		},
 	})
 	id := h.mustStart(events.TaskSpec{Kind: "test.ask"})
 
 	info := h.waitStatus(id, events.StatusWaitingInput)
-	if info.Question != "Which profile?" || len(info.Options) != 2 || info.Progress != "looking for profiles" || info.Percent != 50 {
+	if info.Question != "Which list?" || len(info.Options) != 2 || info.Progress != "looking for lists" || info.Percent != 50 {
 		t.Errorf("unexpected waiting task: %+v", info)
 	}
-	if err := h.answer(id, "Andreé"); err != nil {
+	if err := h.answer(id, "Groceries"); err != nil {
 		t.Fatal(err)
 	}
 	info = h.waitStatus(id, events.StatusDone)
-	if string(info.Result) != `{"profile":"Andreé"}` || info.Question != "" {
+	if string(info.Result) != `{"list":"Groceries"}` || info.Question != "" {
 		t.Errorf("unexpected done task: %+v", info)
 	}
 }

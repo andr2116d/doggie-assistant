@@ -91,7 +91,7 @@ func TestTaskCLIFlow(t *testing.T) {
 	c := taskEnv(t)
 	waitForWorker(t, c)
 
-	out, err := sub(t, c, "start", []string{"demo.ask", `{"question":"¿Qué perfil?","options":["Andreé","Invitado"]}`}, taskOptions{desc: "pick a profile", thread: "cli"})
+	out, err := sub(t, c, "start", []string{"demo.ask", `{"question":"¿Qué lista?","options":["Compras","Trabajo"]}`}, taskOptions{desc: "pick a list", thread: "cli"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,18 +102,18 @@ func TestTaskCLIFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{id, "demo.ask", "waiting_input", `"¿Qué perfil?" [Andreé | Invitado]`} {
+	for _, want := range []string{id, "demo.ask", "waiting_input", `"¿Qué lista?" [Compras | Trabajo]`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list output missing %q:\n%s", want, out)
 		}
 	}
 
-	if out, err = sub(t, c, "answer", []string{id, "Andreé"}, taskOptions{}); err != nil || !strings.Contains(out, "answered "+id) {
+	if out, err = sub(t, c, "answer", []string{id, "Compras"}, taskOptions{}); err != nil || !strings.Contains(out, "answered "+id) {
 		t.Fatalf("answer: %q, %v", out, err)
 	}
 	waitStatus(t, c, id, events.StatusDone)
 	out, _ = sub(t, c, "list", nil, taskOptions{})
-	if !strings.Contains(out, `{"answer":"Andreé"}`) {
+	if !strings.Contains(out, `{"answer":"Compras"}`) {
 		t.Errorf("list does not show the result:\n%s", out)
 	}
 	if out, _ = sub(t, c, "list", nil, taskOptions{active: true}); strings.Contains(out, id+" ") {

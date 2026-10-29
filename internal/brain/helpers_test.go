@@ -229,7 +229,7 @@ func (h *harness) funcs() map[string]worker.Func {
 			}
 		},
 		events.KindDemoAsk.Name: func(ctx context.Context, t *worker.Task) (any, error) {
-			a, err := t.Ask(ctx, "¿Qué perfil?", "Ana", "Luis")
+			a, err := t.Ask(ctx, "¿Qué lista?", "Compras", "Trabajo")
 			return map[string]string{"answer": a}, err
 		},
 	}

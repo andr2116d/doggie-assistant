@@ -152,7 +152,14 @@ func TestRefusedPublishDoesNotBreakAllowedSubscribe(t *testing.T) {
 	_, sat := startRestricted(t)
 	sat.nc.Publish(testManagerEvent.Wire(), []byte("{}")) // forbidden publish
 	sat.nc.Flush()
-	time.Sleep(50 * time.Millisecond)
+	// The server refuses it asynchronously: wait until the refusal is in.
+	deadline := time.Now().Add(5 * time.Second)
+	for !errors.Is(sat.nc.LastError(), nats.ErrPermissionViolation) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the forbidden publish was not refused: last error %v", sat.nc.LastError())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

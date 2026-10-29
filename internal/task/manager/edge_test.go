@@ -195,11 +195,13 @@ func TestConcurrentAnswersAreRejected(t *testing.T) {
 	h := newHarness(t, testOptions(), nil)
 	f := newFakeWorker(h)
 	var delivered atomic.Int32
+	inFlight, release := make(chan string, 1), make(chan struct{})
 	f.serveRuns("test.slow", func(in bus.Incoming[events.TaskInfo, events.Ack]) {
 		id := in.Req.ID
 		f.serveControl(id, func(c bus.Incoming[events.TaskControl, events.Ack]) {
 			delivered.Add(1)
-			time.Sleep(300 * time.Millisecond) // keep the first answer in flight
+			inFlight <- id
+			<-release // keep the first answer in flight
 			c.Reply(events.Ack{})
 		})
 		f.accept(in)
@@ -210,11 +212,12 @@ func TestConcurrentAnswersAreRejected(t *testing.T) {
 	h.waitQuestion(id, "Q1")
 	first := make(chan error, 1)
 	go func() { first <- h.answer(id, "A1") }()
-	time.Sleep(50 * time.Millisecond)
+	recv(t, inFlight, "the first answer to reach the worker")
 
 	if err := h.answer(id, "A2"); err == nil || !strings.Contains(err.Error(), "already being delivered") {
 		t.Errorf("second answer: err = %v, want already being delivered", err)
 	}
+	close(release)
 	if err := <-first; err != nil {
 		t.Fatalf("first answer: %v", err)
 	}

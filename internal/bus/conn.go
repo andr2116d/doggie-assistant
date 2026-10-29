@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -82,6 +83,39 @@ func (c *Conn) Name() string { return c.source }
 // Subjects that carry a name, such as a worker's reports, are only open to
 // that identity.
 func (c *Conn) Identity() string { return c.identity }
+
+// ErrDisconnected means the link to the bus was down: what was being sent
+// never left.
+var ErrDisconnected = errors.New("bus: not connected to DOGGIE")
+
+// linkPoll is how often a caller waiting for the link checks it. The
+// connection's own callbacks run apart and can lag behind its state.
+const linkPoll = 100 * time.Millisecond
+
+// WaitConnected waits until the link to the bus is up, ctx is done or the
+// connection is closed.
+func (c *Conn) WaitConnected(ctx context.Context) error {
+	t := time.NewTicker(linkPoll)
+	defer t.Stop()
+	for !c.nc.IsConnected() {
+		if c.nc.IsClosed() {
+			return nats.ErrConnectionClosed
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+	return nil
+}
+
+// unsent reports whether err means the message never left because the link
+// was down: NATS refuses to send rather than buffer while reconnecting.
+func unsent(err error) bool {
+	return errors.Is(err, nats.ErrReconnectBufExceeded) ||
+		errors.Is(err, nats.ErrConnectionReconnecting) || errors.Is(err, nats.ErrDisconnected)
+}
 
 // Close flushes pending publishes, waits until they reach the server and
 // closes the connection. Calling it again is a no-op.

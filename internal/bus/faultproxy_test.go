@@ -18,8 +18,9 @@ type faultProxy struct {
 
 	mu     sync.Mutex
 	conns  []net.Conn
-	refuse bool          // new connections are closed at once
-	open   chan struct{} // closed while traffic flows
+	refuse bool // new connections are closed at once
+	// Closed while traffic flows each way: to the server, and back.
+	toServer, toClient chan struct{}
 }
 
 func newFaultProxy(t *testing.T, target string) *faultProxy {
@@ -28,8 +29,9 @@ func newFaultProxy(t *testing.T, target string) *faultProxy {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &faultProxy{t: t, ln: ln, target: target, open: make(chan struct{})}
-	close(p.open)
+	p := &faultProxy{t: t, ln: ln, target: target, toServer: make(chan struct{}), toClient: make(chan struct{})}
+	close(p.toServer)
+	close(p.toClient)
 	t.Cleanup(func() { ln.Close(); p.cut() })
 	go p.accept()
 	return p
@@ -59,20 +61,20 @@ func (p *faultProxy) accept() {
 		p.mu.Lock()
 		p.conns = append(p.conns, client, server)
 		p.mu.Unlock()
-		go p.pipe(server, client)
-		go p.pipe(client, server)
+		go p.pipe(server, client, func() chan struct{} { return p.toServer })
+		go p.pipe(client, server, func() chan struct{} { return p.toClient })
 	}
 }
 
-// pipe copies from src to dst while traffic flows, and holds what it read
-// while blackholed.
-func (p *faultProxy) pipe(dst, src net.Conn) {
+// pipe copies from src to dst while gate's channel is closed, and holds what
+// it read while blackholed.
+func (p *faultProxy) pipe(dst, src net.Conn, gate func() chan struct{}) {
 	defer dst.Close()
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := src.Read(buf)
 		p.mu.Lock()
-		open := p.open
+		open := gate()
 		p.mu.Unlock()
 		<-open
 		if n > 0 {
@@ -93,9 +95,22 @@ func (p *faultProxy) pipe(dst, src net.Conn) {
 func (p *faultProxy) blackhole() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	shut(&p.toServer)
+	shut(&p.toClient)
+}
+
+// blackholeReplies stops what the server sends back, so what clients send
+// still arrives: a link that dies right after a message got through.
+func (p *faultProxy) blackholeReplies() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	shut(&p.toClient)
+}
+
+func shut(gate *chan struct{}) {
 	select {
-	case <-p.open:
-		p.open = make(chan struct{})
+	case <-*gate:
+		*gate = make(chan struct{})
 	default:
 	}
 }
@@ -116,9 +131,11 @@ func (p *faultProxy) restore() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.refuse = false
-	select {
-	case <-p.open:
-	default:
-		close(p.open)
+	for _, gate := range []chan struct{}{p.toServer, p.toClient} {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
 	}
 }

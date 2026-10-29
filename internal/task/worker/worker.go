@@ -60,7 +60,7 @@ func (t *Task) Input(v any) error {
 // Progress reports how the task is doing. percent is 0-100, or 0 if unknown.
 // It fails if the task is over, e.g. cancelled.
 func (t *Task) Progress(ctx context.Context, message string, percent int) error {
-	_, err := bus.Request(ctx, t.conn, events.WorkerProgress.With(t.worker), events.TaskProgressData{
+	_, err := bus.RequestThroughOutages(ctx, t.conn, events.WorkerProgress.With(t.worker), events.TaskProgressData{
 		TaskID: t.ID, Message: message, Percent: percent,
 	})
 	return err
@@ -71,7 +71,7 @@ func (t *Task) Progress(ctx context.Context, message string, percent int) error 
 func (t *Task) Ask(ctx context.Context, question string, options ...string) (string, error) {
 	t.asking.Store(true)
 	defer t.asking.Store(false)
-	if _, err := bus.Request(ctx, t.conn, events.WorkerAsk.With(t.worker), events.TaskNeedsInputData{
+	if _, err := bus.RequestThroughOutages(ctx, t.conn, events.WorkerAsk.With(t.worker), events.TaskNeedsInputData{
 		TaskID: t.ID, Question: question, Options: options,
 	}); err != nil {
 		return "", err
@@ -91,7 +91,7 @@ func (t *Task) Spawn(ctx context.Context, spec events.TaskSpec) (string, error) 
 	if spec.ThreadID == "" {
 		spec.ThreadID = t.ThreadID
 	}
-	ref, err := bus.Request(ctx, t.conn, events.StartTask, spec)
+	ref, err := bus.RequestThroughOutages(ctx, t.conn, events.StartTask, spec)
 	return ref.TaskID, err
 }
 
@@ -193,7 +193,7 @@ func run(ctx context.Context, conn *bus.Conn, worker string, log *slog.Logger, i
 	}()
 
 	actx, cancelAccept := context.WithTimeout(taskCtx, reportTimeout)
-	_, err = bus.Request(actx, conn, events.WorkerAccept.With(worker), events.TaskClaim{TaskID: info.ID, Claim: info.Claim})
+	_, err = bus.RequestThroughOutages(actx, conn, events.WorkerAccept.With(worker), events.TaskClaim{TaskID: info.ID, Claim: info.Claim})
 	cancelAccept()
 	if err != nil {
 		// E.g. cancelled meanwhile, or taken by another worker.
@@ -233,7 +233,7 @@ func run(ctx context.Context, conn *bus.Conn, worker string, log *slog.Logger, i
 			reportFailed(rctx, conn, worker, log, info.ID, fmt.Sprintf("encode result: %v", err))
 			return
 		}
-		if _, err := bus.Request(rctx, conn, events.WorkerDone.With(worker), events.TaskDoneData{TaskID: info.ID, Result: raw}); err != nil {
+		if _, err := bus.RequestThroughOutages(rctx, conn, events.WorkerDone.With(worker), events.TaskDoneData{TaskID: info.ID, Result: raw}); err != nil {
 			// E.g. a result too large: fail the task instead of leaving it
 			// running until its timeout. If it is over, this fails too.
 			log.Warn("report task done", "err", err)
@@ -269,7 +269,7 @@ func safeCall(ctx context.Context, t *Task, fn Func) (result any, err error) {
 }
 
 func reportFailed(ctx context.Context, conn *bus.Conn, worker string, log *slog.Logger, id, reason string) {
-	if _, err := bus.Request(ctx, conn, events.WorkerFailed.With(worker), events.TaskFailedData{TaskID: id, Error: reason}); err != nil {
+	if _, err := bus.RequestThroughOutages(ctx, conn, events.WorkerFailed.With(worker), events.TaskFailedData{TaskID: id, Error: reason}); err != nil {
 		log.Warn("report task failed", "err", err)
 	}
 }

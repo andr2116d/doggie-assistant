@@ -95,3 +95,40 @@ func subscribeChan[E any](ctx context.Context, c *Conn, subject, queue string, d
 	}()
 	return out, nil
 }
+
+// recentLimit is how many event IDs a subscription remembers. An event sent
+// again after an outage is stored once in the log, but its first copy may
+// have reached subscribers already: they drop the second one.
+const recentLimit = 1024
+
+// recentIDs remembers the last event IDs a subscription delivered, forgetting
+// the oldest first. Only that subscription's handler uses it, and NATS calls
+// a handler one message at a time.
+type recentIDs struct {
+	ids  map[string]struct{}
+	ring []string
+	next int // where the next ID goes once ring is full
+}
+
+func newRecentIDs() *recentIDs {
+	return &recentIDs{ids: make(map[string]struct{})}
+}
+
+// fresh reports whether id wasn't delivered yet, and remembers it.
+func (r *recentIDs) fresh(id string) bool {
+	if id == "" {
+		return true
+	}
+	if _, ok := r.ids[id]; ok {
+		return false
+	}
+	if len(r.ring) < recentLimit {
+		r.ring = append(r.ring, id)
+	} else {
+		delete(r.ids, r.ring[r.next])
+		r.ring[r.next] = id
+		r.next = (r.next + 1) % recentLimit
+	}
+	r.ids[id] = struct{}{}
+	return true
+}

@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -94,10 +95,21 @@ func CausedBy(id string) PublishOption {
 	return func(m *Meta) { m.CausedBy = id }
 }
 
+// publishTry bounds one try at storing an event, so a publish that may wait
+// through an outage still fails soon when the bus refuses it. A variable so
+// tests can shorten it.
+var publishTry = 5 * time.Second
+
+// probeTimeout bounds the ping that tells a dead link from a refusal.
+const probeTimeout = 2 * time.Second
+
 // Publish sends an event and returns its metadata, so the caller can pass the
 // ID on as the cause of follow-up events. It returns once the event is stored
-// in the event log, so a published event is never lost on shutdown. The event
-// ID doubles as the log's deduplication ID, so retrying a publish is safe.
+// in the event log, so a published event is never lost on shutdown.
+//
+// While the link is down, Publish waits for it, within ctx, and sends the
+// event again with the same ID: the log's deduplication keeps one copy even
+// if an earlier try got through.
 func Publish[T any](ctx context.Context, c *Conn, s Subject[T], data T, opts ...PublishOption) (Meta, error) {
 	meta := Meta{
 		ID:     ulid.Make().String(),
@@ -116,12 +128,32 @@ func Publish[T any](ctx context.Context, c *Conn, s Subject[T], data T, opts ...
 	if err != nil {
 		return meta, fmt.Errorf("bus: encode envelope: %w", err)
 	}
-	ack, err := c.js.Publish(ctx, s.subject(), msg, jetstream.WithMsgID(meta.ID))
-	if err != nil {
-		return meta, fmt.Errorf("bus: publish %s: %w", s.typ, err)
+	for {
+		tctx, cancel := context.WithTimeout(ctx, publishTry)
+		ack, err := c.js.Publish(tctx, s.subject(), msg, jetstream.WithMsgID(meta.ID))
+		cancel()
+		if err == nil {
+			meta.Seq = ack.Sequence
+			return meta, nil
+		}
+		if ctx.Err() != nil || !c.lostDuring(err) {
+			return meta, fmt.Errorf("bus: publish %s: %w", s.typ, err)
+		}
+		if werr := c.WaitConnected(ctx); werr != nil {
+			return meta, fmt.Errorf("bus: publish %s: %w: %w", s.typ, ErrDisconnected, werr)
+		}
 	}
-	meta.Seq = ack.Sequence
-	return meta, nil
+}
+
+// lostDuring reports whether a try at publishing failed because the link
+// went down. Sending the event again is safe either way, thanks to its ID.
+// A try that timed out on a link that looks up is probed: a link can be dead
+// a while before the pings notice.
+func (c *Conn) lostDuring(err error) bool {
+	if unsent(err) || !c.nc.IsConnected() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded) && c.nc.FlushTimeout(probeTimeout) != nil
 }
 
 // Subscribe delivers events of type s on the returned channel until ctx is
@@ -129,6 +161,7 @@ func Publish[T any](ctx context.Context, c *Conn, s Subject[T], data T, opts ...
 // after Subscribe returns is delivered. Undecodable events are logged and
 // skipped.
 func Subscribe[T any](ctx context.Context, c *Conn, s Subject[T]) (<-chan Event[T], error) {
+	recent := newRecentIDs()
 	out, err := subscribeChan(ctx, c, s.subject(), "", func(m *nats.Msg) (Event[T], bool) {
 		var env Envelope
 		err := json.Unmarshal(m.Data, &env)
@@ -141,7 +174,7 @@ func Subscribe[T any](ctx context.Context, c *Conn, s Subject[T]) (<-chan Event[
 			c.log.Warn("bus: dropping undecodable event", "subject", m.Subject, "err", err)
 			return ev, false
 		}
-		return ev, true
+		return ev, recent.fresh(ev.ID)
 	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("bus: subscribe %s: %w", s.typ, err)

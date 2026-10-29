@@ -68,8 +68,9 @@ type replyMsg struct {
 }
 
 // Request sends a command and waits for its reply. It fails with ErrNoHandler
-// when nobody serves the command, and with a *RemoteError when the handler
-// fails. Without a deadline in ctx, it gives up after 10s.
+// when nobody serves the command, with ErrDisconnected at once while the link
+// is down, and with a *RemoteError when the handler fails. Without a deadline
+// in ctx, it gives up after 10s.
 func Request[Req, Resp any](ctx context.Context, c *Conn, cmd Command[Req, Resp], req Req) (Resp, error) {
 	var resp Resp
 	data, err := json.Marshal(req)
@@ -85,6 +86,9 @@ func Request[Req, Resp any](ctx context.Context, c *Conn, cmd Command[Req, Resp]
 	msg, err := c.nc.RequestWithContext(ctx, cmd.subject(), data)
 	if errors.Is(err, nats.ErrNoResponders) {
 		return resp, fmt.Errorf("%w: %s", ErrNoHandler, cmd.name)
+	}
+	if unsent(err) {
+		return resp, fmt.Errorf("%w: %s", ErrDisconnected, cmd.name)
 	}
 	if err != nil {
 		return resp, fmt.Errorf("bus: request %s: %w", cmd.name, err)
@@ -102,6 +106,28 @@ func Request[Req, Resp any](ctx context.Context, c *Conn, cmd Command[Req, Resp]
 		}
 	}
 	return resp, nil
+}
+
+// RequestThroughOutages is Request, but a request that couldn't leave
+// because the link was down is sent once the link is back, within ctx (10s
+// without a deadline). It never reached anyone, so sending it again is safe.
+// It suits what a component does on its own, e.g. a worker's reports; what a
+// person asked for should fail at once instead.
+func RequestThroughOutages[Req, Resp any](ctx context.Context, c *Conn, cmd Command[Req, Resp], req Req) (Resp, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultRequestTimeout)
+		defer cancel()
+	}
+	for {
+		resp, err := Request(ctx, c, cmd, req)
+		if !errors.Is(err, ErrDisconnected) {
+			return resp, err
+		}
+		if werr := c.WaitConnected(ctx); werr != nil {
+			return resp, err
+		}
+	}
 }
 
 // Incoming is a received command. The receiver must call Reply or Fail

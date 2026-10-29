@@ -40,6 +40,11 @@ var (
 	maxPingsOut  = 2
 )
 
+// dedupeWindow is how long the event log remembers event IDs to drop a
+// second copy. Publish sends an event again with its ID when the link comes
+// back, which a satellite's caller may wait for this long.
+const dedupeWindow = 15 * time.Minute
+
 // Options configures the embedded server.
 type Options struct {
 	// Listen is host:port for TCP clients. Empty means in-process only.
@@ -163,12 +168,13 @@ func (s *Server) ensureEventLog(ctx context.Context, maxAge time.Duration, maxBy
 		return fmt.Errorf("bus: jetstream: %w", err)
 	}
 	_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:     EventLogStream,
-		Subjects: []string{subjectPrefix + ">"},
-		Storage:  jetstream.FileStorage,
-		Discard:  jetstream.DiscardOld,
-		MaxAge:   maxAge,
-		MaxBytes: maxBytes,
+		Name:       EventLogStream,
+		Subjects:   []string{subjectPrefix + ">"},
+		Storage:    jetstream.FileStorage,
+		Discard:    jetstream.DiscardOld,
+		MaxAge:     maxAge,
+		MaxBytes:   maxBytes,
+		Duplicates: min(dedupeWindow, maxAge),
 	})
 	if err != nil {
 		return fmt.Errorf("bus: create event log stream: %w", err)
@@ -282,6 +288,10 @@ func Dial(url string, opts DialOptions) (*Conn, error) {
 		nats.UserInfo(user, opts.Token),
 		nats.Name(opts.Name),
 		nats.MaxReconnects(-1),
+		// Nothing waits in a buffer while the link is down, to go out late
+		// after the sender was told it failed: Publish sends again by
+		// itself, and Request fails with ErrDisconnected.
+		nats.ReconnectBufSize(-1),
 		nats.PingInterval(pingInterval),
 		nats.MaxPingsOutstanding(maxPingsOut),
 		errorHandler(opts.Log, opts.Name),

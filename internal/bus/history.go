@@ -35,13 +35,14 @@ func SubscribeEnvelopes(ctx context.Context, c *Conn, pattern string) (<-chan En
 	if !validPattern(pattern) {
 		return nil, fmt.Errorf("bus: invalid event pattern %q", pattern)
 	}
+	recent := newRecentIDs()
 	out, err := subscribeChan(ctx, c, subjectPrefix+pattern, "", func(m *nats.Msg) (Envelope, bool) {
 		var env Envelope
 		if err := json.Unmarshal(m.Data, &env); err != nil {
 			c.log.Warn("bus: dropping undecodable event", "subject", m.Subject, "err", err)
 			return env, false
 		}
-		return env, true
+		return env, recent.fresh(env.ID)
 	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("bus: subscribe %s: %w", pattern, err)

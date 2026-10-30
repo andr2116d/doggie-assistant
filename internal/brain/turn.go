@@ -112,12 +112,8 @@ func (b *Brain) runTurn(ctx context.Context, job turnJob) (rec events.BrainTurnD
 			rec.Actions = append(rec.Actions, events.TurnAction{Tool: o.Tool.Name, Input: o.Tool.Input})
 		case o.Done != nil:
 			d := o.Done
-			rec.Model = d.Model
-			rec.FirstTextMS = d.FirstText.Milliseconds()
-			rec.RequestMS = d.Request.Milliseconds()
-			if usage = d.Usage; usage != nil {
-				rec.FiveHourUsage, rec.SevenDayUsage = usage.FiveHour, usage.SevenDay
-			}
+			recordMeasures(&rec, d)
+			usage = d.Usage
 			if open {
 				block, open = block+1, false
 			}
@@ -132,6 +128,20 @@ func (b *Brain) runTurn(ctx context.Context, job turnJob) (rec events.BrainTurnD
 	}
 	rec.DurationMS = time.Since(job.started).Milliseconds()
 	return rec, logged
+}
+
+// recordMeasures copies into rec what the provider measured in the turn:
+// the model, the times, the usage limits and the tokens.
+func recordMeasures(rec *events.BrainTurnData, d *llm.Done) {
+	rec.Model = d.Model
+	rec.FirstTextMS = d.FirstText.Milliseconds()
+	rec.RequestMS = d.Request.Milliseconds()
+	if u := d.Usage; u != nil {
+		rec.FiveHourUsage, rec.SevenDayUsage = u.FiveHour, u.SevenDay
+	}
+	if t := d.Tokens; t != nil {
+		rec.Tokens = &events.TurnTokens{Input: t.Input, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite, Output: t.Output, CostUSD: t.CostUSD}
+	}
 }
 
 // say publishes a text block for the thread's channel. It is published even

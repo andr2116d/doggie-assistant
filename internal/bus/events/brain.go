@@ -39,6 +39,21 @@ type BrainTurnData struct {
 	SevenDayUsage float64 `json:"seven_day_usage,omitempty"`
 	// LowUsage are the usage windows this turn warned were running low.
 	LowUsage []UsageWindow `json:"low_usage,omitempty"`
+	// Tokens is what the turn used, when the provider knows it.
+	Tokens *TurnTokens `json:"tokens,omitempty"`
+}
+
+// TurnTokens is what a turn used, summed over all its calls to the model.
+// The input is split three ways: CacheRead was read from the provider's
+// prompt cache, CacheWrite was written to it, and Input is the rest.
+type TurnTokens struct {
+	Input      int `json:"input"`
+	CacheRead  int `json:"cache_read"`
+	CacheWrite int `json:"cache_write"`
+	Output     int `json:"output"`
+	// CostUSD is what the turn would cost at the provider's API list
+	// prices, if known: one figure that weighs the four counts.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 // The kinds of BrainTurnData.Failure.

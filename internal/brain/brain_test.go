@@ -23,7 +23,8 @@ func TestSaysTheReplyAndRecordsTheTurn(t *testing.T) {
 				{Text: "Ya estoy en eso."},
 				{Tool: &llm.ToolCall{Name: "list_tasks", Input: json.RawMessage(`{}`)}},
 				{Text: "¿Sabes por qué…?"},
-				{Done: &llm.Done{Model: "m1", FirstText: 900 * time.Millisecond, Usage: &llm.Usage{FiveHour: 0.2, SevenDay: 0.4}}},
+				{Done: &llm.Done{Model: "m1", FirstText: 900 * time.Millisecond, Usage: &llm.Usage{FiveHour: 0.2, SevenDay: 0.4},
+					Tokens: &llm.Tokens{Input: 3, CacheRead: 1500, CacheWrite: 400, Output: 60, CostUSD: 0.003}}},
 			}
 		}
 	})
@@ -45,6 +46,9 @@ func TestSaysTheReplyAndRecordsTheTurn(t *testing.T) {
 	}
 	if len(d.Replies) != 2 || len(d.Actions) != 1 || d.Actions[0].Tool != "list_tasks" || d.FiveHourUsage != 0.2 || d.SevenDayUsage != 0.4 {
 		t.Errorf("turn = %+v", d)
+	}
+	if want := (events.TurnTokens{Input: 3, CacheRead: 1500, CacheWrite: 400, Output: 60, CostUSD: 0.003}); d.Tokens == nil || *d.Tokens != want {
+		t.Errorf("tokens = %+v, want %+v", d.Tokens, want)
 	}
 	// The provider got the thread to act for and the built context.
 	reqs := h.fake.requests()

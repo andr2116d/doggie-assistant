@@ -219,8 +219,51 @@ func TestTurnOutputs(t *testing.T) {
 func TestTurnWithoutText(t *testing.T) {
 	p := newProvider(t, testOptions(t))
 	outs, done := collect(t, p, context.Background(), scriptOf(step{Tool: "list_tasks"}))
-	if done.Err != nil || len(outs) != 1 || done.FirstText != 0 || done.Usage != nil {
+	if done.Err != nil || len(outs) != 1 || done.FirstText != 0 || done.Usage != nil || done.Tokens != nil {
 		t.Errorf("outs = %+v, done = %+v", outs, done)
+	}
+}
+
+func TestTurnReportsTheTokensItUsed(t *testing.T) {
+	usage := `"usage":{"input_tokens":4,"cache_creation_input_tokens":2542,"cache_read_input_tokens":7041,"output_tokens":78},"total_cost_usd":0.0116601`
+	tests := []struct {
+		name    string
+		result  string
+		wantErr bool
+	}{
+		{"completed", `{"type":"result","subtype":"success","is_error":false,"result":"ok",` + usage + `}`, false},
+		{"failed", `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom",` + usage + `}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newProvider(t, testOptions(t))
+			_, done := collect(t, p, context.Background(), scriptOf(step{Text: "hola"}, step{Raw: json.RawMessage(tt.result)}))
+			if (done.Err != nil) != tt.wantErr {
+				t.Fatalf("Done.Err = %v, want an error: %v", done.Err, tt.wantErr)
+			}
+			want := llm.Tokens{Input: 4, CacheRead: 7041, CacheWrite: 2542, Output: 78, CostUSD: 0.0116601}
+			if done.Tokens == nil || *done.Tokens != want {
+				t.Errorf("Tokens = %+v, want %+v", done.Tokens, want)
+			}
+		})
+	}
+}
+
+func TestUnexpectedTokenCountsDontBreakTheTurn(t *testing.T) {
+	for _, extra := range []string{
+		`"usage":{"input_tokens":1.5}`,
+		`"usage":"n/a"`,
+		`"total_cost_usd":"0.01"`,
+		`"usage":{"input_tokens":99999999999999999999999}`,
+	} {
+		t.Run(extra, func(t *testing.T) {
+			p := newProvider(t, testOptions(t))
+			result := `{"type":"result","subtype":"success","is_error":false,"result":"ok",` + extra + `}`
+			outs, done := collect(t, p, context.Background(), scriptOf(step{Text: "hola"}, step{Raw: json.RawMessage(result)}))
+			if done.Err != nil || len(outs) != 1 {
+				t.Fatalf("outs = %+v, Done.Err = %v, want the turn to complete", outs, done.Err)
+			}
+		})
 	}
 }
 

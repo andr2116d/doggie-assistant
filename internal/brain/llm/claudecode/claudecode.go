@@ -551,6 +551,8 @@ func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, o
 					d.Usage = limit.usage()
 				}
 			case "result":
+				// A failed turn may have used tokens too.
+				d.Tokens = ev.tokens()
 				if f := ev.failure(); f != "" {
 					d.Err = fmt.Errorf("claudecode: %s", f)
 					// A 429 the CLI gives up on is the usage limit, even

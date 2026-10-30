@@ -58,6 +58,28 @@ type event struct {
 	IsError        bool            `json:"is_error"`
 	Result         string          `json:"result"`
 	APIErrorStatus json.RawMessage `json:"api_error_status"`
+	// Usage sums the turn's calls to the model. Both are decoded apart, by
+	// tokens: a shape DOGGIE doesn't expect must lose the count, not the
+	// result.
+	Usage        json.RawMessage `json:"usage"`
+	TotalCostUSD json.RawMessage `json:"total_cost_usd"`
+}
+
+// tokens is what a result says the turn used, or nil if it doesn't say.
+func (e *event) tokens() *llm.Tokens {
+	var u struct {
+		Input      int `json:"input_tokens"`
+		CacheRead  int `json:"cache_read_input_tokens"`
+		CacheWrite int `json:"cache_creation_input_tokens"`
+		Output     int `json:"output_tokens"`
+	}
+	if len(e.Usage) == 0 || string(e.Usage) == "null" || json.Unmarshal(e.Usage, &u) != nil {
+		return nil
+	}
+	t := &llm.Tokens{Input: u.Input, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Output: u.Output}
+	// Without its cost the counts still tell.
+	json.Unmarshal(e.TotalCostUSD, &t.CostUSD)
+	return t
 }
 
 // toolsConnected reports whether an init event lists DOGGIE's MCP server as

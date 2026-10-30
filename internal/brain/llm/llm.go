@@ -91,6 +91,22 @@ type Done struct {
 	Duration time.Duration
 	// Usage is how much of the provider's usage limits is spent, if known.
 	Usage *Usage
+	// Tokens is what the turn used, if known.
+	Tokens *Tokens
+}
+
+// Tokens is what a turn used, summed over all its calls to the model. The
+// input is split three ways: CacheRead was read from the provider's prompt
+// cache, CacheWrite was written to it, and Input is the rest.
+type Tokens struct {
+	Input      int
+	CacheRead  int
+	CacheWrite int
+	Output     int
+	// CostUSD is what the turn would cost at the provider's API list
+	// prices, or 0 if unknown. It weighs the four counts in one figure:
+	// reading the cache is far cheaper than writing it.
+	CostUSD float64
 }
 
 // Usage is the share (0-1) of a subscription's usage windows already spent,

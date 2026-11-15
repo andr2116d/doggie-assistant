@@ -10,6 +10,12 @@ import (
 	"github.com/andr2116d/doggie-assistant/internal/brain/llm"
 )
 
+// serveOnce runs one turn on pr, as serve does, and stops pr.
+func (p *Provider) serveOnce(ctx, tctx context.Context, pr *proc, req llm.Request, out chan<- llm.Output) (*llm.Done, bool) {
+	defer p.discard(pr)
+	return p.serve(ctx, tctx, pr, req, out)
+}
+
 // serving is one turn while a process serves it. Only the goroutine that
 // serves the turn touches it.
 type serving struct {
@@ -27,12 +33,16 @@ type serving struct {
 }
 
 // serve runs one turn on pr, until tctx (the turn's deadline, derived from
-// the caller's ctx) ends, and always stops pr. It reports whether the turn
-// may be retried: it failed before the model started and said nothing.
+// the caller's ctx) ends. It reports whether the turn may be retried: it
+// failed before the model started and said nothing. After a turn that ends
+// with an error pr is of no use: it was killed, it exited, or it may still
+// be answering.
 func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, out chan<- llm.Output) (d *llm.Done, retry bool) {
-	defer p.discard(pr)
+	pr.said = false
 	s := &serving{p: p, pr: pr, req: req, out: out, ctx: ctx, tctx: tctx, start: time.Now(), done: &llm.Done{}}
 	defer func() { d.Duration = time.Since(s.start) }()
+	// Between turns the process's tools act for nobody.
+	defer pr.client.Unbind()
 
 	// A turn cancelled before it starts must not reach the tools.
 	if tctx.Err() != nil {

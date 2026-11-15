@@ -23,8 +23,9 @@ const (
 	stderrTail = 4 << 10
 )
 
-// proc is one claude process. It serves exactly one turn: DOGGIE writes one
-// input, closes stdin and reads until the result.
+// proc is one claude process. It serves one turn at a time: DOGGIE writes
+// the turn's input and reads until its result. Its input stays open, so it
+// can take another turn after that.
 type proc struct {
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
@@ -41,7 +42,7 @@ type proc struct {
 	taken chan struct{}
 	// backup is set when the process runs on the backup login.
 	backup bool
-	// said is set once the turn gave out something.
+	// said is set once the turn being served gave out something.
 	said bool
 
 	stopOnce sync.Once
@@ -193,8 +194,8 @@ func (pr *proc) alive() bool {
 	}
 }
 
-// send writes the turn's input and closes stdin, so the CLI exits after the
-// turn. It runs apart from the reader: a large input must not block reading.
+// send writes a turn's input. It runs apart from the reader: a large input
+// must not block reading.
 func (pr *proc) send(input string) error {
 	msg, err := json.Marshal(map[string]any{
 		"type":    "user",
@@ -204,9 +205,6 @@ func (pr *proc) send(input string) error {
 		return err
 	}
 	_, err = pr.stdin.Write(append(msg, '\n'))
-	if cerr := pr.stdin.Close(); err == nil {
-		err = cerr
-	}
 	return err
 }
 

@@ -350,7 +350,7 @@ func (p *Provider) runTurn(ctx context.Context, pr *proc, req llm.Request, out c
 	// One deadline for the whole turn, retries included.
 	tctx, cancel := context.WithTimeout(ctx, p.opts.TurnTimeout)
 	defer cancel()
-	d, retry := p.serve(ctx, tctx, pr, req, out)
+	d, retry := p.serveOnce(ctx, tctx, pr, req, out)
 	if retry && tctx.Err() == nil {
 		p.opts.Log.Warn("claudecode: claude failed before the turn started, retrying on a new process", "err", d.Err)
 		next, err := p.spawnTracked(pr.backup)
@@ -358,7 +358,7 @@ func (p *Provider) runTurn(ctx context.Context, pr *proc, req llm.Request, out c
 			return &llm.Done{Err: err}
 		}
 		pr = next
-		d, _ = p.serve(ctx, tctx, pr, req, out)
+		d, _ = p.serveOnce(ctx, tctx, pr, req, out)
 	}
 	var spent *llm.UsageLimitError
 	if !errors.As(d.Err, &spent) {
@@ -371,7 +371,7 @@ func (p *Provider) runTurn(ctx context.Context, pr *proc, req llm.Request, out c
 			return &llm.Done{Err: err}
 		}
 		pr = next
-		if d, _ = p.serve(ctx, tctx, pr, req, out); !errors.As(d.Err, &spent) {
+		if d, _ = p.serveOnce(ctx, tctx, pr, req, out); !errors.As(d.Err, &spent) {
 			return d
 		}
 	}

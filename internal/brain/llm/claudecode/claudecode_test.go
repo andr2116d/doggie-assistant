@@ -394,6 +394,63 @@ func TestToolsActForTheTurnOnly(t *testing.T) {
 	}
 }
 
+// A process serves one turn after another: each ends with its own result,
+// and between turns its tools act for nobody.
+func TestProcessServesSeveralTurns(t *testing.T) {
+	o := testOptions(t)
+	p := newProvider(t, o)
+	pr, err := p.spawnTracked(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.discard(pr) })
+	ctx := context.Background()
+	pid := 0
+	for i, in := range []string{
+		scriptOf(step{Text: "uno"}, step{Report: true}),
+		scriptOf(step{Call: "list_tasks"}, step{Report: true}),
+		scriptOf(step{Error: "overloaded"}),
+		scriptOf(step{Text: "cuatro"}, step{Report: true}),
+	} {
+		out := make(chan llm.Output, 16)
+		done, _ := p.serve(ctx, ctx, pr, llm.Request{Turn: turn, Input: in}, out)
+		close(out)
+		var outs []llm.Output
+		for o := range out {
+			outs = append(outs, o)
+		}
+		if i == 2 {
+			if done.Err == nil || !strings.Contains(done.Err.Error(), "overloaded") {
+				t.Fatalf("turn 3: Done.Err = %v, want its own failure", done.Err)
+			}
+			if pr.said {
+				t.Error("turn 3 said nothing, but said is still set from the turn before")
+			}
+			continue
+		}
+		if done.Err != nil || done.Model != "fake-model" || len(outs) != 2 {
+			t.Fatalf("turn %d: outs = %+v, done = %+v", i+1, outs, done)
+		}
+		if i == 1 && !strings.Contains(outs[0].Text, "task manager is not running") {
+			t.Errorf("turn 2: the tools didn't act for the turn: %s", outs[0].Text)
+		}
+		if r := reportOf(t, outs); pid == 0 {
+			pid = r.PID
+		} else if r.PID != pid {
+			t.Errorf("turn %d ran on process %d, want the same one, %d", i+1, r.PID, pid)
+		}
+		if pr.said != true {
+			t.Errorf("turn %d: said isn't set though it gave out something", i+1)
+		}
+		if res := callAs(t, o.Tools.URL(), pr.client.Token(), "list_tasks"); !strings.Contains(res, "no conversation turn") {
+			t.Errorf("after turn %d the process's tools still act: %s", i+1, res)
+		}
+	}
+	if !pr.alive() {
+		t.Error("the process ended after its turns")
+	}
+}
+
 // postStatus sends tools/list with token and returns the HTTP status.
 func postStatus(t *testing.T, url, token string) int {
 	t.Helper()

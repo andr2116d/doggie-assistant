@@ -105,10 +105,19 @@ func fakeMain() {
 		out.Flush()
 	}
 
-	line, err := bufio.NewReaderSize(os.Stdin, 4<<20).ReadBytes('\n')
-	if len(line) == 0 && err != nil {
-		os.Exit(0) // stdin closed before any input
+	// One turn for each line of input, as the CLI does, until it is closed.
+	in := bufio.NewReaderSize(os.Stdin, 4<<20)
+	for {
+		line, err := in.ReadBytes('\n')
+		if len(line) == 0 && err != nil {
+			os.Exit(0)
+		}
+		fakeTurn(line, started, out, emit)
 	}
+}
+
+// fakeTurn does what the script in line says, and ends with a result.
+func fakeTurn(line []byte, started time.Time, out *bufio.Writer, emit func(v any)) {
 	inputAt := time.Now()
 	if f := os.Getenv("DOGGIE_FAKE_ENVLOG"); f != "" {
 		appendLine(f, strings.Join(os.Environ(), "\n"))

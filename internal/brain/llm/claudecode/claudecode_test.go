@@ -1400,3 +1400,26 @@ func TestThreadStartsOverPastTheSizeLimit(t *testing.T) {
 	}
 	waitFor(t, "the process of unknown size to stop", func() bool { return !processAlive(second) })
 }
+
+// A process kept for a thread is stopped once it waited too long, or when
+// it dies, without waiting for the thread's next turn.
+func TestIdleOrDeadKeptProcessIsStopped(t *testing.T) {
+	old := epochIdle
+	t.Cleanup(func() { epochIdle = old })
+	p := newProvider(t, testOptions(t))
+
+	epochIdle = time.Hour
+	first, _ := epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+	syscall.Kill(first, syscall.SIGKILL)
+	waitFor(t, "the dead process to be let go", func() bool { return p.procCount() == 0 })
+
+	epochIdle = 50 * time.Millisecond
+	second, got := epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+	if got != "todo" {
+		t.Errorf("after its process died the turn was sent %q", got)
+	}
+	waitFor(t, "the idle process to stop", func() bool { return !processAlive(second) && p.procCount() == 0 })
+	if pid, got := epochTurn(t, p, "th1", said("todo"), said("nuevo")); pid == second || got != "todo" {
+		t.Errorf("after waiting too long the turn ran on process %d and was sent %q", pid, got)
+	}
+}

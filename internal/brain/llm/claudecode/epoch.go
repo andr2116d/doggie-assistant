@@ -24,6 +24,11 @@ func fits(t *llm.Tokens) bool {
 	return t != nil && t.Input+t.CacheRead+t.CacheWrite <= maxEpochTokens
 }
 
+// epochIdle is how long a kept process waits for its thread's next turn.
+// The prompt cache forgets the conversation after an hour, and from then
+// on a kept process saves nothing. A variable so tests can shrink it.
+var epochIdle = 55 * time.Minute
+
 // An epoch is a process kept after a turn of a thread, holding the thread's
 // conversation, to serve its next turns: they send only what is new, and
 // the CLI reads the rest back from the prompt cache instead of writing it
@@ -35,11 +40,10 @@ func fits(t *llm.Tokens) bool {
 func (p *Provider) takeEpoch(thread string) *proc {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	pr := p.epochs[thread]
-	if pr == nil || p.closed {
+	if p.epochs[thread] == nil || p.closed {
 		return nil
 	}
-	delete(p.epochs, thread)
+	pr := p.forgetEpoch(thread)
 	if !pr.alive() || pr.backup != p.backupLocked() {
 		p.discardLater(pr)
 		return nil
@@ -56,11 +60,13 @@ func (p *Provider) keepEpoch(thread string, pr *proc) bool {
 	if p.closed {
 		return false
 	}
-	pr.used = time.Now()
-	if old := p.epochs[thread]; old != nil {
-		p.discardLater(old)
+	if p.epochs[thread] != nil {
+		p.discardLater(p.forgetEpoch(thread))
 	}
+	pr.used, pr.released = time.Now(), make(chan struct{})
 	p.epochs[thread] = pr
+	p.wg.Add(1)
+	go p.watchEpoch(thread, pr, pr.released)
 	for len(p.epochs) > maxEpochs {
 		oldest := thread
 		for t, e := range p.epochs {
@@ -68,10 +74,42 @@ func (p *Provider) keepEpoch(thread string, pr *proc) bool {
 				oldest = t
 			}
 		}
-		p.discardLater(p.epochs[oldest])
-		delete(p.epochs, oldest)
+		p.discardLater(p.forgetEpoch(oldest))
 	}
 	return true
+}
+
+// forgetEpoch takes the process kept for thread out of the epochs, which
+// ends its watcher, and returns it. The caller holds p.mu.
+func (p *Provider) forgetEpoch(thread string) *proc {
+	pr := p.epochs[thread]
+	delete(p.epochs, thread)
+	close(pr.released)
+	return pr
+}
+
+// watchEpoch stops the process kept for thread if it dies or waits too
+// long. It ends once the process leaves the epochs: released is closed.
+func (p *Provider) watchEpoch(thread string, pr *proc, released <-chan struct{}) {
+	defer p.wg.Done()
+	timer := time.NewTimer(epochIdle)
+	defer timer.Stop()
+	select {
+	case <-released:
+		return
+	case <-p.done:
+		return
+	case <-pr.exited:
+	case <-timer.C:
+	}
+	p.mu.Lock()
+	if p.closed || p.epochs[thread] != pr {
+		p.mu.Unlock()
+		return
+	}
+	p.forgetEpoch(thread)
+	p.mu.Unlock()
+	p.discard(pr)
 }
 
 // discardLater stops pr apart, since stopping waits for it to exit. The

@@ -6,6 +6,9 @@
 //	<conversation>  the recent turns of the thread, oldest first
 //	<input>         what just happened: what the user said and task events
 //
+// An LLM that already holds the conversation gets, in its place, <told>:
+// what DOGGIE said itself since.
+//
 // v0 keeps it simple: no memory, no summaries, and budgets by count and
 // size. Every dynamic text is escaped, so nothing can forge the structure,
 // and what tasks report is wrapped in <data>: the system prompt tells the
@@ -61,6 +64,9 @@ type Turn struct {
 	Inputs  []Input
 	Actions []Action
 	Replies []string
+	// Own is how many of the last Replies DOGGIE wrote itself, once the
+	// LLM had ended the turn.
+	Own int
 }
 
 // Action is a tool the LLM called in a turn.
@@ -117,13 +123,30 @@ func Build(c Context) string {
 
 // BuildNext returns the message for a turn sent to an LLM that already
 // holds the thread's past turns, as the messages before this one: the
-// world and what just happened.
+// world, what DOGGIE said itself after the last of them, which that LLM
+// didn't write, and what just happened.
 func BuildNext(c Context) string {
 	clk := c.clock()
 	var b strings.Builder
 	writeWorld(&b, c, clk)
+	if n := len(c.History); n > 0 {
+		writeTold(&b, c.History[n-1])
+	}
 	writeInputs(&b, c.Inputs, clk)
 	return b.String()
+}
+
+// writeTold writes the replies of t that DOGGIE wrote itself, if any.
+func writeTold(b *strings.Builder, t Turn) {
+	own := t.Replies[max(len(t.Replies)-max(t.Own, 0), 0):]
+	if len(own) == 0 {
+		return
+	}
+	b.WriteString("\n<told>\n")
+	for _, r := range own {
+		fmt.Fprintf(b, "<reply>%s</reply>\n", esc(cut(r, maxHistoryText)))
+	}
+	b.WriteString("</told>\n")
 }
 
 // clock tells the times of c's message in the owner's time zone.

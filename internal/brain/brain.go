@@ -389,7 +389,7 @@ func (b *Brain) remember(th *thread, logged bus.Meta, at time.Time, rec events.B
 	if rec.Error != "" && len(rec.Replies) == 0 && len(rec.Actions) == 0 {
 		return
 	}
-	t := prompt.Turn{At: at, Replies: rec.Replies}
+	t := prompt.Turn{At: at, Replies: rec.Replies, Own: ownReplies(rec)}
 	for _, in := range rec.Inputs {
 		t.Inputs = append(t.Inputs, promptInput(in))
 	}

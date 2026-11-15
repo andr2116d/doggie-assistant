@@ -197,6 +197,15 @@ func (b *Brain) warnLowUsage(job turnJob, rec *events.BrainTurnData, usage *llm.
 	b.say(job, text, block, cause)
 }
 
+// ownReplies is how many of a turn's last replies DOGGIE wrote itself: that
+// the usage limit is spent, or that little of it is left.
+func ownReplies(rec events.BrainTurnData) int {
+	if rec.Failure == events.FailureUsageLimit || len(rec.LowUsage) > 0 {
+		return min(1, len(rec.Replies))
+	}
+	return 0
+}
+
 // loggable is what a turn's inputs may leave in the event log: the
 // questions of sensitive tasks stay out of it, as their results do.
 func loggable(inputs []events.TurnInput) []events.TurnInput {

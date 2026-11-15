@@ -144,6 +144,34 @@ func TestLowUsageIsWarnedOncePerWindow(t *testing.T) {
 	}
 }
 
+// A provider that holds the conversation didn't write DOGGIE's warning: the
+// next turn tells it, once.
+func TestNextTurnTellsTheWarning(t *testing.T) {
+	h := newHarness(t, Options{Language: "es"})
+	h.fake.set(func(f *fake) {
+		f.reply = func(context.Context, llm.Request) []llm.Output {
+			return []llm.Output{{Text: "Claro."}, {Done: &llm.Done{Usage: &llm.Usage{FiveHour: 0.9}}}}
+		}
+	})
+	for range 3 {
+		h.say("", "terminal", "hola")
+		h.nextTurn()
+	}
+	reqs := h.fake.requests()
+	if len(reqs) != 3 {
+		t.Fatalf("%d requests, want 3", len(reqs))
+	}
+	const warning = "<reply>Ojo: me queda poca cuota para pensar."
+	if c := reqs[0].Continue; strings.Contains(c, "<told>") {
+		t.Errorf("the first turn tells of something said:\n%s", c)
+	}
+	mustContain(t, reqs[1].Continue, "<told>\n"+warning)
+	mustContain(t, reqs[1].Input, "<reply>Claro.</reply>\n"+warning)
+	if c := reqs[2].Continue; strings.Contains(c, "<told>") {
+		t.Errorf("the warning is told again two turns later:\n%s", c)
+	}
+}
+
 // A turn cut in the middle of a block: the warning is a block of its own,
 // not the end of the one left unfinished.
 func TestLowUsageAfterAnUnfinishedBlock(t *testing.T) {

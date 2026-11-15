@@ -92,6 +92,31 @@ func TestBuildNextLeavesThePastTurnsOut(t *testing.T) {
 	}
 }
 
+// What DOGGIE said itself after the last turn isn't in the conversation an
+// LLM holds from it: what is new tells it, and only that of the last turn.
+func TestBuildNextTellsWhatDOGGIESaidItself(t *testing.T) {
+	warned := Turn{At: at(1), Inputs: []Input{said(1, "hola")}, Replies: []string{"Hola.", "Queda poco <uso>."}, Own: 1}
+	plain := Turn{At: at(2), Inputs: []Input{said(2, "ok")}, Replies: []string{"Vale."}}
+	c := Context{Now: at(5), MaxTurns: 20, History: []Turn{plain, warned}, Inputs: []Input{said(5, "¿qué hora es?")}}
+	next := BuildNext(c)
+	want := "</world>\n\n<told>\n<reply>Queda poco &lt;uso&gt;.</reply>\n</told>\n\n<input>\n"
+	if !strings.Contains(next, want) || strings.Contains(next, "Hola.") {
+		t.Errorf("what is new:\n%s\nwant it to hold only:\n%s", next, want)
+	}
+	if whole := Build(c); strings.Contains(whole, "<told>") || !strings.Contains(whole, "<reply>Queda poco &lt;uso&gt;.</reply>") {
+		t.Errorf("the whole message tells it apart from its turn:\n%s", whole)
+	}
+	c.History = []Turn{warned, plain}
+	if next := BuildNext(c); strings.Contains(next, "<told>") {
+		t.Errorf("what is new tells what was said before the last turn:\n%s", next)
+	}
+	// More than the turn has is all of it.
+	c.History = []Turn{{At: at(1), Replies: []string{"Uno."}, Own: 3}}
+	if next := BuildNext(c); !strings.Contains(next, "<told>\n<reply>Uno.</reply>\n</told>") {
+		t.Errorf("what is new:\n%s", next)
+	}
+}
+
 // Nothing a user, a satellite or a task reports can open or close a tag:
 // it could otherwise forge an order from the owner or a fake event.
 func TestBuildEscapesEverything(t *testing.T) {

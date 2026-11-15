@@ -318,3 +318,61 @@ func TestRealTokensOfAKeptProcess(t *testing.T) {
 		t.Errorf("a kept process wrote %d tokens and cost $%.4f; a process per turn, %d and $%.4f", kept.CacheWrite, kept.CostUSD, apart.CacheWrite, apart.CostUSD)
 	}
 }
+
+// TestRealSizeOfATurnWithTools runs, on the real CLI, a turn that calls a
+// tool and then another on the same process. The size DOGGIE takes the
+// conversation to have after the first must be less than all that turn
+// read, and close to what the second reads.
+func TestRealSizeOfATurnWithTools(t *testing.T) {
+	if os.Getenv("DOGGIE_REAL_CLAUDE") != "1" {
+		t.Skip("set DOGGIE_REAL_CLAUDE=1 to run against the real claude CLI")
+	}
+	ctx, tools, _ := realTools(t)
+	p, err := New(Options{
+		Command: "claude", Model: "sonnet", Tools: tools, Log: discardLog(),
+		Dir:    filepath.Join(t.TempDir(), "cc"),
+		System: "You are DOGGIE, a voice assistant. Reply in Spanish in one short sentence. Use start_task for real-world actions; it returns at once.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	const thread = "real-size"
+	// turn returns all the turn read and what its process holds after it.
+	turn := func(say string) (read, held int) {
+		in := "<input>\n<said>" + say + "</said>\n</input>\n"
+		ch, err := p.Generate(ctx, llm.Request{Turn: mcp.Turn{ThreadID: thread, Channel: "terminal"}, Input: in, Continue: in})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var done *llm.Done
+		calls := 0
+		for o := range ch {
+			if o.Tool != nil {
+				calls++
+			}
+			if o.Done != nil {
+				done = o.Done
+			}
+		}
+		if done == nil || done.Err != nil || done.Tokens == nil {
+			t.Fatalf("turn %q: done = %+v", say, done)
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.epochs[thread] == nil {
+			t.Fatalf("turn %q: its process wasn't kept", say)
+		}
+		read, held = done.Tokens.Input+done.Tokens.CacheRead+done.Tokens.CacheWrite, p.epochs[thread].held
+		t.Logf("turn %q: %d tool calls, read %d in all, wrote %d, holds %d", say, calls, read, done.Tokens.Output, held)
+		return read, held
+	}
+	read, held := turn("Pon un temporizador de 1 segundo (usa demo.sleep) y dime que ya estás en eso.")
+	if held >= read {
+		t.Errorf("after a turn with a tool call the process holds %d tokens, and the turn read %d in all", held, read)
+	}
+	next, _ := turn("Gracias.")
+	if diff := next - held; diff < -held/10 || diff > held/10 {
+		t.Errorf("the next turn read %d tokens, and the process was taken to hold %d", next, held)
+	}
+}

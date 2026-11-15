@@ -51,6 +51,9 @@ type proc struct {
 	// cost is what the CLI said the process cost up to its last result
 	// (USD): it tells the total, and a turn's cost is what it added.
 	cost float64
+	// held is how many tokens the conversation the process holds takes,
+	// as of its last result, or 0 if unknown.
+	held int
 
 	stopOnce sync.Once
 }

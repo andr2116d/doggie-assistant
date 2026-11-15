@@ -46,6 +46,7 @@ type script struct {
 
 type step struct {
 	Text     string          `json:"text,omitempty"`     // a text block, streamed first
+	Usage    json.RawMessage `json:"usage,omitempty"`    // what the text's call to the model used
 	Thinking string          `json:"thinking,omitempty"` // a thinking block
 	Tool     string          `json:"tool,omitempty"`     // a tool_use block (not executed)
 	Args     json.RawMessage `json:"args,omitempty"`
@@ -160,7 +161,11 @@ func fakeTurn(line []byte, started time.Time, out *bufio.Writer, emit func(v any
 		case s.Text != "":
 			emit(map[string]any{"type": "stream_event", "event": map[string]any{"type": "content_block_delta",
 				"delta": map[string]string{"type": "text_delta", "text": s.Text}}})
-			emit(assistant(map[string]any{"type": "text", "text": s.Text}))
+			said := assistant(map[string]any{"type": "text", "text": s.Text})
+			if s.Usage != nil {
+				said["message"].(map[string]any)["usage"] = s.Usage
+			}
+			emit(said)
 		case s.Thinking != "":
 			emit(assistant(map[string]any{"type": "thinking", "thinking": s.Thinking}))
 		case s.Tool != "":

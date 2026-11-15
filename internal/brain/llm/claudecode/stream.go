@@ -42,7 +42,9 @@ type event struct {
 
 	// assistant
 	Message *struct {
-		Model   string `json:"model"`
+		Model string `json:"model"`
+		// Usage is what this one call to the model used.
+		Usage   json.RawMessage `json:"usage"`
 		Content []struct {
 			Type  string          `json:"type"`
 			Text  string          `json:"text"`
@@ -67,19 +69,37 @@ type event struct {
 
 // tokens is what a result says the turn used, or nil if it doesn't say.
 func (e *event) tokens() *llm.Tokens {
+	t := usageOf(e.Usage)
+	if t != nil {
+		// Without its cost the counts still tell.
+		json.Unmarshal(e.TotalCostUSD, &t.CostUSD)
+	}
+	return t
+}
+
+// callTokens is what an assistant message says its call to the model used,
+// or nil if it doesn't say. Its output is only what was written when the
+// message started.
+func (e *event) callTokens() *llm.Tokens {
+	if e.Message == nil {
+		return nil
+	}
+	return usageOf(e.Message.Usage)
+}
+
+// usageOf decodes the token counts the CLI reports, or nil if raw holds
+// none.
+func usageOf(raw json.RawMessage) *llm.Tokens {
 	var u struct {
 		Input      int `json:"input_tokens"`
 		CacheRead  int `json:"cache_read_input_tokens"`
 		CacheWrite int `json:"cache_creation_input_tokens"`
 		Output     int `json:"output_tokens"`
 	}
-	if len(e.Usage) == 0 || string(e.Usage) == "null" || json.Unmarshal(e.Usage, &u) != nil {
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &u) != nil {
 		return nil
 	}
-	t := &llm.Tokens{Input: u.Input, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Output: u.Output}
-	// Without its cost the counts still tell.
-	json.Unmarshal(e.TotalCostUSD, &t.CostUSD)
-	return t
+	return &llm.Tokens{Input: u.Input, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Output: u.Output}
 }
 
 // toolsConnected reports whether an init event lists DOGGIE's MCP server as

@@ -16,7 +16,7 @@ import (
 func (p *Provider) attempt(ctx, tctx context.Context, pr *proc, req llm.Request, input string, out chan<- llm.Output) (*llm.Done, bool) {
 	req.Input = input
 	d, retry := p.serve(ctx, tctx, pr, req, out)
-	if d.Err != nil || req.Continue == "" || !fits(d.Tokens) || !p.keepEpoch(req.Turn.ThreadID, pr) {
+	if d.Err != nil || req.Continue == "" || !pr.fits() || !p.keepEpoch(req.Turn.ThreadID, pr) {
 		p.discard(pr)
 	}
 	return d, retry
@@ -36,6 +36,8 @@ type serving struct {
 	// started is set once the CLI is up: from then on the model may act.
 	started bool
 	limit   *rateLimit // the last usage the CLI reported
+	// call is what the turn's last call to the model used, if known.
+	call *llm.Tokens
 }
 
 // serve runs one turn on pr, until tctx (the turn's deadline, derived from
@@ -44,7 +46,7 @@ type serving struct {
 // with an error pr is of no use: it was killed, it exited, or it may still
 // be answering.
 func (p *Provider) serve(ctx, tctx context.Context, pr *proc, req llm.Request, out chan<- llm.Output) (d *llm.Done, retry bool) {
-	pr.said = false
+	pr.said, pr.held = false, 0
 	s := &serving{p: p, pr: pr, req: req, out: out, ctx: ctx, tctx: tctx, start: time.Now(), done: &llm.Done{}}
 	defer func() { d.Duration = time.Since(s.start) }()
 	// Between turns the process's tools act for nobody.
@@ -192,6 +194,9 @@ func (s *serving) onAssistant(ev *event) {
 	if ev.Message == nil || ev.Message.Model == syntheticModel {
 		return
 	}
+	if t := ev.callTokens(); t != nil {
+		s.call = t
+	}
 	for _, c := range ev.Message.Content {
 		var o llm.Output
 		switch {
@@ -212,6 +217,7 @@ func (s *serving) onAssistant(ev *event) {
 func (s *serving) onResult(ev *event) {
 	// A failed turn may have used tokens too.
 	s.done.Tokens = ev.tokens()
+	s.pr.held = heldAfter(s.call, s.done.Tokens)
 	if t := s.done.Tokens; t != nil && t.CostUSD >= s.pr.cost {
 		t.CostUSD, s.pr.cost = t.CostUSD-s.pr.cost, t.CostUSD
 	}

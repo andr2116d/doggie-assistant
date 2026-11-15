@@ -16,12 +16,26 @@ const maxEpochs = 2
 // A variable so tests can shrink it.
 var maxEpochTokens = 60_000
 
-// fits reports whether the conversation of a turn that used t is small
-// enough to keep its process. The input of all the turn's calls to the
-// model is counted, which is more than the conversation when the turn
-// called tools; an unknown size doesn't fit.
-func fits(t *llm.Tokens) bool {
-	return t != nil && t.Input+t.CacheRead+t.CacheWrite <= maxEpochTokens
+// fits reports whether the conversation pr holds is small enough to keep
+// it. An unknown size doesn't fit.
+func (pr *proc) fits() bool {
+	return pr.held > 0 && pr.held <= maxEpochTokens
+}
+
+// heldAfter is how many tokens a conversation takes after a turn that
+// used turn in all, call being what its last call to the model used: what
+// that call read, which is the conversation up to it, plus what the turn
+// wrote. Counting all the turn wrote is a little over when it called
+// tools, never under. Without call, all the turn read is counted, which
+// is the conversation once for each call. It is 0 if turn is unknown.
+func heldAfter(call, turn *llm.Tokens) int {
+	if turn == nil {
+		return 0
+	}
+	if call == nil {
+		call = turn
+	}
+	return call.Input + call.CacheRead + call.CacheWrite + turn.Output
 }
 
 // epochIdle is how long a kept process waits for its thread's next turn.

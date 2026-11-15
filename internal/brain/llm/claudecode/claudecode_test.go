@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1401,6 +1402,34 @@ func TestThreadStartsOverPastTheSizeLimit(t *testing.T) {
 		t.Errorf("past the limit the turn ran on the same process, %d", second)
 	}
 	waitFor(t, "the process of unknown size to stop", func() bool { return !processAlive(second) })
+}
+
+// A turn that calls tools reads the conversation once for each call to the
+// model. The size of what its process holds is what the last call read
+// plus what the turn wrote, not all the turn read.
+func TestSizeOfAKeptProcessIsItsLastCall(t *testing.T) {
+	old := maxEpochTokens
+	maxEpochTokens = 5000
+	t.Cleanup(func() { maxEpochTokens = old })
+	p := newProvider(t, testOptions(t))
+	// Two calls to the model: the result sums them.
+	turn := func(lastCall, output int) string {
+		call := func(read int) json.RawMessage {
+			return json.RawMessage(fmt.Sprintf(`{"input_tokens":10,"cache_read_input_tokens":%d,"cache_creation_input_tokens":90,"output_tokens":1}`, read-100))
+		}
+		return scriptOf(step{Text: "voy", Usage: call(3000)}, step{Text: "listo", Usage: call(lastCall)}, step{Report: true},
+			step{Raw: json.RawMessage(fmt.Sprintf(`{"type":"result","subtype":"success","is_error":false,"result":"ok",`+
+				`"usage":{"input_tokens":20,"cache_read_input_tokens":%d,"cache_creation_input_tokens":180,"output_tokens":%d}}`, 3000+lastCall-200, output))})
+	}
+	first, _ := epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+	if pid, _ := epochTurn(t, p, "th1", said("todo"), turn(4000, 1000)); pid != first {
+		t.Fatalf("the turn ran on process %d, want %d", pid, first)
+	}
+	// It read 7000 tokens in all, and holds 5000.
+	if pid, _ := epochTurn(t, p, "th1", said("todo"), turn(4000, 1001)); pid != first {
+		t.Fatalf("a turn that left 5000 tokens lost its process: the next ran on %d, want %d", pid, first)
+	}
+	waitFor(t, "the process past the limit to stop", func() bool { return !processAlive(first) })
 }
 
 // A process kept for a thread is stopped once it waited too long, or when

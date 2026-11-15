@@ -72,8 +72,9 @@ type Brain struct {
 	// TurnTimeout bounds one turn of the LLM, tool calls included.
 	TurnTimeout time.Duration `yaml:"turn_timeout"`
 	// Warm is how many LLM processes wait started, so a turn doesn't pay
-	// for starting one: one per turn that may run at once (2). Each takes
-	// about 200 MB of memory.
+	// for starting one. A conversation keeps its own process between
+	// turns, so one serves those that start. Each takes about 200 MB of
+	// memory.
 	Warm       int        `yaml:"warm"`
 	ClaudeCode ClaudeCode `yaml:"claudecode"`
 }
@@ -136,7 +137,7 @@ func Default() Config {
 			Model:        "sonnet",
 			HistoryTurns: 20,
 			TurnTimeout:  90 * time.Second,
-			Warm:         2,
+			Warm:         1,
 			ClaudeCode:   ClaudeCode{Command: "claude"},
 		},
 	}

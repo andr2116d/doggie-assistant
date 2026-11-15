@@ -138,7 +138,7 @@ func TestLoad(t *testing.T) {
 			check: func(t *testing.T, cfg Config) {
 				b := cfg.Brain
 				if cfg.Assistant.Name != "DOGGIE" || b.Provider != "claudecode" || b.Model != "sonnet" ||
-					b.HistoryTurns != 20 || b.TurnTimeout != 90*time.Second || b.Warm != 2 || b.ClaudeCode.Command != "claude" {
+					b.HistoryTurns != 20 || b.TurnTimeout != 90*time.Second || b.Warm != 1 || b.ClaudeCode.Command != "claude" {
 					t.Errorf("unexpected defaults: %+v %+v", cfg.Assistant, b)
 				}
 			},

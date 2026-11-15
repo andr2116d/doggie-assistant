@@ -1247,3 +1247,126 @@ func TestUsageTellsWhenWindowsRenew(t *testing.T) {
 		t.Errorf("done = %+v, usage = %+v", done, u)
 	}
 }
+
+// epochTurn runs a turn of thread that tells what is new, and returns the
+// process that served it and what it was sent.
+func epochTurn(t *testing.T, p *Provider, thread, input, cont string) (pid int, got string) {
+	t.Helper()
+	ch, err := p.Generate(context.Background(), llm.Request{
+		Turn: mcp.Turn{ThreadID: thread, Channel: "terminal"}, Input: input, Continue: cont,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outs, done := drain(t, ch)
+	if done.Err != nil {
+		t.Fatalf("turn of %s: %v", thread, done.Err)
+	}
+	return reportOf(t, outs).PID, outs[0].Text
+}
+
+// said is a turn's input that makes the fake say text and tell about
+// itself.
+func said(text string) string { return scriptOf(step{Text: text}, step{Report: true}) }
+
+// A thread's turns that tell what is new run on one process, which gets
+// the whole input once and then only what is new. A turn that doesn't tell
+// it runs on a process of its own, as before.
+func TestThreadKeepsItsProcess(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "spawns")
+	t.Setenv("DOGGIE_FAKE_SPAWNLOG", log)
+	p := newProvider(t, testOptions(t))
+	first, got := epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+	if got != "todo" {
+		t.Errorf("the first turn was sent %q, want the whole input", got)
+	}
+	for i := range 3 {
+		pid, got := epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+		if pid != first || got != "nuevo" {
+			t.Errorf("turn %d ran on process %d and was sent %q, want process %d and only what is new", i+2, pid, got, first)
+		}
+	}
+	if n := spawnCount(t, log); n != 1 {
+		t.Errorf("%d processes started, want 1", n)
+	}
+	// Without what is new: the whole input, on another process, and the
+	// thread's own stays for its next turn.
+	other, got := epochTurn(t, p, "th1", said("todo"), "")
+	if other == first || got != "todo" {
+		t.Errorf("a turn that doesn't tell what is new ran on process %d and was sent %q", other, got)
+	}
+	if pid, _ := epochTurn(t, p, "th1", said("todo"), said("nuevo")); pid != first {
+		t.Errorf("the thread's process changed from %d to %d", first, pid)
+	}
+	p.Close()
+	if n := p.procCount(); n != 0 {
+		t.Errorf("%d processes left after Close", n)
+	}
+	if processAlive(first) {
+		t.Error("the thread's process outlived the provider")
+	}
+}
+
+// Each thread has its own process, at most maxEpochs of them: past that
+// the one used longest ago is stopped, and its thread starts over.
+func TestOnlySomeThreadsKeepAProcess(t *testing.T) {
+	p := newProvider(t, testOptions(t))
+	a, _ := epochTurn(t, p, "a", said("todo"), said("nuevo"))
+	b, _ := epochTurn(t, p, "b", said("todo"), said("nuevo"))
+	if a == b {
+		t.Fatal("two threads share a process")
+	}
+	if pid, _ := epochTurn(t, p, "a", said("todo"), said("nuevo")); pid != a {
+		t.Errorf("thread a moved from process %d to %d", a, pid)
+	}
+	c, _ := epochTurn(t, p, "c", said("todo"), said("nuevo"))
+	waitFor(t, "the process of thread b to stop", func() bool { return !processAlive(b) && p.procCount() == maxEpochs })
+	if pid, got := epochTurn(t, p, "b", said("todo"), said("nuevo")); pid == b || got != "todo" {
+		t.Errorf("thread b ran on process %d and was sent %q, want a new process and the whole input", pid, got)
+	}
+	// b came back, so a, used before c, went.
+	waitFor(t, "the process of thread a to stop", func() bool { return !processAlive(a) })
+	if pid, _ := epochTurn(t, p, "c", said("todo"), said("nuevo")); pid != c {
+		t.Errorf("thread c moved from process %d to %d", c, pid)
+	}
+}
+
+// A turn that fails, or whose process is gone, ends what the thread had:
+// its next turn gets the whole input on a new process.
+func TestThreadStartsOverAfterAFailure(t *testing.T) {
+	p := newProvider(t, testOptions(t))
+	thread := mcp.Turn{ThreadID: "th1", Channel: "terminal"}
+	first, _ := epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+
+	ch, err := p.Generate(context.Background(), llm.Request{Turn: thread, Input: said("todo"), Continue: scriptOf(step{Error: "overloaded"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, done := drain(t, ch); done.Err == nil {
+		t.Fatal("the failed turn has no error")
+	}
+	waitFor(t, "the failed process to stop", func() bool { return !processAlive(first) && p.procCount() == 0 })
+	second, got := epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+	if second == first || got != "todo" {
+		t.Errorf("after a failure the turn ran on process %d and was sent %q", second, got)
+	}
+
+	// The process dies while it waits for the thread's next turn.
+	syscall.Kill(second, syscall.SIGKILL)
+	waitFor(t, "the process to die", func() bool { return !processAlive(second) })
+	third, got := epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+	if third == second || got != "todo" {
+		t.Errorf("after its process died the turn ran on process %d and was sent %q", third, got)
+	}
+
+	// The process dies as the turn takes it: the turn is retried on a new
+	// one, with the whole input.
+	p.mu.Lock()
+	kept := p.epochs["th1"]
+	p.mu.Unlock()
+	kept.kill()
+	fourth, got := epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+	if fourth == third || got != "todo" {
+		t.Errorf("after its process was killed the turn ran on process %d and was sent %q", fourth, got)
+	}
+}

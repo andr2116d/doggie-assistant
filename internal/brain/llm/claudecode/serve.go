@@ -10,10 +10,16 @@ import (
 	"github.com/andr2116d/doggie-assistant/internal/brain/llm"
 )
 
-// serveOnce runs one turn on pr, as serve does, and stops pr.
-func (p *Provider) serveOnce(ctx, tctx context.Context, pr *proc, req llm.Request, out chan<- llm.Output) (*llm.Done, bool) {
-	defer p.discard(pr)
-	return p.serve(ctx, tctx, pr, req, out)
+// attempt runs the turn on pr, sending it input. A turn that ends well and
+// tells what is new since the last one leaves pr to its thread's next
+// turn; any other stops it.
+func (p *Provider) attempt(ctx, tctx context.Context, pr *proc, req llm.Request, input string, out chan<- llm.Output) (*llm.Done, bool) {
+	req.Input = input
+	d, retry := p.serve(ctx, tctx, pr, req, out)
+	if d.Err != nil || req.Continue == "" || !p.keepEpoch(req.Turn.ThreadID, pr) {
+		p.discard(pr)
+	}
+	return d, retry
 }
 
 // serving is one turn while a process serves it. Only the goroutine that

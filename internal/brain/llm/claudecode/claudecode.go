@@ -2,10 +2,13 @@
 // CLI in headless mode (claude -p, stream-json), with the owner's
 // subscription login.
 //
-// Processes are disposable: each one serves a single turn whose whole
-// context DOGGIE builds. To hide the CLI's startup, warm processes are
-// started ahead: they connect to DOGGIE's tools and wait for their input,
-// without calling the model. Their tools only act once a turn binds them.
+// DOGGIE builds the whole context of a turn, and a process is never the
+// record of a conversation: any turn can run on a new one. A turn that
+// tells what is new since the last one leaves its process to the thread's
+// next turn, which then sends only that; other processes serve one turn.
+// To hide the CLI's startup, warm processes are started ahead: they
+// connect to DOGGIE's tools and wait for their input, without calling the
+// model. Their tools only act once a turn binds them.
 package claudecode
 
 import (
@@ -80,7 +83,8 @@ type Provider struct {
 	ownerSpentUntil time.Time
 	done            chan struct{} // closed by Close
 	warm            []*proc
-	procs           map[*proc]bool // every running process, to kill on Close
+	epochs          map[string]*proc // by thread, see epoch.go
+	procs           map[*proc]bool   // every running process, to kill on Close
 	spawning        int
 	wg              sync.WaitGroup // turns, warm-up spawns and warm watchers
 }
@@ -116,6 +120,7 @@ func New(opts Options) (*Provider, error) {
 		configDir:  filepath.Join(opts.Dir, "config"),
 		done:       make(chan struct{}),
 		procs:      make(map[*proc]bool),
+		epochs:     make(map[string]*proc),
 	}
 	if err := p.prepareDir(); err != nil {
 		return nil, err
@@ -167,16 +172,25 @@ func (p *Provider) Name() string { return "claudecode" }
 
 // Generate implements llm.Brain.
 func (p *Provider) Generate(ctx context.Context, req llm.Request) (<-chan llm.Output, error) {
-	pr, err := p.take()
-	if err != nil {
-		return nil, err
+	input := req.Input
+	pr := (*proc)(nil)
+	if req.Continue != "" {
+		pr = p.takeEpoch(req.Turn.ThreadID)
 	}
-	p.fill()
+	if pr != nil {
+		input = req.Continue
+	} else {
+		var err error
+		if pr, err = p.take(); err != nil {
+			return nil, err
+		}
+		p.fill()
+	}
 	out := make(chan llm.Output, 16)
 	go func() {
 		defer p.wg.Done()
 		defer close(out)
-		done := llm.Output{Done: p.runTurn(ctx, pr, req, out)}
+		done := llm.Output{Done: p.runTurn(ctx, pr, req, input, out)}
 		select {
 		case out <- done:
 			return
@@ -211,11 +225,7 @@ func (p *Provider) take() (*proc, error) {
 			p.mu.Unlock()
 			return pr, nil
 		}
-		p.wg.Add(1)
-		go func() {
-			defer p.wg.Done()
-			p.discard(pr)
-		}()
+		p.discardLater(pr)
 	}
 	p.mu.Unlock()
 
@@ -340,17 +350,19 @@ func (p *Provider) discard(pr *proc) {
 	}
 }
 
-// runTurn serves req on pr. If the process failed before the turn really
-// started (it died first, e.g. a warm process that exited just as it was
-// taken, or it could not reach DOGGIE's tools), it retries once on a fresh
-// process. If the owner's usage limit is spent and there is a backup login,
-// it runs the turn again there: the limit stops a turn before the model
-// acts, so nothing can happen twice.
-func (p *Provider) runTurn(ctx context.Context, pr *proc, req llm.Request, out chan<- llm.Output) *llm.Done {
+// runTurn serves req on pr, sending it input: req.Input, or req.Continue
+// on a process that holds the thread's conversation. If the process failed
+// before the turn really started (it died first, e.g. a process that
+// exited just as it was taken, or it could not reach DOGGIE's tools), it
+// retries once on a fresh process. If the owner's usage limit is spent and
+// there is a backup login, it runs the turn again there: the limit stops a
+// turn before the model acts, so nothing can happen twice. A fresh process
+// always gets req.Input.
+func (p *Provider) runTurn(ctx context.Context, pr *proc, req llm.Request, input string, out chan<- llm.Output) *llm.Done {
 	// One deadline for the whole turn, retries included.
 	tctx, cancel := context.WithTimeout(ctx, p.opts.TurnTimeout)
 	defer cancel()
-	d, retry := p.serveOnce(ctx, tctx, pr, req, out)
+	d, retry := p.attempt(ctx, tctx, pr, req, input, out)
 	if retry && tctx.Err() == nil {
 		p.opts.Log.Warn("claudecode: claude failed before the turn started, retrying on a new process", "err", d.Err)
 		next, err := p.spawnTracked(pr.backup)
@@ -358,7 +370,7 @@ func (p *Provider) runTurn(ctx context.Context, pr *proc, req llm.Request, out c
 			return &llm.Done{Err: err}
 		}
 		pr = next
-		d, _ = p.serveOnce(ctx, tctx, pr, req, out)
+		d, _ = p.attempt(ctx, tctx, pr, req, req.Input, out)
 	}
 	var spent *llm.UsageLimitError
 	if !errors.As(d.Err, &spent) {
@@ -371,7 +383,7 @@ func (p *Provider) runTurn(ctx context.Context, pr *proc, req llm.Request, out c
 			return &llm.Done{Err: err}
 		}
 		pr = next
-		if d, _ = p.serveOnce(ctx, tctx, pr, req, out); !errors.As(d.Err, &spent) {
+		if d, _ = p.attempt(ctx, tctx, pr, req, req.Input, out); !errors.As(d.Err, &spent) {
 			return d
 		}
 	}
@@ -446,6 +458,7 @@ func (p *Provider) Close() {
 		procs = append(procs, pr)
 	}
 	p.warm = nil
+	clear(p.epochs)
 	p.mu.Unlock()
 
 	for _, pr := range procs {

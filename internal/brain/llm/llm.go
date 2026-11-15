@@ -51,6 +51,11 @@ type Request struct {
 	// Input is the whole user message: the context DOGGIE built plus what
 	// just happened.
 	Input string
+	// Continue, if set, is what is new since the thread's last turn. A
+	// provider that still holds the thread's conversation from that turn
+	// sends it instead of Input, so the conversation isn't sent again; one
+	// that doesn't sends Input. Empty asks for Input always.
+	Continue string
 	// Stream asks for Delta outputs too, as the text is written.
 	Stream bool
 }

@@ -37,6 +37,8 @@ type proc struct {
 	client  *mcp.Client
 	cfgFile string
 	started time.Time
+	// used is when the process was last kept for its thread's next turn.
+	used time.Time
 	// taken is closed when a warm process is taken for a turn (or
 	// discarded), so its watcher stops. Nil for other processes.
 	taken chan struct{}

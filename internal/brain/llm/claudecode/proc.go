@@ -44,6 +44,9 @@ type proc struct {
 	backup bool
 	// said is set once the turn being served gave out something.
 	said bool
+	// cost is what the CLI said the process cost up to its last result
+	// (USD): it tells the total, and a turn's cost is what it added.
+	cost float64
 
 	stopOnce sync.Once
 }

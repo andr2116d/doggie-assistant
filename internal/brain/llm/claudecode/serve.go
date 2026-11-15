@@ -206,6 +206,9 @@ func (s *serving) onAssistant(ev *event) {
 func (s *serving) onResult(ev *event) {
 	// A failed turn may have used tokens too.
 	s.done.Tokens = ev.tokens()
+	if t := s.done.Tokens; t != nil && t.CostUSD >= s.pr.cost {
+		t.CostUSD, s.pr.cost = t.CostUSD-s.pr.cost, t.CostUSD
+	}
 	f := ev.failure()
 	if f == "" {
 		return

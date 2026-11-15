@@ -451,6 +451,38 @@ func TestProcessServesSeveralTurns(t *testing.T) {
 	}
 }
 
+// The CLI tells what the process cost so far, so a turn's cost is what it
+// added to that. A turn with no cost told adds nothing.
+func TestCostOfATurnOnAProcessThatServedOthers(t *testing.T) {
+	p := newProvider(t, testOptions(t))
+	pr, err := p.spawnTracked(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.discard(pr) })
+	ctx := context.Background()
+	result := func(cost string) string {
+		return scriptOf(step{Raw: json.RawMessage(`{"type":"result","subtype":"success","is_error":false,"result":"ok","usage":{"input_tokens":4,"output_tokens":7}` + cost + `}`)})
+	}
+	for i, tt := range []struct {
+		in   string
+		want float64
+	}{
+		{result(`,"total_cost_usd":0.25`), 0.25},
+		{result(`,"total_cost_usd":0.75`), 0.5},
+		{result(``), 0},
+		{result(`,"total_cost_usd":1`), 0.25},
+	} {
+		done, _ := p.serve(ctx, ctx, pr, llm.Request{Turn: turn, Input: tt.in}, make(chan llm.Output, 4))
+		if done.Err != nil || done.Tokens == nil {
+			t.Fatalf("turn %d: done = %+v", i+1, done)
+		}
+		if done.Tokens.CostUSD != tt.want || done.Tokens.Input != 4 {
+			t.Errorf("turn %d: tokens = %+v, want a cost of %v", i+1, *done.Tokens, tt.want)
+		}
+	}
+}
+
 // postStatus sends tools/list with token and returns the HTTP status.
 func postStatus(t *testing.T, url, token string) int {
 	t.Helper()

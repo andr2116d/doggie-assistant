@@ -95,6 +95,9 @@ func fakeMain() {
 		fmt.Fprintln(os.Stderr, "fake: dying at start")
 		os.Exit(3)
 	}
+	if dir := os.Getenv("DOGGIE_FAKE_DEAF_ONCE"); dir != "" {
+		deafOnce(dir)
+	}
 	out := bufio.NewWriter(os.Stdout)
 	emit := func(v any) {
 		b, _ := json.Marshal(v)
@@ -212,6 +215,24 @@ func fakeMain() {
 		}
 	}
 	emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "ok"})
+}
+
+// deafOnce makes the first fake started with dir a CLI that can't be
+// written to: it closes its input, says so with the file "deaf", and dies
+// once the file "release" is there. Later ones find "deaf" and run as usual.
+func deafOnce(dir string) {
+	deaf := filepath.Join(dir, "deaf")
+	if _, err := os.Stat(deaf); err == nil {
+		return
+	}
+	os.Stdin.Close()
+	os.WriteFile(deaf, nil, 0o600)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "release")); err == nil {
+			os.Exit(3)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func assistant(block map[string]any) map[string]any {

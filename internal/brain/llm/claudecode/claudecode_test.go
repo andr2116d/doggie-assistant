@@ -3,6 +3,7 @@
 package claudecode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -896,6 +897,59 @@ func TestWarmProcessDyingAsItIsTakenIsRetried(t *testing.T) {
 		if done.Err != nil || len(outs) != 1 || outs[0].Text != "echo:hola" {
 			t.Fatalf("run %d: outs = %+v, done = %+v", i, outs, done)
 		}
+	}
+}
+
+// syncBuffer is a log that tests read while the provider writes it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// A warm process that can't take the turn's input, yet is still running,
+// doesn't end the turn by that: the turn waits for the process to end, and
+// then runs on a new one.
+func TestInputThatCantBeSentIsRetried(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DOGGIE_FAKE_DEAF_ONCE", dir)
+	var log syncBuffer
+	o := testOptions(t)
+	o.Warm = 1
+	o.Log = slog.New(slog.NewTextHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	p := newProvider(t, o)
+	waitFor(t, "a warm process that closed its input", func() bool {
+		_, err := os.Stat(filepath.Join(dir, "deaf"))
+		return err == nil && p.warmCount() == 1
+	})
+
+	ch, err := p.Generate(context.Background(), llm.Request{Turn: turn, Input: "hola"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the failed send in the log", func() bool { return strings.Contains(log.String(), "send input") })
+	select {
+	case o := <-ch:
+		t.Fatalf("the turn gave %+v while its process was still running", o)
+	default:
+	}
+	if err := os.WriteFile(filepath.Join(dir, "release"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outs, done := drain(t, ch)
+	if done.Err != nil || len(outs) != 1 || outs[0].Text != "echo:hola" {
+		t.Errorf("outs = %+v, done = %+v, want the turn served by a new process", outs, done)
 	}
 }
 

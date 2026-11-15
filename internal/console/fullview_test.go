@@ -305,6 +305,53 @@ func TestScreenPanelNarrow(t *testing.T) {
 	}
 }
 
+// On a screen too narrow for the panel beside the conversation, Tab shows
+// it in the conversation's place, and Tab again or saying something
+// brings the conversation back.
+func TestScreenPanelOverANarrowScreen(t *testing.T) {
+	s, f := openScreen(t, 80, 20, ScreenOptions{})
+	s.Reply("r", "Hola, ¿qué necesitas?")
+	s.SetTasks(sampleTasks, "")
+	f.waitShown(t, "Hola, ¿qué necesitas?")
+	f.typeKeys(t, "\t")
+	rows := f.waitShown(t, "╭─ TAREAS ", "● Recordar estirar", "t2 · espera tu respuesta")
+	f.waitGone(t, "Hola, ¿qué necesitas?")
+	for _, r := range rows {
+		if n := len([]rune(r)); n > 80 {
+			t.Errorf("a row %d columns wide on a screen of 80: %q", n, r)
+		}
+	}
+	f.typeKeys(t, "\t")
+	f.waitShown(t, "Hola, ¿qué necesitas?")
+	f.waitGone(t, "TAREAS")
+
+	f.typeKeys(t, "\tgracias\r")
+	f.waitShown(t, "│ gracias │")
+	f.waitGone(t, "TAREAS")
+
+	// Wide again, the panel is back beside the conversation.
+	f.typeKeys(t, "\t")
+	f.waitShown(t, "TAREAS")
+	f.mu.Lock()
+	f.width, f.height = 120, 20
+	f.mu.Unlock()
+	f.resized <- struct{}{}
+	f.waitShown(t, "TAREAS", "Hola, ¿qué necesitas?")
+}
+
+// A notice under a reply is told there, so the panel keeps only the ones
+// that belong to no reply.
+func TestPanelKeepsOnlyNoticesOfNoReply(t *testing.T) {
+	s, f := openScreen(t, 120, 26, ScreenOptions{})
+	s.Reply("r", "Listo.")
+	s.Notice("r", NoticeGood, "t1 terminó")
+	s.Notice("", NoticeBad, "t9 falló")
+	rows := f.waitShown(t, "✓ t1 terminó", "╭─ AVISOS ", "✗ t9 falló")
+	if n := strings.Count(strings.Join(rows, "\n"), "t1 terminó"); n != 1 {
+		t.Errorf("the notice under its reply shows %d times, want 1:\n%s", n, strings.Join(rows, "\n"))
+	}
+}
+
 // paints is how many frames s made, drawn or not: each is the screen
 // waking up.
 func paints(s *Screen) int {

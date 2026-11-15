@@ -297,13 +297,14 @@ func (c *conversation) finish(id, text string) {
 }
 
 // noteOn adds a notice under the message id, or on its own if there is
-// no such message.
-func (c *conversation) noteOn(id string, n notice) {
+// no such message. It reports whether it went under a message.
+func (c *conversation) noteOn(id string, n notice) bool {
 	if m := c.byID[id]; m != nil && id != "" {
 		m.notes = append(m.notes, n)
-		return
+		return true
 	}
 	c.say(fromChat, "", n.text, n.kind)
+	return false
 }
 
 // older puts messages from before the oldest one kept in front, as long

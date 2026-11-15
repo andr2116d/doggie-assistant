@@ -151,8 +151,10 @@ func (s *Screen) Reply(id, text string) {
 func (s *Screen) Notice(id string, kind NoticeKind, text string) {
 	s.do(func(v *view) {
 		n := notice{kind, strings.TrimSpace(OneLine(text))}
-		v.convo.noteOn(id, notice{kind, text})
-		v.remember(n)
+		// One under its reply is already told there.
+		if !v.convo.noteOn(id, notice{kind, text}) {
+			v.remember(n)
+		}
 	})
 }
 
@@ -213,6 +215,10 @@ type view struct {
 	online    bool
 	status    string
 	panelMode panelMode
+	// narrow is set on a screen with no room for the panel beside the
+	// conversation; there overPanel shows it in the conversation's place.
+	narrow    bool
+	overPanel bool
 	tasks     []TaskView
 	moreTasks string
 	notices   []notice // the last ones that weren't only information
@@ -390,6 +396,8 @@ func (v *view) key(k key, q *lineQueue) {
 		switch c, ok := v.chosen(); {
 		case ok:
 			v.complete(c, true)
+		case v.narrow:
+			v.overPanel = !v.overPanel
 		case v.showsPanel():
 			v.panelMode = panelOff
 		default:
@@ -435,6 +443,7 @@ func (v *view) key(k key, q *lineQueue) {
 			return
 		}
 		q.pending = append(q.pending, line)
+		v.overPanel = false // back to the conversation, where the reply comes
 		if !isBlank(line) {
 			v.convo.say(fromUser, "", line, noteInfo)
 			v.convo.scrollBy(-(1 << 30))
@@ -609,7 +618,15 @@ func (v *view) paint(g *grid) (int, int, bool) {
 		return 0, 0, false
 	}
 	v.body = r.body
-	v.convo.draw(g, r.body, v.lk, t.Newer)
+	v.narrow = panelWidth(g.W) == 0
+	v.overPanel = v.overPanel && v.narrow
+	switch {
+	case v.overPanel:
+		w := min(r.body.w, overPanelCols)
+		v.drawPanel(g, rect{centered(r.body, w), r.body.y, w, r.body.h})
+	default:
+		v.convo.draw(g, r.body, v.lk, t.Newer)
+	}
 	if !r.panel.empty() {
 		v.drawPanel(g, r.panel)
 	}
@@ -720,10 +737,15 @@ const (
 // maxPanelNotices bounds the notices the panel keeps.
 const maxPanelNotices = 8
 
+// overPanelCols is how wide the panel is at the most when it shows in the
+// conversation's place.
+const overPanelCols = 64
+
 // showsPanel reports whether the panel is wanted now.
 func (v *view) showsPanel() bool { return v.panelMode == panelOn }
 
 // remember keeps a notice for the panel, unless it is only information.
+// The panel keeps the ones that belong to no reply.
 func (v *view) remember(n notice) {
 	if n.kind == noteInfo {
 		return

@@ -172,14 +172,14 @@ func (p *Provider) Name() string { return "claudecode" }
 
 // Generate implements llm.Brain.
 func (p *Provider) Generate(ctx context.Context, req llm.Request) (<-chan llm.Output, error) {
-	input := req.Input
-	pr := (*proc)(nil)
-	if req.Continue != "" {
-		pr = p.takeEpoch(req.Turn.ThreadID)
-	}
-	if pr != nil {
+	input, pr := req.Input, (*proc)(nil)
+	if req.Continue == "" {
+		// The process kept for the thread would miss this turn.
+		p.dropEpoch(req.Turn.ThreadID)
+	} else if pr = p.takeEpoch(req.Turn.ThreadID); pr != nil {
 		input = req.Continue
-	} else {
+	}
+	if pr == nil {
 		var err error
 		if pr, err = p.take(); err != nil {
 			return nil, err

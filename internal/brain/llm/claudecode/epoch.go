@@ -79,6 +79,15 @@ func (p *Provider) keepEpoch(thread string, pr *proc) bool {
 	return true
 }
 
+// dropEpoch stops the process kept for thread, if there is one.
+func (p *Provider) dropEpoch(thread string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.epochs[thread] != nil && !p.closed {
+		p.discardLater(p.forgetEpoch(thread))
+	}
+}
+
 // forgetEpoch takes the process kept for thread out of the epochs, which
 // ends its watcher, and returns it. The caller holds p.mu.
 func (p *Provider) forgetEpoch(thread string) *proc {

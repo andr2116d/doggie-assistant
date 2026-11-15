@@ -1290,14 +1290,16 @@ func TestThreadKeepsItsProcess(t *testing.T) {
 	if n := spawnCount(t, log); n != 1 {
 		t.Errorf("%d processes started, want 1", n)
 	}
-	// Without what is new: the whole input, on another process, and the
-	// thread's own stays for its next turn.
+	// Without what is new: the whole input, on another process. The
+	// thread's own would miss this turn, so it goes.
 	other, got := epochTurn(t, p, "th1", said("todo"), "")
 	if other == first || got != "todo" {
 		t.Errorf("a turn that doesn't tell what is new ran on process %d and was sent %q", other, got)
 	}
-	if pid, _ := epochTurn(t, p, "th1", said("todo"), said("nuevo")); pid != first {
-		t.Errorf("the thread's process changed from %d to %d", first, pid)
+	waitFor(t, "the thread's process to stop", func() bool { return !processAlive(first) })
+	first, got = epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+	if first == other || got != "todo" {
+		t.Errorf("the next turn ran on process %d and was sent %q, want a new process and the whole input", first, got)
 	}
 	p.Close()
 	if n := p.procCount(); n != 0 {

@@ -165,7 +165,7 @@ func TestBoardViews(t *testing.T) {
 	b.event(env(events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: "t2", Question: "¿Pago la luz?"}))
 	views, more := b.views(words("es"))
 	want := []console.TaskView{
-		{ID: "t2", Title: "demo.sleep", Detail: "espera tu respuesta · /answer t2", Waiting: true},
+		{ID: "t2", Title: "demo.sleep", Detail: "espera tu respuesta", Waiting: true},
 		{ID: "t10", Title: "Esperar un rato", Detail: "3/30 s", Percent: 10},
 	}
 	if !slices.Equal(views, want) || more != "+2 en otras conversaciones" {

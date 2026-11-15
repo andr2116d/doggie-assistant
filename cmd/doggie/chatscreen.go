@@ -65,7 +65,7 @@ func words(lang string) chatWords {
 		return chatWords{
 			screen: console.ScreenTexts{
 				Online: "en línea", Offline: "sin conexión", Channel: "terminal",
-				Hints: "/help comandos · ↑ historial · Ctrl+D salir", HintsRight: "Tab: panel",
+				Hints: "/ comandos · RePág subir · Ctrl+D salir", HintsRight: "Tab tareas",
 				Tasks: "TAREAS", Notices: "AVISOS", NoTasks: "sin tareas en curso", TooSmall: "Agranda la ventana\npara hablar conmigo",
 				Newer: func(n int) string {
 					if n == 1 {
@@ -95,7 +95,7 @@ func words(lang string) chatWords {
 	return chatWords{
 		screen: console.ScreenTexts{
 			Online: "online", Offline: "offline", Channel: "terminal",
-			Hints: "/help commands · ↑ history · Ctrl+D quit", HintsRight: "Tab: panel",
+			Hints: "/ commands · PgUp scroll · Ctrl+D quit", HintsRight: "Tab tasks",
 			Tasks: "TASKS", Notices: "NOTICES", NoTasks: "no tasks running", TooSmall: "Make the window bigger\nto talk with me",
 			Newer:  func(n int) string { return fmt.Sprintf("↓ %d new", n) },
 			Clock:  func(t time.Time) string { return t.Format("Mon Jan 2 · 15:04") },
@@ -225,7 +225,7 @@ func (b *taskBoard) views(w chatWords) ([]console.TaskView, string) {
 		v := console.TaskView{ID: info.ID, Title: oneLineText(cmp.Or(info.Description, info.Kind)), Percent: info.Percent}
 		switch {
 		case info.Status == events.StatusWaitingInput:
-			v.Waiting, v.Detail = true, w.waiting+" · /answer "+info.ID
+			v.Waiting, v.Detail = true, w.waiting
 		case info.Progress != "":
 			v.Detail = oneLineText(info.Progress)
 		}

@@ -984,3 +984,30 @@ func TestResumedSentencesTellWhatTheyCaused(t *testing.T) {
 	mustContain(t, in, `resumed="yes">pon un temporizador</said>`+"\n<acted>Before the restart, you started for it: task "+ref.TaskID+" (demo.sleep, <data>Temporizador</data>), now running.</acted>")
 	mustNotContain(t, in, "<acted>Before the restart, you started for it: task "+other.TaskID)
 }
+
+// Every turn tells the provider its whole context and, apart, what is new
+// since the thread's last turn, for a provider that still holds the rest.
+func TestTurnTellsWhatIsNew(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.fake.set(func(f *fake) {
+		f.reply = func(context.Context, llm.Request) []llm.Output {
+			return []llm.Output{{Text: "Anotado."}, {Done: &llm.Done{}}}
+		}
+	})
+	h.say("", "terminal", "recuerda la palabra murciélago")
+	h.nextTurn()
+	h.say("", "terminal", "¿qué palabra era?")
+	h.nextTurn()
+	reqs := h.fake.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("%d requests, want 2", len(reqs))
+	}
+	second := reqs[1]
+	mustContain(t, second.Input, "<conversation>", "murciélago", "<reply>Anotado.</reply>", "¿qué palabra era?</said>")
+	mustContain(t, second.Continue, "<world>", "<input>", "¿qué palabra era?</said>")
+	for _, past := range []string{"<conversation>", "murciélago", "Anotado."} {
+		if strings.Contains(second.Continue, past) {
+			t.Errorf("what is new holds %q, of the turn before:\n%s", past, second.Continue)
+		}
+	}
+}

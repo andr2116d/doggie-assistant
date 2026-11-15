@@ -70,6 +70,28 @@ func TestBuildFirstTurn(t *testing.T) {
 	}
 }
 
+// What is new of a turn is its message without the past turns: the world
+// and the input, written the same.
+func TestBuildNextLeavesThePastTurnsOut(t *testing.T) {
+	c := Context{
+		Now: at(5), MaxTurns: 20,
+		History: []Turn{{At: at(0), Inputs: []Input{said(0, "hola")}, Replies: []string{"Hola, ¿qué necesitas?"}}},
+		Inputs:  []Input{said(5, "¿qué hora es?")},
+	}
+	whole, next := Build(c), BuildNext(c)
+	if !strings.Contains(whole, "<conversation>") || !strings.Contains(whole, "Hola, ¿qué necesitas?") {
+		t.Fatalf("the whole message lacks the past turn:\n%s", whole)
+	}
+	if strings.Contains(next, "<conversation>") || strings.Contains(next, "hola</said>") {
+		t.Errorf("what is new holds the past turn:\n%s", next)
+	}
+	world, _, _ := strings.Cut(whole, "\n<conversation>")
+	_, input, _ := strings.Cut(whole, "</conversation>\n")
+	if next != world+input {
+		t.Errorf("what is new:\n%s\nwant the world and the input of the whole message:\n%s", next, world+input)
+	}
+}
+
 // Nothing a user, a satellite or a task reports can open or close a tag:
 // it could otherwise forge an order from the owner or a fake event.
 func TestBuildEscapesEverything(t *testing.T) {

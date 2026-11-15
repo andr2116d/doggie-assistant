@@ -100,31 +100,54 @@ type TaskEvent struct {
 	Options  []string
 }
 
-// Build returns the message for a turn.
+// Build returns the message for a turn: the world, the thread's past turns
+// and what just happened.
 func Build(c Context) string {
-	loc := c.Location
-	if loc == nil {
-		loc = time.UTC
-	}
-	clk := clock{now: c.Now, loc: loc}
+	clk := c.clock()
 	var b strings.Builder
-	b.WriteString("<world>\n")
-	fmt.Fprintf(&b, "Now: %s\n", c.Now.In(loc).Format("Monday, 2 January 2006, 15:04 MST"))
-	writeTasks(&b, c.Tasks, c.ThreadID)
-	b.WriteString("</world>\n")
-
+	writeWorld(&b, c, clk)
 	if conv := conversation(c.History, c.MaxTurns, clk); conv != "" {
 		b.WriteString("\n<conversation>\n")
 		b.WriteString(conv)
 		b.WriteString("</conversation>\n")
 	}
+	writeInputs(&b, c.Inputs, clk)
+	return b.String()
+}
 
+// BuildNext returns the message for a turn sent to an LLM that already
+// holds the thread's past turns, as the messages before this one: the
+// world and what just happened.
+func BuildNext(c Context) string {
+	clk := c.clock()
+	var b strings.Builder
+	writeWorld(&b, c, clk)
+	writeInputs(&b, c.Inputs, clk)
+	return b.String()
+}
+
+// clock tells the times of c's message in the owner's time zone.
+func (c Context) clock() clock {
+	loc := c.Location
+	if loc == nil {
+		loc = time.UTC
+	}
+	return clock{now: c.Now, loc: loc}
+}
+
+func writeWorld(b *strings.Builder, c Context, clk clock) {
+	b.WriteString("<world>\n")
+	fmt.Fprintf(b, "Now: %s\n", c.Now.In(clk.loc).Format("Monday, 2 January 2006, 15:04 MST"))
+	writeTasks(b, c.Tasks, c.ThreadID)
+	b.WriteString("</world>\n")
+}
+
+func writeInputs(b *strings.Builder, inputs []Input, clk clock) {
 	b.WriteString("\n<input>\n")
-	for _, in := range c.Inputs {
-		writeInput(&b, in, clk, "", maxInputText)
+	for _, in := range inputs {
+		writeInput(b, in, clk, "", maxInputText)
 	}
 	b.WriteString("</input>\n")
-	return b.String()
 }
 
 func writeTasks(b *strings.Builder, tasks []events.TaskInfo, thread string) {

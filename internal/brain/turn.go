@@ -80,12 +80,14 @@ func (b *Brain) runTurn(ctx context.Context, job turnJob) (rec events.BrainTurnD
 			inputs[i].Acted = acted[in.EventID]
 		}
 	}
-	msg := prompt.Build(prompt.Context{
+	pc := prompt.Context{
 		Now: time.Now(), Location: b.opts.Location, ThreadID: job.thread,
 		Tasks: tasks, History: job.history, MaxTurns: b.opts.HistoryTurns, Inputs: inputs,
-	})
+	}
 	block := 0
-	out, err := b.provider.Generate(ctx, llm.Request{Turn: turn, Input: msg, Stream: true})
+	// A provider that still holds the thread's past turns is sent only
+	// what is new.
+	out, err := b.provider.Generate(ctx, llm.Request{Turn: turn, Input: prompt.Build(pc), Continue: prompt.BuildNext(pc), Stream: true})
 	if err != nil {
 		b.failed(job, &rec, err, block, cause)
 		rec.DurationMS = time.Since(job.started).Milliseconds()

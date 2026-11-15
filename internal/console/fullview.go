@@ -450,7 +450,22 @@ type Command struct {
 	Hint string // what it does, in a few words
 	// Args is set when it takes more after its name, e.g. a task's id.
 	Args bool
+	// Tasks, if set, is which tasks it is about: once the command is
+	// typed, the menu offers those tasks to choose from.
+	Tasks TaskChoice
+	// Text is set when it takes text after the task, e.g. an answer.
+	Text bool
 }
+
+// TaskChoice is which of the tasks shown a command may be about.
+type TaskChoice uint8
+
+// The tasks a command may be about.
+const (
+	NoTasks      TaskChoice = iota // it isn't about a task
+	AnyTask                        // any task shown
+	WaitingTasks                   // the ones waiting for an answer
+)
 
 // maxMenuRows bounds the commands the menu shows at once.
 const maxMenuRows = 6
@@ -462,7 +477,7 @@ func (v *view) menu() []Command {
 	if v.ed.hidden || !strings.HasPrefix(line, "/") || strings.ContainsRune(line, '\n') || v.ed.pos != len(v.ed.line) {
 		return nil
 	}
-	var items []Command
+	items := v.taskChoices(line)
 	for _, c := range v.opts.Commands {
 		if strings.HasPrefix(c.Name, line) {
 			items = append(items, c)
@@ -475,6 +490,25 @@ func (v *view) menu() []Command {
 		v.menuLine, v.menuSel = line, 0
 	}
 	v.menuSel = min(v.menuSel, max(len(items)-1, 0))
+	return items
+}
+
+// taskChoices are the tasks to choose from once a command about a task is
+// typed, each as that command on that task: the ones whose id starts with
+// what is typed after it.
+func (v *view) taskChoices(line string) []Command {
+	var items []Command
+	for _, c := range v.opts.Commands {
+		id, ok := strings.CutPrefix(line, c.Name+" ")
+		if !ok || c.Tasks == NoTasks || strings.ContainsRune(id, ' ') {
+			continue
+		}
+		for _, t := range v.tasks {
+			if strings.HasPrefix(t.ID, id) && (t.Waiting || c.Tasks == AnyTask) {
+				items = append(items, Command{Name: c.Name + " " + t.ID, Hint: t.Title, Args: c.Text})
+			}
+		}
+	}
 	return items
 }
 

@@ -80,8 +80,8 @@ func words(lang string) chatWords {
 			commands: []console.Command{
 				{Name: "/tasks", Hint: "las tareas en curso"},
 				{Name: "/tasks all", Hint: "también las últimas que terminaron"},
-				{Name: "/answer", Hint: "responder tú la pregunta de una tarea", Args: true},
-				{Name: "/cancel", Hint: "cancelar una tarea", Args: true},
+				{Name: "/answer", Hint: "responder tú la pregunta de una tarea", Args: true, Tasks: console.WaitingTasks, Text: true},
+				{Name: "/cancel", Hint: "cancelar una tarea", Args: true, Tasks: console.AnyTask},
 				{Name: "/help", Hint: "la lista de comandos"},
 			},
 			others: func(n int) string {
@@ -106,8 +106,8 @@ func words(lang string) chatWords {
 		commands: []console.Command{
 			{Name: "/tasks", Hint: "the tasks in progress"},
 			{Name: "/tasks all", Hint: "also the last ones that ended"},
-			{Name: "/answer", Hint: "answer a task's question yourself", Args: true},
-			{Name: "/cancel", Hint: "cancel a task", Args: true},
+			{Name: "/answer", Hint: "answer a task's question yourself", Args: true, Tasks: console.WaitingTasks, Text: true},
+			{Name: "/cancel", Hint: "cancel a task", Args: true, Tasks: console.AnyTask},
 			{Name: "/help", Hint: "the list of commands"},
 		},
 		others: func(n int) string {

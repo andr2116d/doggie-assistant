@@ -393,7 +393,8 @@ func TestScreenAsksForTheSize(t *testing.T) {
 var testCommands = []Command{
 	{Name: "/tasks", Hint: "tareas en curso"},
 	{Name: "/tasks all", Hint: "también las que terminaron"},
-	{Name: "/answer", Hint: "responder una pregunta", Args: true},
+	{Name: "/answer", Hint: "responder una pregunta", Args: true, Tasks: WaitingTasks, Text: true},
+	{Name: "/cancel", Hint: "cancelar una tarea", Args: true, Tasks: AnyTask},
 	{Name: "/help", Hint: "la lista de comandos"},
 }
 
@@ -425,4 +426,46 @@ func TestScreenCommandMenu(t *testing.T) {
 	// Up and Down go back to the history once no menu shows.
 	f.typeKeys(t, "\x1b[A")
 	f.waitShown(t, "› /tasks")
+}
+
+// Once a command about a task is typed, the menu offers the tasks it may
+// be about, so their ids needn't be typed: the ones waiting for /answer,
+// which then takes the answer, and any of them for /cancel.
+func TestScreenMenuOffersTheTasks(t *testing.T) {
+	s, f := openScreen(t, 70, 24, ScreenOptions{Commands: testCommands})
+	s.SetTasks(sampleTasks, "")
+	f.typeKeys(t, "/an\r")
+	rows := f.waitShown(t, "› /answer t2", "/answer t2   Pagar la luz")
+	if text := strings.Join(rows, "\n"); strings.Contains(text, "/answer t1") || strings.Contains(text, "/answer t3") {
+		t.Errorf("a task that asks nothing is offered to answer:\n%s", text)
+	}
+	f.typeKeys(t, "\r")
+	f.waitGone(t, "/answer t2   Pagar la luz")
+	f.typeKeys(t, "sí\r")
+	if l, _ := next(t, s.Lines()); l != "/answer t2 sí" {
+		t.Errorf("an answer %q", l)
+	}
+
+	f.typeKeys(t, "/can\r")
+	f.waitShown(t, "/cancel t1   Recordar estirar", "/cancel t2   Pagar la luz", "/cancel t3")
+	f.typeKeys(t, "\x1b[B\x1b[B\r") // Down twice, to t3, and Enter sends it
+	if l, _ := next(t, s.Lines()); l != "/cancel t3" {
+		t.Errorf("a cancel %q", l)
+	}
+
+	// What is typed of the id narrows them, and an id of none shows none.
+	f.typeKeys(t, "/cancel t2")
+	f.waitGone(t, "Recordar estirar")
+	f.typeKeys(t, "\x15/cancel x")
+	f.waitGone(t, "Pagar la luz")
+	f.typeKeys(t, "\x15")
+
+	// With no task to choose, the command waits for the id as before.
+	s.SetTasks(nil, "")
+	f.typeKeys(t, "/an\r")
+	f.waitShown(t, "› /answer")
+	f.typeKeys(t, "t9 no\r")
+	if l, _ := next(t, s.Lines()); l != "/answer t9 no" {
+		t.Errorf("an answer typed whole %q", l)
+	}
 }

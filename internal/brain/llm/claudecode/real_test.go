@@ -253,3 +253,68 @@ func TestRealSeveralTurnsOnOneProcess(t *testing.T) {
 		t.Errorf("turn 3 read %d tokens from the cache and turn 1 read %d: the conversation isn't read back", tokens[2].CacheRead, tokens[0].CacheRead)
 	}
 }
+
+// TestRealTokensOfAKeptProcess runs the same conversation twice on the real
+// CLI, each turn on a new process and then all on one kept for the thread,
+// and logs what each way used. Kept, the turns after the first must read
+// most of their input from the prompt cache and cost less.
+func TestRealTokensOfAKeptProcess(t *testing.T) {
+	if os.Getenv("DOGGIE_REAL_CLAUDE") != "1" {
+		t.Skip("set DOGGIE_REAL_CLAUDE=1 to run against the real claude CLI")
+	}
+	ctx, tools, _ := realTools(t)
+	// About 300 tokens a turn, so the conversation outweighs the rest.
+	filler := strings.Repeat("Hablamos de la lista de la semana: comprar pan, llamar al dentista, revisar el informe y regar las plantas. ", 8)
+	questions := []string{"¿Qué es lo primero de la lista?", "¿Y lo segundo?", "¿Y lo tercero?", "¿Y lo último?", "¿Cuántas cosas son?", "Repite la primera."}
+	run := func(kept bool) (total llm.Tokens) {
+		p, err := New(Options{
+			Command: "claude", Model: "sonnet", Tools: tools, Log: discardLog(),
+			Dir:    filepath.Join(t.TempDir(), "cc"),
+			System: "You are DOGGIE, a voice assistant. Reply in Spanish in one short sentence.",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+		thread := mcp.Turn{ThreadID: "real-kept", Channel: "terminal"}
+		history := "<conversation>\n"
+		for i, q := range questions {
+			// The filler goes in what is said, so both ways carry it.
+			next := "<input>\n<said>" + filler + q + "</said>\n</input>\n"
+			req := llm.Request{Turn: thread, Input: history + "</conversation>\n" + next}
+			if kept {
+				req.Continue = next
+			}
+			ch, err := p.Generate(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reply string
+			var done *llm.Done
+			for o := range ch {
+				reply += o.Text
+				if o.Done != nil {
+					done = o.Done
+				}
+			}
+			if done == nil || done.Err != nil || done.Tokens == nil {
+				t.Fatalf("kept=%v turn %d: done = %+v", kept, i+1, done)
+			}
+			tk := *done.Tokens
+			t.Logf("kept=%v turn %d: read %5d, wrote %5d, cost $%.4f", kept, i+1, tk.CacheRead, tk.CacheWrite, tk.CostUSD)
+			total.Input += tk.Input
+			total.CacheRead += tk.CacheRead
+			total.CacheWrite += tk.CacheWrite
+			total.Output += tk.Output
+			total.CostUSD += tk.CostUSD
+			history += "<turn><said>" + filler + q + "</said><reply>" + reply + "</reply></turn>\n"
+		}
+		return total
+	}
+	apart, kept := run(false), run(true)
+	t.Logf("a process per turn: read %d, wrote %d, cost $%.4f", apart.CacheRead, apart.CacheWrite, apart.CostUSD)
+	t.Logf("one kept process:   read %d, wrote %d, cost $%.4f (%.1fx less)", kept.CacheRead, kept.CacheWrite, kept.CostUSD, apart.CostUSD/kept.CostUSD)
+	if kept.CacheWrite >= apart.CacheWrite || kept.CostUSD >= apart.CostUSD {
+		t.Errorf("a kept process wrote %d tokens and cost $%.4f; a process per turn, %d and $%.4f", kept.CacheWrite, kept.CostUSD, apart.CacheWrite, apart.CostUSD)
+	}
+}

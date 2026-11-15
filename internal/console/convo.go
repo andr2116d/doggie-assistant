@@ -210,7 +210,7 @@ const maxMessages = 500
 
 // conversation is the messages of the chat and the view on them.
 type conversation struct {
-	name string // the assistant's, above its bubbles
+	name string // the assistant's, on the edge of its bubbles
 	msgs []*message
 	byID map[string]*message
 	// scroll is how many rows the view is above the newest; 0 follows
@@ -360,7 +360,16 @@ func (c *conversation) scrollBy(rows int) {
 const (
 	maxReplyCols = 76 // text of a reply, for reading comfort
 	maxSaidCols  = 64 // text of what someone said
+	// maxColumnCols is how wide the conversation gets: on a wider screen
+	// it sits in the middle, so both sides of it stay close to the eye.
+	maxColumnCols = 100
 )
+
+// column is where the conversation goes in body: from x, cols wide.
+func column(body rect) (x, cols int) {
+	cols = min(body.w-2*conversationX, maxColumnCols)
+	return body.x + (body.w-cols)/2, cols
+}
 
 // widths are how wide the text of each kind of bubble may be in a
 // conversation cols wide.
@@ -372,17 +381,47 @@ func widths(cols int) (reply, said int) {
 // A bubble's measures, in columns: the room between its edge and its text,
 // and the text's width at the least, so a word alone doesn't look cramped.
 const (
-	bubblePad = 2
+	bubblePad = 1
 	bubbleMin = 6
 )
 
-// bubbleWidth is how wide a bubble is around text w columns wide.
-func bubbleWidth(w int) int { return max(w, bubbleMin) + 2 + 2*bubblePad }
+// titleFrame is what a title takes of a bubble's top edge besides its
+// text: "╭─ " before it and " ─╮" after.
+const titleFrame = 6
 
-// named reports whether message i shows the assistant's name above it:
-// when it starts a run of the assistant's bubbles.
-func (c *conversation) named(i int) bool {
-	return c.msgs[i].from == fromAssistant && (i == 0 || c.msgs[i-1].from != fromAssistant)
+// bubbleWidth is how wide a bubble is around text w columns wide, with
+// title on its top edge, within cols.
+func bubbleWidth(w int, title string, cols int) int {
+	width := max(w, bubbleMin) + 2 + 2*bubblePad
+	if title != "" {
+		width = max(width, textWidth(title)+titleFrame)
+	}
+	return min(width, cols)
+}
+
+// title is what message i shows on its bubble's top edge: the assistant's
+// name when it starts a run of its bubbles, or where else it was said.
+func (c *conversation) title(i int) string {
+	m := c.msgs[i]
+	switch {
+	case m.from == fromElsewhere:
+		return m.label
+	case m.from == fromAssistant && (i == 0 || c.msgs[i-1].from != fromAssistant):
+		return c.name
+	}
+	return ""
+}
+
+// bubbleTop draws a bubble's top edge w cells wide from x on row y, with
+// title on it if there is one.
+func bubbleTop(g *grid, x, y, w int, title string, edge, titled styleID) {
+	hline(g, x, y, w, "╭", "╮", edge)
+	if title == "" || w <= titleFrame {
+		return
+	}
+	at := g.text(x+2, y, x+w-2, " ", edge)
+	at = textIn(g, at, y, x+w-3, title, titled)
+	g.text(at, y, x+w-2, " ", edge)
 }
 
 // height is how many rows message i takes in a conversation cols wide.
@@ -391,14 +430,8 @@ func (c *conversation) height(i, cols int) int {
 	reply, said := widths(cols)
 	switch m.from {
 	case fromAssistant:
-		h := len(m.lines(reply)) + 2 + len(m.notes)
-		if c.named(i) {
-			h++
-		}
-		return h
-	case fromElsewhere:
-		return len(m.lines(said)) + 3
-	case fromUser:
+		return len(m.lines(reply)) + 2 + len(m.notes)
+	case fromUser, fromElsewhere:
 		return len(m.lines(said)) + 2
 	default:
 		return len(m.lines(cols - 2))
@@ -408,7 +441,7 @@ func (c *conversation) height(i, cols int) int {
 // draw draws the view of the conversation in body. newer tells how many
 // messages came while scrolled up, e.g. "↓ 3 new".
 func (c *conversation) draw(g *grid, body rect, lk looks, newer func(n int) string) {
-	cols := body.w - 2*conversationX
+	x, cols := column(body)
 	if cols < 8 || body.h < 1 {
 		return
 	}
@@ -421,12 +454,8 @@ func (c *conversation) draw(g *grid, body rect, lk looks, newer func(n int) stri
 	}
 	heights := c.heights
 	act := 0 // rows of the activity, below the newest message
-	namedActivity := len(c.msgs) == 0 || c.msgs[len(c.msgs)-1].from != fromAssistant
 	if c.activity != "" {
 		act = activityRows + 1
-		if namedActivity {
-			act++
-		}
 	}
 	total += act
 	if c.scroll > 0 && c.anchor != nil {
@@ -451,7 +480,7 @@ func (c *conversation) draw(g *grid, body rect, lk looks, newer func(n int) stri
 	if act > 0 {
 		top := bottom - (act - 1)
 		if top < viewBottom {
-			c.drawActivity(g, body.x+conversationX, top, cols, body, lk, namedActivity)
+			c.drawActivity(g, x, top, cols, body, lk)
 		}
 		bottom = top - 1
 	}
@@ -462,7 +491,7 @@ func (c *conversation) draw(g *grid, body rect, lk looks, newer func(n int) stri
 			c.anchor, c.anchorRows = c.msgs[i], max(bottom-viewBottom, 0)
 		}
 		if top < viewBottom {
-			c.drawMessage(g, i, body.x+conversationX, top, cols, body, lk)
+			c.drawMessage(g, i, x, top, cols, body, lk)
 		}
 		bottom = top - 1
 		if bottom <= body.y {
@@ -486,23 +515,17 @@ func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk l
 	y := top
 	switch m.from {
 	case fromAssistant:
-		if c.named(i) {
-			if visible(y) {
-				textIn(g, x, y, x+cols, c.name, lk.name)
-			}
-			y++
-		}
 		lines := m.lines(reply)
-		w := bubbleWidth(m.linesWidth(reply))
+		w := bubbleWidth(m.linesWidth(reply), c.title(i), cols)
 		writing := m.open || m.shown < len(m.text)
 		if visible(y) {
-			hline(g, x, y, w, "╭", "╮", lk.border)
+			bubbleTop(g, x, y, w, c.title(i), lk.border, lk.name)
 		}
 		y++
 		for j, l := range lines {
 			if visible(y) {
 				g.text(x, y, x+1, "│", lk.border)
-				at := x + 1 + bubblePad + shortPad(lines, m.linesWidth(reply))
+				at := x + 1 + bubblePad + shortPad(lines, m.linesWidth(reply), w)
 				drawRow(g, at, y, x+w-1-bubblePad, l, lk)
 				if writing && j == len(lines)-1 {
 					// In the padding, so the bubble keeps its width.
@@ -524,23 +547,17 @@ func (c *conversation) drawMessage(g *grid, i, x, top, cols int, clip rect, lk l
 		}
 	case fromUser, fromElsewhere:
 		lines := m.lines(said)
-		w := bubbleWidth(m.linesWidth(said))
+		w := bubbleWidth(m.linesWidth(said), c.title(i), cols)
 		left := x + cols - w
-		if m.from == fromElsewhere {
-			if visible(y) {
-				textRight(g, x, x+cols, y, m.label, lk.muted)
-			}
-			y++
-		}
 		if visible(y) {
-			hline(g, left, y, w, "╭", "╮", lk.youEdge)
+			bubbleTop(g, left, y, w, c.title(i), lk.youEdge, lk.muted)
 		}
 		y++
 		for _, l := range lines {
 			if visible(y) {
 				g.text(left, y, left+1, "│", lk.youEdge)
 				g.fill(left+1, y, w-2, 1, lk.you)
-				at := left + 1 + bubblePad + shortPad(lines, m.linesWidth(said))
+				at := left + 1 + bubblePad + shortPad(lines, m.linesWidth(said), w)
 				g.text(at, y, left+w-1-bubblePad, l.text, lk.you)
 				g.text(left+w-1, y, left+w, "│", lk.youEdge)
 			}
@@ -579,44 +596,27 @@ func drawNotice(g *grid, x, y, limit int, n notice, lk looks) {
 }
 
 // activityRows is how tall the assistant at work shows.
-const activityRows = 3
+const activityRows = 1
 
-// drawActivity draws the assistant at work from row top: its name if named,
-// where its reply will start, and a bubble of three dots a light runs
-// across, bright, then dimmer, then out, with what it is doing beside it.
-func (c *conversation) drawActivity(g *grid, x, top, cols int, clip rect, lk looks, named bool) {
-	visible := func(y int) bool { return y >= clip.y && y < clip.y+clip.h }
-	y := top
-	if named {
-		if visible(y) {
-			textIn(g, x, y, x+cols, c.name, lk.name)
+// drawActivity draws the assistant at work on row y, where its reply will
+// start: three dots a light runs across, bright, then dimmer, then out,
+// with what it is doing beside them.
+func (c *conversation) drawActivity(g *grid, x, y, cols int, clip rect, lk looks) {
+	if y < clip.y || y >= clip.y+clip.h {
+		return
+	}
+	for i := range 3 {
+		st := lk.line
+		switch (c.phase - i + 4) % 4 {
+		case 0:
+			st = lk.name
+		case 1:
+			st = lk.border
 		}
-		y++
+		g.put(x+1+2*i, y, "•", 1, st)
 	}
-	const w = 9 // "│ • • • │"
-	if visible(y) {
-		hline(g, x, y, w, "╭", "╮", lk.border)
-	}
-	y++
-	if visible(y) {
-		g.text(x, y, x+1, "│", lk.border)
-		for i := range 3 {
-			st := lk.line
-			switch (c.phase - i + 4) % 4 {
-			case 0:
-				st = lk.name
-			case 1:
-				st = lk.border
-			}
-			g.put(x+2+2*i, y, "•", 1, st)
-		}
-		g.text(x+w-1, y, x+w, "│", lk.border)
-		textIn(g, x+w+2, y, x+cols, c.activity, lk.muted)
-	}
-	y++
-	if visible(y) {
-		hline(g, x, y, w, "╰", "╯", lk.border)
-	}
+	const dots = 7 // " • • • "
+	textIn(g, x+dots+1, y, x+cols, c.activity, lk.muted)
 }
 
 // drawRow writes a row of a reply from x up to limit, each run of it in
@@ -650,11 +650,11 @@ func boundaryAt(s string, i int) bool {
 }
 
 // shortPad is how far a bubble's one row of text, w columns wide, moves
-// right to sit in the middle when it is shorter than a bubble at the
-// least; 0 for longer text.
-func shortPad(rows []textRow, w int) int {
+// right to sit in the middle of a bubble bubble columns wide, when it is
+// shorter than a bubble's text at the least; 0 for longer text.
+func shortPad(rows []textRow, w, bubble int) int {
 	if len(rows) != 1 || w >= bubbleMin {
 		return 0
 	}
-	return (bubbleMin - w) / 2
+	return (bubble - 2 - 2*bubblePad - w) / 2
 }

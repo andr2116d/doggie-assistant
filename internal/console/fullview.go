@@ -30,7 +30,7 @@ type ScreenTexts struct {
 
 // ScreenOptions configures a Screen.
 type ScreenOptions struct {
-	Name string // the assistant's, above its replies
+	Name string // the assistant's, on the edge of its replies
 	// MaxRunes bounds what is typed; zero means no bound.
 	MaxRunes int
 	// Forget reports the submitted lines not to keep for Up and Down.
@@ -931,7 +931,7 @@ func (v *view) highlight(g *grid) {
 const boxRunes = "│╭╮╰╯─▍"
 
 // selectedText is the text selected on g, row by row, without the frames
-// of the bubbles and the blanks around them.
+// of the bubbles, the titles on them and the blanks around them.
 func (v *view) selectedText(g *grid) string {
 	var rows []string
 	v.selectedRange(func(y, from, to int) {
@@ -939,6 +939,7 @@ func (v *view) selectedText(g *grid) string {
 		for x := from; x < min(to, g.W); x++ {
 			c := g.at(x, y)
 			switch {
+			case onTopEdge(g, x, y):
 			case c.w == 0:
 			case c.text == "":
 				b.WriteByte(' ')
@@ -952,6 +953,20 @@ func (v *view) selectedText(g *grid) string {
 		}
 	})
 	return strings.Join(rows, "\n")
+}
+
+// onTopEdge reports whether the cell at x, y is on the top edge of a
+// bubble or a card: what is written there is its title, not its text.
+func onTopEdge(g *grid, x, y int) bool {
+	for left := x; left >= 0; left-- {
+		switch g.at(left, y).text {
+		case "╮":
+			return left == x
+		case "╭":
+			return true
+		}
+	}
+	return false
 }
 
 // shownAfter is how long an activity goes before it shows its time.

@@ -42,6 +42,56 @@ func TestConversationGolden(t *testing.T) {
 	}
 }
 
+// On a wide screen the conversation keeps to a column in the middle: what
+// the user said doesn't go to the far right, away from the replies.
+func TestConversationKeepsToAColumnOnAWideScreen(t *testing.T) {
+	c := newConversation("DOGGIE")
+	c.say(fromUser, "", "hola", noteInfo)
+	c.finish("r", "Hola, ¿qué necesitas?")
+	text, _ := drawConversation(c, 240, 20)
+	left, right := -1, -1
+	for _, row := range strings.Split(text, "\n") {
+		cells := []rune(row)
+		if i := slices.Index(cells, '╭'); i >= 0 && strings.Contains(row, "DOGGIE ─") {
+			left = i
+		}
+		if strings.Contains(row, "│  hola  │") {
+			right = len(cells)
+		}
+	}
+	if left < 0 || right < 0 {
+		t.Fatalf("a bubble is missing:\n%s", text)
+	}
+	if right-left != maxColumnCols {
+		t.Errorf("the conversation spans %d columns, want %d", right-left, maxColumnCols)
+	}
+	body := layout(240, 20, true, 1).body
+	if gapLeft, gapRight := left-body.x, body.x+body.w-right; gapLeft != gapRight {
+		t.Errorf("%d columns free on the left and %d on the right, want it in the middle", gapLeft, gapRight)
+	}
+}
+
+// A title longer than its bubble's text widens the bubble, and is cut
+// where the conversation ends.
+func TestBubbleFitsItsTitle(t *testing.T) {
+	c := newConversation("DOGGIE")
+	c.say(fromElsewhere, "voice:kitchen", "sí", noteInfo)
+	if text, _ := drawConversation(c, 60, 12); !strings.Contains(text, "╭─ voice:kitchen ─╮") || !strings.Contains(text, "│       sí        │") {
+		t.Errorf("the bubble doesn't fit its title:\n%s", text)
+	}
+	c = newConversation("DOGGIE")
+	c.say(fromElsewhere, "voice:"+strings.Repeat("x", 80), "sí", noteInfo)
+	text, _ := drawConversation(c, 40, 12)
+	for _, row := range strings.Split(text, "\n") {
+		if n := len([]rune(row)); n > 40 {
+			t.Errorf("a row %d columns wide on a screen of 40:\n%s", n, text)
+		}
+	}
+	if !strings.Contains(text, "…") {
+		t.Errorf("the long title isn't cut:\n%s", text)
+	}
+}
+
 // A reply that comes in pieces wraps the same as the whole of it.
 func TestStreamedReplyWrapsAsWhole(t *testing.T) {
 	text := "Claro: la reunión es el jueves a las nueve.\nAnoté que lleves los papeles del seguro y el recibo de la luz, y te aviso una hora antes."
@@ -306,10 +356,10 @@ func TestShortBubbleAndCursor(t *testing.T) {
 	for c.pace() {
 	}
 	text, _ := drawConversation(c, 60, 20)
-	if !strings.Contains(text, "│   hola   │") {
+	if !strings.Contains(text, "│  hola  │") {
 		t.Errorf("the word isn't in the middle:\n%s", text)
 	}
-	if !strings.Contains(text, "│  Sí, ya▍ │") {
+	if !strings.Contains(text, "│ Sí, ya▍  │") {
 		t.Errorf("no cursor while writing:\n%s", text)
 	}
 	c.finish("r", "Sí, ya está.")

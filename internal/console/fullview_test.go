@@ -83,7 +83,7 @@ func TestScreenTalks(t *testing.T) {
 	s.Stream("r1", "aviso en 3 minutos.")
 	s.Notice("r1", NoticeGood, "temporizador «té» · 3:00")
 	s.Reply("r1", "Listo, te aviso en 3 minutos.")
-	rows := f.waitShown(t, "│  Listo, te aviso en 3 minutos.  │", "✓ temporizador «té» · 3:00", "DOGGIE")
+	rows := f.waitShown(t, "│ Listo, te aviso en 3 minutos. │", "✓ temporizador «té» · 3:00", "╭─ DOGGIE ─")
 	// The cursor is back in the empty box.
 	if !strings.Contains(strings.Join(rows, "\n"), "│ ›") {
 		t.Errorf("no box:\n%s", strings.Join(rows, "\n"))
@@ -214,7 +214,7 @@ func TestScreenActivity(t *testing.T) {
 	s, f := openScreen(t, 60, 16, ScreenOptions{})
 	s.Reply("r", "hola")
 	s.SetActivity("revisando tu agenda")
-	f.waitShown(t, "│   hola   │", "revisando tu agenda", "╭───────╮")
+	f.waitShown(t, "│   hola   │", "• • •  revisando tu agenda")
 	frames := func() int { return strings.Count(f.rawOutput(), syncBegin) }
 	before := frames()
 	time.Sleep(100 * time.Millisecond)
@@ -259,7 +259,7 @@ func TestScreenBriefActivityHidden(t *testing.T) {
 	s.SetActivity("pensando")
 	s.SetActivity("")
 	s.Reply("r2", "chau")
-	f.waitShown(t, "│   chau   │")
+	f.waitShown(t, "│  chau  │")
 	time.Sleep(50 * time.Millisecond)
 	if strings.Contains(f.rawOutput(), "pensando") {
 		t.Error("a brief activity showed")
@@ -324,7 +324,7 @@ func TestScreenCopies(t *testing.T) {
 	texts.Copied = "copiado"
 	s, f := openScreen(t, 60, 16, ScreenOptions{Texts: texts})
 	s.Reply("r", "Listo, te aviso en tres minutos.")
-	rows := f.waitShown(t, "│  Listo, te aviso en tres minutos.  │")
+	rows := f.waitShown(t, "│ Listo, te aviso en tres minutos. │")
 	y := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, "Listo") })
 	x := strings.Index(rows[y], "│")
 	// From the frame on the left, over the row, to past the frame below.

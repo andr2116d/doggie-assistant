@@ -219,7 +219,8 @@ func TestTurnOutputs(t *testing.T) {
 
 func TestTurnWithoutText(t *testing.T) {
 	p := newProvider(t, testOptions(t))
-	outs, done := collect(t, p, context.Background(), scriptOf(step{Tool: "list_tasks"}))
+	outs, done := collect(t, p, context.Background(), scriptOf(step{Tool: "list_tasks"},
+		step{Raw: json.RawMessage(`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`)}))
 	if done.Err != nil || len(outs) != 1 || done.FirstText != 0 || done.Usage != nil || done.Tokens != nil {
 		t.Errorf("outs = %+v, done = %+v", outs, done)
 	}
@@ -1369,4 +1370,33 @@ func TestThreadStartsOverAfterAFailure(t *testing.T) {
 	if fourth == third || got != "todo" {
 		t.Errorf("after its process was killed the turn ran on process %d and was sent %q", fourth, got)
 	}
+}
+
+// A thread whose conversation grew past the limit, or whose size isn't
+// known, starts over on a new process.
+func TestThreadStartsOverPastTheSizeLimit(t *testing.T) {
+	old := maxEpochTokens
+	maxEpochTokens = 5000
+	t.Cleanup(func() { maxEpochTokens = old })
+	p := newProvider(t, testOptions(t))
+	result := func(usage string) string {
+		return scriptOf(step{Text: "nuevo"}, step{Report: true},
+			step{Raw: json.RawMessage(`{"type":"result","subtype":"success","is_error":false,"result":"ok"` + usage + `}`)})
+	}
+	atLimit := result(`,"usage":{"input_tokens":10,"cache_read_input_tokens":4000,"cache_creation_input_tokens":990}`)
+	first, _ := epochTurn(t, p, "th1", said("todo"), said("nuevo"))
+	if pid, _ := epochTurn(t, p, "th1", said("todo"), atLimit); pid != first {
+		t.Fatalf("the turn ran on process %d, want %d", pid, first)
+	}
+	past := result(`,"usage":{"input_tokens":10,"cache_read_input_tokens":4000,"cache_creation_input_tokens":991}`)
+	if pid, _ := epochTurn(t, p, "th1", said("todo"), past); pid != first {
+		t.Fatalf("at the limit the thread lost its process: the turn ran on %d, want %d", pid, first)
+	}
+	waitFor(t, "the process past the limit to stop", func() bool { return !processAlive(first) })
+	// The new process gets the whole input, and tells no size.
+	second, _ := epochTurn(t, p, "th1", result(``), said("nuevo"))
+	if second == first {
+		t.Errorf("past the limit the turn ran on the same process, %d", second)
+	}
+	waitFor(t, "the process of unknown size to stop", func() bool { return !processAlive(second) })
 }

@@ -1,10 +1,28 @@
 package claudecode
 
-import "time"
+import (
+	"time"
+
+	"github.com/andr2116d/doggie-assistant/internal/brain/llm"
+)
 
 // maxEpochs is how many processes are kept for the next turns of their
 // threads. Each takes about 200 MB of memory.
 const maxEpochs = 2
+
+// maxEpochTokens is how large a conversation a kept process may hold. Past
+// it the thread starts over on a new process, with the context DOGGIE
+// builds, well before the CLI would shorten the conversation on its own.
+// A variable so tests can shrink it.
+var maxEpochTokens = 60_000
+
+// fits reports whether the conversation of a turn that used t is small
+// enough to keep its process. The input of all the turn's calls to the
+// model is counted, which is more than the conversation when the turn
+// called tools; an unknown size doesn't fit.
+func fits(t *llm.Tokens) bool {
+	return t != nil && t.Input+t.CacheRead+t.CacheWrite <= maxEpochTokens
+}
 
 // An epoch is a process kept after a turn of a thread, holding the thread's
 // conversation, to serve its next turns: they send only what is new, and

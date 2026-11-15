@@ -223,7 +223,8 @@ func fakeTurn(line []byte, started time.Time, out *bufio.Writer, emit func(v any
 			select {}
 		}
 	}
-	emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "ok"})
+	emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "ok",
+		"usage": map[string]int{"input_tokens": 4, "cache_read_input_tokens": 1500, "cache_creation_input_tokens": 300, "output_tokens": 20}})
 }
 
 // deafOnce makes the first fake started with dir a CLI that can't be

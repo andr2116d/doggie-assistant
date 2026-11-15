@@ -1010,6 +1010,48 @@ func TestStreamDeltas(t *testing.T) {
 	}
 }
 
+// Stream events that carry no text (a block starting, a tool's input) are
+// neither streamed nor counted as the first text.
+func TestOnlyTextDeltasAreStreamed(t *testing.T) {
+	p := newProvider(t, testOptions(t))
+	ch, err := p.Generate(context.Background(), llm.Request{Turn: turn, Stream: true, Input: scriptOf(
+		step{Raw: json.RawMessage(`{"type":"stream_event","event":{"type":"content_block_start"}}`)},
+		step{Raw: json.RawMessage(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"kind\""}}}`)},
+		step{Raw: json.RawMessage(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":""}}}`)},
+		step{Tool: "list_tasks"},
+	)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outs, done := drain(t, ch)
+	if done.Err != nil {
+		t.Fatal(done.Err)
+	}
+	if len(outs) != 1 || outs[0].Tool == nil {
+		t.Errorf("outputs = %+v, want only the tool call", outs)
+	}
+	if done.FirstText != 0 {
+		t.Errorf("FirstText = %s, want 0: no text came", done.FirstText)
+	}
+}
+
+// A turn that fails halfway still tells what it measured until then.
+func TestFailedTurnKeepsItsMeasures(t *testing.T) {
+	p := newProvider(t, testOptions(t))
+	_, done := collect(t, p, context.Background(), scriptOf(
+		step{Rate: []float64{0.25, 0.5}}, step{Text: "Voy"}, step{Exit: intp(1)},
+	))
+	if done.Err == nil {
+		t.Fatal("no error")
+	}
+	if done.Model != "fake-model" || done.Request <= 0 || done.FirstText < done.Request || done.Duration < done.FirstText {
+		t.Errorf("done = %+v, want the model and the times kept", done)
+	}
+	if done.Usage == nil || done.Usage.FiveHour != 0.25 {
+		t.Errorf("usage = %+v, want the one the CLI reported", done.Usage)
+	}
+}
+
 // What the CLI writes once the usage limit is spent: the limits it was told,
 // a message of its own, and a failed result.
 func TestSpentUsageLimit(t *testing.T) {

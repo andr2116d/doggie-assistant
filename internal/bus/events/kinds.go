@@ -98,6 +98,17 @@ func TaskKinds() []TaskKind {
 	return []TaskKind{KindTimer, KindDemoSleep, KindDemoAsk}
 }
 
+// TimeoutOf is how long a task of the named kind may take, or zero if the
+// kind doesn't say or isn't one of TaskKinds.
+func TimeoutOf(kind string) time.Duration {
+	for _, k := range TaskKinds() {
+		if k.Name == kind {
+			return k.Timeout
+		}
+	}
+	return 0
+}
+
 // PersonMustAnswer reports whether only a person may answer a task's
 // questions, never the LLM for them, since an answer may confirm what the
 // task does: the task is sensitive, or its kind is, or it isn't one of kinds,

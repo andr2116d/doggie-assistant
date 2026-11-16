@@ -1,6 +1,20 @@
 package events
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestTimeoutOf(t *testing.T) {
+	if got := TimeoutOf("timer"); got != 24*time.Hour || got <= MaxTimer {
+		t.Errorf("a timer may take %s, want 24h, more than the %s it may count", got, MaxTimer)
+	}
+	for _, kind := range []string{"demo.sleep", "unknown.kind", ""} {
+		if got := TimeoutOf(kind); got != 0 {
+			t.Errorf("%q may take %s, want the manager's default", kind, got)
+		}
+	}
+}
 
 func TestPersonMustAnswer(t *testing.T) {
 	kinds := []TaskKind{{Name: "demo.ask", Risk: RiskAct}, {Name: "lock.open", Risk: RiskSensitive}}

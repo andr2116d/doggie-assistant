@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,7 +70,7 @@ func parseTask(sub string, args []string) ([]string, taskOptions, clientFlags, e
 	switch sub {
 	case "start":
 		flags.StringVar(&o.desc, "desc", "", "human-readable description")
-		flags.DurationVar(&o.timeout, "timeout", 0, "task timeout (default: the manager's)")
+		flags.DurationVar(&o.timeout, "timeout", 0, "task timeout (default: the kind's own, or the manager's)")
 		flags.StringVar(&o.thread, "thread", "cli", "conversation thread that asks")
 		flags.BoolVar(&o.sensitive, "sensitive", false, "keep the input and result out of the event log")
 	case "list":
@@ -110,8 +111,9 @@ func taskSub(ctx context.Context, conn *bus.Conn, w io.Writer, sub string, args 
 			}
 			spec.Input = json.RawMessage(args[1])
 		}
-		if o.timeout > 0 {
-			spec.TimeoutS = int(math.Ceil(o.timeout.Seconds()))
+		// Without one, a kind that takes long has its own.
+		if timeout := cmp.Or(o.timeout, events.TimeoutOf(spec.Kind)); timeout > 0 {
+			spec.TimeoutS = int(math.Ceil(timeout.Seconds()))
 		}
 		ref, err := bus.Request(ctx, conn, events.StartTask, spec)
 		if err != nil {

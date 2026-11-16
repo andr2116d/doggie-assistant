@@ -14,6 +14,7 @@ import (
 	"github.com/andr2116d/doggie-assistant/internal/bus/events"
 	"github.com/andr2116d/doggie-assistant/internal/demo"
 	"github.com/andr2116d/doggie-assistant/internal/task/manager"
+	"github.com/andr2116d/doggie-assistant/internal/timer"
 )
 
 // taskEnv runs a bus with the task manager and the demo worker, and returns
@@ -40,6 +41,7 @@ func taskEnv(t *testing.T) *bus.Conn {
 	t.Cleanup(cancel)
 	go manager.New(connect("tasks"), log, manager.DefaultOptions()).Run(ctx)
 	go demo.New(connect("demo"), log).Run(ctx)
+	go timer.New(connect("timer"), log).Run(ctx)
 
 	client := connect("cli")
 	deadline := time.Now().Add(5 * time.Second)
@@ -184,6 +186,31 @@ func TestDetailAndAge(t *testing.T) {
 }
 
 // waitForWorker waits until the demo worker serves its kinds.
+// A kind that takes long gets its own timeout, unless one is asked for.
+func TestTaskCLIStartUsesTheKindsTimeout(t *testing.T) {
+	c := taskEnv(t)
+	waitForWorker(t, c)
+	for _, tt := range []struct {
+		timeout time.Duration
+		want    string
+	}{{0, `"timeout_s": 86400`}, {30 * time.Second, `"timeout_s": 30`}} {
+		// The timer worker may not be ready yet.
+		var id string
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			out, err := sub(t, c, "start", []string{"timer", `{"seconds":3600}`}, taskOptions{timeout: tt.timeout})
+			if id = strings.TrimSpace(out); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timer worker not ready: %v", err)
+			}
+		}
+		if out, err := sub(t, c, "get", []string{id}, taskOptions{}); err != nil || !strings.Contains(out, tt.want) {
+			t.Errorf("-timeout %s: %v, want %s in:\n%s", tt.timeout, err, tt.want, out)
+		}
+	}
+}
+
 func waitForWorker(t *testing.T, c *bus.Conn) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

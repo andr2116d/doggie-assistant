@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -66,9 +67,35 @@ var (
 	}
 )
 
+// MaxTimer is the longest a timer may count. It is a little under the
+// longest a task may take, so a timer always ends before its task times
+// out.
+const MaxTimer = 24*time.Hour - time.Minute
+
+// KindTimer counts a time down and ends when it is over.
+var KindTimer = TaskKind{
+	Name: "timer",
+	Description: "Count a time down and let the user know when it is over: a kitchen timer, \"tell me in ten minutes\". " +
+		"Give it a label, in the user's words, when they say what it is for.",
+	Risk: RiskAct,
+	InputSchema: json.RawMessage(fmt.Sprintf(`{
+		"type": "object",
+		"properties": {
+			"seconds": {"type": "integer", "minimum": 1, "maximum": %d, "description": "How long to count."},
+			"label": {"type": "string", "maxLength": %d, "description": "What the timer is for, e.g. \"tea\"."}
+		},
+		"required": ["seconds"],
+		"additionalProperties": false
+	}`, int(MaxTimer/time.Second), MaxTimerLabel)),
+	Timeout: 24 * time.Hour,
+}
+
+// MaxTimerLabel bounds a timer's label, in characters.
+const MaxTimerLabel = 80
+
 // TaskKinds returns the task kinds the brain may start.
 func TaskKinds() []TaskKind {
-	return []TaskKind{KindDemoSleep, KindDemoAsk}
+	return []TaskKind{KindTimer, KindDemoSleep, KindDemoAsk}
 }
 
 // PersonMustAnswer reports whether only a person may answer a task's

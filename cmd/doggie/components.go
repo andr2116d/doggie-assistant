@@ -17,6 +17,7 @@ import (
 	"github.com/andr2116d/doggie-assistant/internal/mcp"
 	"github.com/andr2116d/doggie-assistant/internal/supervisor"
 	"github.com/andr2116d/doggie-assistant/internal/task/manager"
+	"github.com/andr2116d/doggie-assistant/internal/timer"
 	"github.com/andr2116d/doggie-assistant/prompts"
 )
 
@@ -41,6 +42,9 @@ func factories() []factory {
 		}},
 		{name: "tasks", build: func(d deps) (supervisor.Component, error) {
 			return manager.New(d.conn, d.log, manager.DefaultOptions()), nil
+		}},
+		{name: "timer", build: func(d deps) (supervisor.Component, error) {
+			return timer.New(d.conn, d.log), nil
 		}},
 		{name: "demo", build: func(d deps) (supervisor.Component, error) {
 			return demo.New(d.conn, d.log), nil

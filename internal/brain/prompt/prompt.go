@@ -161,7 +161,7 @@ func (c Context) clock() clock {
 func writeWorld(b *strings.Builder, c Context, clk clock) {
 	b.WriteString("<world>\n")
 	fmt.Fprintf(b, "Now: %s\n", c.Now.In(clk.loc).Format("Monday, 2 January 2006, 15:04 MST"))
-	writeTasks(b, c.Tasks, c.ThreadID)
+	writeTasks(b, c.Tasks, c.ThreadID, c.Now)
 	b.WriteString("</world>\n")
 }
 
@@ -173,7 +173,7 @@ func writeInputs(b *strings.Builder, inputs []Input, clk clock) {
 	b.WriteString("</input>\n")
 }
 
-func writeTasks(b *strings.Builder, tasks []events.TaskInfo, thread string) {
+func writeTasks(b *strings.Builder, tasks []events.TaskInfo, thread string, now time.Time) {
 	var active []events.TaskInfo
 	for _, t := range tasks {
 		if !t.Status.Terminal() {
@@ -204,7 +204,7 @@ func writeTasks(b *strings.Builder, tasks []events.TaskInfo, thread string) {
 		if t.Description != "" {
 			fmt.Fprintf(b, " <data>%s</data>", esc(cut(t.Description, maxDataText)))
 		}
-		fmt.Fprintf(b, ": %s", status(t))
+		fmt.Fprintf(b, ": %s", status(t, now))
 		if thread != "" {
 			if t.ThreadID == thread {
 				b.WriteString(", asked in this conversation")
@@ -216,7 +216,7 @@ func writeTasks(b *strings.Builder, tasks []events.TaskInfo, thread string) {
 	}
 }
 
-func status(t events.TaskInfo) string {
+func status(t events.TaskInfo, now time.Time) string {
 	switch t.Status {
 	case events.StatusWaitingInput:
 		s := "waiting for an answer to <data>" + esc(cut(t.Question, maxDataText)) + "</data>"
@@ -232,9 +232,28 @@ func status(t events.TaskInfo) string {
 		if t.Progress != "" {
 			s += ", <data>" + esc(cut(t.Progress, maxDataText)) + "</data>"
 		}
+		if !t.EndsAt.IsZero() {
+			s += ", " + timeLeft(t.EndsAt.Sub(now))
+		}
 		return s
 	}
 	return esc(string(t.Status))
+}
+
+// timeLeft says how long is left of d, to the second under an hour and to
+// the minute from there: the LLM is told, since it can't work it out from
+// a clock that only tells the minute.
+func timeLeft(d time.Duration) string {
+	s := int64((d + time.Second - 1) / time.Second)
+	switch h, m := s/3600, s/60%60; {
+	case s <= 0:
+		return "its time is over"
+	case h > 0:
+		return fmt.Sprintf("%d h %d min left", h, m)
+	case m > 0:
+		return fmt.Sprintf("%d min %d s left", m, s%60)
+	}
+	return fmt.Sprintf("%d s left", s)
 }
 
 // conversation renders the most recent turns that fit, oldest first.

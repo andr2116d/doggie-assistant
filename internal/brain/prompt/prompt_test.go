@@ -117,6 +117,29 @@ func TestBuildNextTellsWhatDOGGIESaidItself(t *testing.T) {
 	}
 }
 
+// A running task that told when it ends says how long it has left: the
+// clock of the message only tells the minute.
+func TestBuildTellsHowLongATaskHasLeft(t *testing.T) {
+	for _, tt := range []struct {
+		left time.Duration
+		want string
+	}{
+		{-time.Minute, "running, its time is over"}, {0, "running, its time is over"},
+		{time.Millisecond, "running, 1 s left"}, {59 * time.Second, "running, 59 s left"},
+		{133 * time.Second, "running, 2 min 13 s left"}, {time.Hour, "running, 1 h 0 min left"},
+		{24*time.Hour - time.Minute, "running, 23 h 59 min left"},
+	} {
+		task := events.TaskInfo{ID: "t1", TaskSpec: events.TaskSpec{Kind: "timer"}, Status: events.StatusRunning, EndsAt: at(0).Add(tt.left)}
+		if got := Build(Context{Now: at(0), Tasks: []events.TaskInfo{task}}); !strings.Contains(got, "- t1 timer: "+tt.want+"\n") {
+			t.Errorf("%s left:\n%s\nwant %q", tt.left, got, tt.want)
+		}
+	}
+	waiting := events.TaskInfo{ID: "t1", TaskSpec: events.TaskSpec{Kind: "timer"}, Status: events.StatusWaitingInput, Question: "¿Sigo?", EndsAt: at(5)}
+	if got := Build(Context{Now: at(0), Tasks: []events.TaskInfo{waiting}}); strings.Contains(got, "left") {
+		t.Errorf("a waiting task counts down:\n%s", got)
+	}
+}
+
 // Nothing a user, a satellite or a task reports can open or close a tag:
 // it could otherwise forge an order from the owner or a fake event.
 func TestBuildEscapesEverything(t *testing.T) {

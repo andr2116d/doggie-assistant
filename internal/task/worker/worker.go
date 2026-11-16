@@ -66,6 +66,16 @@ func (t *Task) Progress(ctx context.Context, message string, percent int) error 
 	return err
 }
 
+// Expect reports that the task expects to end at endsAt, with a message
+// about what it is doing. Whoever shows the task counts down to that time,
+// so a task that only waits reports once, not as the time passes.
+func (t *Task) Expect(ctx context.Context, message string, endsAt time.Time) error {
+	_, err := bus.RequestThroughOutages(ctx, t.conn, events.WorkerProgress.With(t.worker), events.TaskProgressData{
+		TaskID: t.ID, Message: message, EndsAt: endsAt,
+	})
+	return err
+}
+
 // Ask pauses the task until its question is answered, and returns the
 // answer. It fails when ctx is cancelled first.
 func (t *Task) Ask(ctx context.Context, question string, options ...string) (string, error) {

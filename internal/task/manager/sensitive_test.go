@@ -157,6 +157,44 @@ func TestSensitiveQuestionsAndProgressStayOutOfTheLog(t *testing.T) {
 	}
 }
 
+// A task tells when it expects to end with one report, which is logged
+// with that time, also for a sensitive task: only its message is left out.
+func TestTaskTellsWhenItExpectsToEnd(t *testing.T) {
+	ends := time.Now().Add(3 * time.Minute).UTC().Truncate(time.Millisecond)
+	h := newHarness(t, testOptions(), map[string]worker.Func{
+		"test.wait": func(ctx context.Context, task *worker.Task) (any, error) {
+			if err := task.Expect(ctx, "code 4821", ends); err != nil {
+				return nil, err
+			}
+			return task.Ask(ctx, "Done?")
+		},
+	})
+	for _, sensitive := range []bool{false, true} {
+		id := h.mustStart(events.TaskSpec{Kind: "test.wait", Sensitive: sensitive})
+		if info := h.waitQuestion(id, "Done?"); !info.EndsAt.Equal(ends) || info.Progress != "code 4821" {
+			t.Errorf("sensitive=%v: the task ends at %v and says %q, want %v", sensitive, info.EndsAt, info.Progress, ends)
+		}
+		logged, err := bus.History(context.Background(), h.client, time.Time{}, events.TaskProgress.Type())
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, env := range logged {
+			var d events.TaskProgressData
+			if json.Unmarshal(env.Data, &d) != nil || d.TaskID != id {
+				continue
+			}
+			found = true
+			if !d.EndsAt.Equal(ends) || (d.Message == "") != sensitive {
+				t.Errorf("sensitive=%v: logged %s", sensitive, env.Data)
+			}
+		}
+		if !found {
+			t.Errorf("sensitive=%v: no progress logged", sensitive)
+		}
+	}
+}
+
 // What caused a task is logged, so it is bounded.
 func TestCausedByIsChecked(t *testing.T) {
 	h := newHarness(t, testOptions(), map[string]worker.Func{"test.echo": echo})

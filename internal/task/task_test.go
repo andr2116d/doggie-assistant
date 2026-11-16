@@ -40,7 +40,7 @@ func TestTransitions(t *testing.T) {
 	}
 	actions := []action{
 		{"start", func(tk *Task, now time.Time) error { return tk.Start(now) }},
-		{"progress", func(tk *Task, now time.Time) error { return tk.Progress("1/3", 33, now) }},
+		{"progress", func(tk *Task, now time.Time) error { return tk.Progress("1/3", 33, time.Time{}, now) }},
 		{"ask", func(tk *Task, now time.Time) error { return tk.Ask("which?", []string{"a"}, now) }},
 		{"finish", func(tk *Task, now time.Time) error { return tk.Finish(json.RawMessage(`{}`), now) }},
 		{"fail", func(tk *Task, now time.Time) error { return tk.Fail("boom", now) }},
@@ -102,13 +102,30 @@ func TestAnswerClearsQuestion(t *testing.T) {
 
 func TestProgressClampsPercent(t *testing.T) {
 	tk := taskIn(t, events.StatusRunning)
-	tk.Progress("x", 250, t0)
+	tk.Progress("x", 250, time.Time{}, t0)
 	if p := tk.Info().Percent; p != 100 {
 		t.Errorf("Percent = %d, want 100", p)
 	}
-	tk.Progress("x", -5, t0)
+	tk.Progress("x", -5, time.Time{}, t0)
 	if p := tk.Info().Percent; p != 0 {
 		t.Errorf("Percent = %d, want 0", p)
+	}
+}
+
+// The last report says when the task expects to end: one that doesn't
+// tell forgets what an earlier one told.
+func TestProgressTellsWhenTheTaskEnds(t *testing.T) {
+	tk := New("t1", events.TaskSpec{Kind: "test.wait"}, t0, t0.Add(time.Hour))
+	ends := t0.Add(3 * time.Minute)
+	if err := tk.Apply(envelope(t, events.TaskProgress.Type(), events.TaskProgressData{TaskID: "t1", Message: "waiting", EndsAt: ends})); err != nil {
+		t.Fatal(err)
+	}
+	if got := tk.Info().EndsAt; !got.Equal(ends) {
+		t.Errorf("EndsAt = %v, want %v", got, ends)
+	}
+	tk.Progress("no idea", 0, time.Time{}, t0)
+	if got := tk.Info().EndsAt; !got.IsZero() {
+		t.Errorf("EndsAt = %v after a report that doesn't tell it", got)
 	}
 }
 

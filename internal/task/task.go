@@ -90,12 +90,13 @@ func (t *Task) Start(now time.Time) error {
 	return nil
 }
 
-// Progress records how a running task is doing. The status does not change.
-func (t *Task) Progress(message string, percent int, now time.Time) error {
+// Progress records how a running task is doing, and when it expects to end
+// (zero if it doesn't know). The status does not change.
+func (t *Task) Progress(message string, percent int, endsAt, now time.Time) error {
 	if err := t.transition(events.StatusRunning, now, events.StatusRunning); err != nil {
 		return err
 	}
-	t.info.Progress, t.info.Percent = message, max(0, min(percent, 100))
+	t.info.Progress, t.info.Percent, t.info.EndsAt = message, max(0, min(percent, 100)), endsAt
 	return nil
 }
 
@@ -167,7 +168,7 @@ func (t *Task) Apply(env bus.Envelope) error {
 		if err != nil {
 			return err
 		}
-		return t.Progress(ev.Data.Message, ev.Data.Percent, now)
+		return t.Progress(ev.Data.Message, ev.Data.Percent, ev.Data.EndsAt, now)
 	case events.TaskNeedsInput.Type():
 		ev, err := bus.Decode(env, events.TaskNeedsInput)
 		if err != nil {

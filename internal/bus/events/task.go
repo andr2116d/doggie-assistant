@@ -70,16 +70,18 @@ const MaxCausedBy = 16
 type TaskInfo struct {
 	ID string `json:"id"`
 	TaskSpec
-	Status    TaskStatus      `json:"status"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	Deadline  time.Time       `json:"deadline"`
-	Progress  string          `json:"progress,omitempty"`
-	Percent   int             `json:"percent,omitempty"`
-	Question  string          `json:"question,omitempty"`
-	Options   []string        `json:"options,omitempty"`
-	Result    json.RawMessage `json:"result,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	Status    TaskStatus `json:"status"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	Deadline  time.Time  `json:"deadline"`
+	Progress  string     `json:"progress,omitempty"`
+	Percent   int        `json:"percent,omitempty"`
+	// EndsAt is when a running task expects to end, if it told.
+	EndsAt   time.Time       `json:"ends_at,omitzero"`
+	Question string          `json:"question,omitempty"`
+	Options  []string        `json:"options,omitempty"`
+	Result   json.RawMessage `json:"result,omitempty"`
+	Error    string          `json:"error,omitempty"`
 	// Worker is who accepted the task, as the bus knows it.
 	Worker string `json:"worker,omitempty"`
 	// HeartbeatMS tells the worker how often to send TaskAlive, and Claim is
@@ -100,6 +102,10 @@ type TaskProgressData struct {
 	Message string `json:"message"`
 	// Percent is 0-100, or 0 when unknown.
 	Percent int `json:"percent,omitempty"`
+	// EndsAt is when the task expects to end, or zero if it doesn't know.
+	// Whoever shows the task counts down to it, so the task needn't report
+	// again as the time passes.
+	EndsAt time.Time `json:"ends_at,omitzero"`
 	// Redacted means the message of a sensitive task was left out of the
 	// event; task.get tells it.
 	Redacted bool `json:"redacted,omitempty"`

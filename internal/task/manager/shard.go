@@ -304,16 +304,16 @@ func (s *shard) reporting(ctx context.Context, worker, id string) (*task.Task, e
 func (s *shard) progress(ctx context.Context, in bus.Incoming[events.TaskProgressData, events.Ack]) {
 	t, err := s.reporting(ctx, in.Under(), in.Req.TaskID)
 	if err == nil {
-		err = t.Progress(in.Req.Message, in.Req.Percent, time.Now().UTC())
+		err = t.Progress(in.Req.Message, in.Req.Percent, in.Req.EndsAt, time.Now().UTC())
 	}
 	if err != nil {
 		in.Fail(err)
 		return
 	}
 	info := t.Info()
-	logged := events.TaskProgressData{TaskID: info.ID, Message: info.Progress, Percent: info.Percent}
+	logged := events.TaskProgressData{TaskID: info.ID, Message: info.Progress, Percent: info.Percent, EndsAt: info.EndsAt}
 	if info.Sensitive {
-		logged = events.TaskProgressData{TaskID: info.ID, Percent: info.Percent, Redacted: true}
+		logged.Message, logged.Redacted = "", true
 	}
 	publish(ctx, s, events.TaskProgress, logged)
 	in.Reply(events.Ack{})

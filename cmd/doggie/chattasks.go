@@ -235,7 +235,7 @@ func (b *taskBoard) refreshed(l boardLookup, n int) (again bool, question string
 		return true, ""
 	default:
 		t.info.Status, t.info.Question, t.info.Options = l.info.Status, l.info.Question, l.info.Options
-		t.info.Progress, t.info.Percent = l.info.Progress, l.info.Percent
+		t.info.Progress, t.info.Percent, t.info.EndsAt = l.info.Progress, l.info.Percent, l.info.EndsAt
 		if t.info.Question != "" {
 			return false, b.tell(t.info)
 		}
@@ -263,7 +263,7 @@ func (b *taskBoard) apply(t *boardTask, env bus.Envelope) (question string, refr
 		var d events.TaskProgressData
 		if json.Unmarshal(env.Data, &d) == nil {
 			// A sensitive task's message stays with the manager.
-			t.info.Status, t.info.Progress, t.info.Percent = events.StatusRunning, d.Message, d.Percent
+			t.info.Status, t.info.Progress, t.info.Percent, t.info.EndsAt = events.StatusRunning, d.Message, d.Percent, d.EndsAt
 		}
 	case events.TaskNeedsInput.Type():
 		var d events.TaskNeedsInputData

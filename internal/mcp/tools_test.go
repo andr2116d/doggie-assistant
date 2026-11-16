@@ -219,6 +219,23 @@ func TestListTasks(t *testing.T) {
 	mustContain(t, callErr(t, cs, "list_tasks", map[string]any{"limit": "ten"}), "limit")
 }
 
+// The LLM is told how long a running task that told its end has left.
+func TestTaskViewTellsTheTimeLeft(t *testing.T) {
+	var s Server
+	task := events.TaskInfo{ID: "t1", Status: events.StatusRunning, EndsAt: time.Now().Add(90 * time.Minute)}
+	if got := s.view(task, Turn{}).SecondsLeft; got < 5390 || got > 5400 {
+		t.Errorf("SecondsLeft = %d with 90 minutes left", got)
+	}
+	task.EndsAt = time.Now().Add(-time.Minute)
+	if got := s.view(task, Turn{}).SecondsLeft; got != 0 {
+		t.Errorf("SecondsLeft = %d once the time is over", got)
+	}
+	task.Status, task.EndsAt = events.StatusDone, time.Now().Add(time.Hour)
+	if got := s.view(task, Turn{}).SecondsLeft; got != 0 {
+		t.Errorf("SecondsLeft = %d for a task that ended", got)
+	}
+}
+
 func TestListTasksWhenThereAreNone(t *testing.T) {
 	h := newHarness(t)
 	_, cs := h.bound("th")

@@ -150,14 +150,17 @@ type taskView struct {
 	Description string `json:"description,omitempty"`
 	Status      string `json:"status"`
 	// ThisThread is true for tasks requested in the current conversation.
-	ThisThread bool     `json:"this_thread"`
-	CreatedAt  string   `json:"created_at"`
-	Progress   string   `json:"progress,omitempty"`
-	Percent    int      `json:"percent,omitempty"`
-	Question   string   `json:"question,omitempty"`
-	Options    []string `json:"options,omitempty"`
-	Result     any      `json:"result,omitempty"`
-	Error      string   `json:"error,omitempty"`
+	ThisThread bool   `json:"this_thread"`
+	CreatedAt  string `json:"created_at"`
+	Progress   string `json:"progress,omitempty"`
+	Percent    int    `json:"percent,omitempty"`
+	// SecondsLeft is how long a running task that told when it ends has
+	// left.
+	SecondsLeft int      `json:"seconds_left,omitempty"`
+	Question    string   `json:"question,omitempty"`
+	Options     []string `json:"options,omitempty"`
+	Result      any      `json:"result,omitempty"`
+	Error       string   `json:"error,omitempty"`
 	// Note explains a missing result.
 	Note string `json:"note,omitempty"`
 }
@@ -344,6 +347,9 @@ func (s *Server) view(t events.TaskInfo, turn Turn) taskView {
 		Percent:     t.Percent,
 		Question:    truncate(t.Question, maxTextRunes),
 		Error:       truncate(t.Error, maxTextRunes),
+	}
+	if t.Status == events.StatusRunning && !t.EndsAt.IsZero() {
+		v.SecondsLeft = int(max(time.Until(t.EndsAt), 0) / time.Second)
 	}
 	for i, o := range t.Options {
 		if i == 10 {

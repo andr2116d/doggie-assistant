@@ -229,6 +229,9 @@ func (b *taskBoard) views(w chatWords) ([]console.TaskView, string) {
 		case info.Progress != "":
 			v.Detail = oneLineText(info.Progress)
 		}
+		if info.Status == events.StatusRunning && !info.EndsAt.IsZero() {
+			v.EndsAt, v.Since = info.EndsAt, info.CreatedAt
+		}
 		views = append(views, v)
 	}
 	more := ""

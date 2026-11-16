@@ -154,6 +154,27 @@ func (s *fakeScreen) SetTasks(tasks []console.TaskView, more string) {
 	s.call("tasks %s %s", strings.Join(parts, ","), more)
 }
 
+// A running task that told when it ends is shown counting down from when
+// it was created; one that waits for an answer isn't.
+func TestBoardViewsTellWhenATaskEnds(t *testing.T) {
+	b := newTaskBoard("terminal")
+	asked := time.Date(2026, 3, 9, 18, 0, 0, 0, time.UTC)
+	ends := asked.Add(3 * time.Minute)
+	b.event(env(events.TaskCreated, events.TaskInfo{
+		ID: "t1", TaskSpec: events.TaskSpec{Kind: "timer", ThreadID: "terminal", Description: "Preparar té"},
+		Status: events.StatusPending, CreatedAt: asked,
+	}))
+	b.event(env(events.TaskProgress, events.TaskProgressData{TaskID: "t1", EndsAt: ends}))
+	views, _ := b.views(words("es"))
+	if len(views) != 1 || !views[0].EndsAt.Equal(ends) || !views[0].Since.Equal(asked) {
+		t.Fatalf("views = %+v, want one that counts from %v to %v", views, asked, ends)
+	}
+	b.event(env(events.TaskNeedsInput, events.TaskNeedsInputData{TaskID: "t1", Question: "¿Sigo?"}))
+	if views, _ := b.views(words("es")); len(views) != 1 || !views[0].EndsAt.IsZero() {
+		t.Errorf("a waiting task counts down: %+v", views)
+	}
+}
+
 func TestBoardViews(t *testing.T) {
 	b := newTaskBoard("terminal")
 	b.event(created("t10", "terminal", "Esperar  un\nrato"))

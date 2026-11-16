@@ -247,6 +247,7 @@ func (s *Server) startTask(ctx context.Context, turn Turn, in startTaskIn) (star
 		Input:       raw,
 		Description: desc,
 		ThreadID:    turn.ThreadID,
+		TimeoutS:    int(k.Timeout / time.Second),
 		CausedBy:    turn.Said,
 	})
 	if err != nil {

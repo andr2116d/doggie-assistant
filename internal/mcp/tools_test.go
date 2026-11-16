@@ -31,6 +31,18 @@ func TestStartTask(t *testing.T) {
 	}
 }
 
+// A kind that takes longer than most says so itself: the LLM can't.
+func TestStartTaskGivesAKindItsOwnTimeout(t *testing.T) {
+	h := newHarness(t)
+	_, cs := h.bound("th1")
+	var out startTaskOut
+	callOK(t, cs, "start_task", map[string]any{"kind": "test.long", "description": "Hornear el pan"}, &out)
+	info := h.get(out.TaskID)
+	if got := info.Deadline.Sub(info.CreatedAt); got != 2*time.Hour {
+		t.Errorf("the task may take %s, want 2h", got)
+	}
+}
+
 func TestStartTaskThreadComesFromTheTurn(t *testing.T) {
 	h := newHarness(t)
 	_, cs := h.bound("mine")

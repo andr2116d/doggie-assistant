@@ -1,6 +1,9 @@
 package events
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Risk is how much harm an action can do. It decides whether the action needs
 // a person's confirmation. It is declared here, in reviewed code, never by
@@ -25,6 +28,9 @@ type TaskKind struct {
 	Risk        Risk
 	// InputSchema is the JSON Schema of the task's input.
 	InputSchema json.RawMessage
+	// Timeout is how long a task of this kind may take, in whole seconds.
+	// Zero leaves it to the task manager's default.
+	Timeout time.Duration
 }
 
 // Task kinds of the demo worker, which stand in for real devices until they

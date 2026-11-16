@@ -21,11 +21,16 @@ import (
 func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // Test-only kinds next to the real demo ones: one with a permissive input,
+// one with its own timeout,
 // one sensitive.
 var (
 	kindBig = events.TaskKind{
 		Name: "test.big", Description: "Anything goes.", Risk: events.RiskAct,
 		InputSchema: json.RawMessage(`{"type": "object"}`),
+	}
+	kindLong = events.TaskKind{
+		Name: "test.long", Description: "Takes hours.", Risk: events.RiskAct,
+		InputSchema: json.RawMessage(`{"type": "object"}`), Timeout: 2 * time.Hour,
 	}
 	kindLock = events.TaskKind{
 		Name: "test.lock", Description: "Open the front door.", Risk: events.RiskSensitive,
@@ -34,7 +39,7 @@ var (
 )
 
 func testKinds() []events.TaskKind {
-	return append(events.TaskKinds(), kindBig, kindLock)
+	return append(events.TaskKinds(), kindBig, kindLong, kindLock)
 }
 
 // harness runs a bus, the task manager, a worker and the MCP server. direct
@@ -120,6 +125,7 @@ func (h *harness) funcs() map[string]worker.Func {
 		},
 		events.KindDemoAsk.Name: ask,
 		kindLock.Name:           ask,
+		kindLong.Name:           ask,
 		"other.ask":             ask, // a kind the brain doesn't know
 		kindBig.Name: func(ctx context.Context, t *worker.Task) (any, error) {
 			in := struct {

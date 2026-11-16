@@ -39,7 +39,8 @@ DOGGIE is a personal assistant you run on your own machine. You talk with it, an
 ## What works today
 
 - **Conversation.** The brain runs on the official Claude Code CLI with your own subscription. A conversation keeps its CLI process between turns and sends it only what is new, so the rest is read from the prompt cache instead of being sent again; a warm process waits ahead for the conversations that start (`brain.warm`). Replies are streamed: the first words arrive in about a second, nearly all of it the model's. DOGGIE speaks as itself: asked about it, it names the model it thinks with, but never repeats what the CLI adds about your account or machine. When your usage limit runs low or runs out, it tells you so in your language, with when it renews.
-- **Tasks that don't block.** Ask for something and DOGGIE starts a task, keeps talking, and tells you when it ends, fails or needs an answer. Tasks report progress, can be cancelled and time out. For now, demo tasks (`demo.sleep`, `demo.ask`) stand in for real tools.
+- **Tasks that don't block.** Ask for something and DOGGIE starts a task, keeps talking, and tells you when it ends, fails or needs an answer. Tasks report progress, can be cancelled and time out. Demo tasks (`demo.sleep`, `demo.ask`) stand in for the tools that don't exist yet.
+- **Timers.** "Tell me in ten minutes", "three minutes for the tea": a timer counts down in the panel, and DOGGIE can tell how long it has left. It follows the clock, so it ends on time even if the machine slept meanwhile.
 - **Full-screen terminal chat.** Bubbles with markdown, replies that flow in as they are written, a panel with the tasks and the latest notices, a menu of commands, scrolling, and copying with the mouse, in your language. It draws only what changed: at rest it uses no CPU.
 - **Event bus.** An embedded NATS server with a persistent event log (7 days by default), TLS from DOGGIE's own CA and token auth.
 - **Restarts lose nothing.** Interrupted tasks are reported as failed, and sentences a restart left unanswered are answered after it.
@@ -57,7 +58,8 @@ internal/mcp/         the tools the LLM may use, with their risk levels
 internal/console/     the full-screen terminal UI, and plain lines for pipes
 internal/config/      the config file and where data lives
 internal/supervisor/  restarts components that fail, with backoff
-internal/demo/        demo tasks, until real tools come
+internal/timer/       timers
+internal/demo/        demo tasks, until more real tools come
 internal/heartbeat/   a component that only says it is alive
 prompts/              the system prompt and DOGGIE's own notices
 ```
@@ -185,6 +187,7 @@ Chats on the same channel share the conversation: each one shows what the others
 Start, follow and stop tasks yourself, without the brain. `task start` prints the new task's ID (`t1`, `t2`, ...):
 
 ```sh
+doggie task start timer '{"seconds": 180, "label": "tea"}'
 doggie task start demo.sleep '{"seconds": 30}'
 doggie task list -active
 doggie task get <id>
@@ -232,7 +235,7 @@ For the shared token, leave out `DOGGIE_BUS_USER` and pass the contents of `bus.
 ## Components and roadmap
 
 - A modular monolith in Go: heavy or fragile pieces run as satellites.
-- `doggie run` starts every component: `heartbeat`, `tasks` (the task manager), `demo` (demo tasks) and `brain`. Pick some with `--only` or `--except`.
+- `doggie run` starts every component: `heartbeat`, `tasks` (the task manager), `timer`, `demo` (demo tasks) and `brain`. Pick some with `--only` or `--except`.
 - A three-level brain: local reflexes → learned skills → LLM (through official CLIs, with tools exposed over MCP). Only the LLM level exists so far.
 
 Planned: home control through Home Assistant, a local and free voice pipeline (VAD, wake word, turn detection, STT, TTS), WhatsApp and a web HUD.

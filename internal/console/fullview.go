@@ -274,6 +274,9 @@ func (s *Screen) loop(t Terminal, v *view) {
 	defer fs.gate.stop()
 	minute := time.NewTimer(untilNextMinute(time.Now()))
 	defer minute.Stop()
+	// count is set while a task counts down, for when it says another
+	// second.
+	var count <-chan time.Time
 	// A terminal that doesn't tell when it changes size, as on Windows, is
 	// asked now and then.
 	var poll <-chan time.Time
@@ -301,7 +304,13 @@ func (s *Screen) loop(t Terminal, v *view) {
 		} else {
 			anim.stop()
 		}
+		count = nil
+		if d, ok := nextCount(v.tasks, time.Now()); ok {
+			count = time.After(d)
+		}
 		select {
+		case <-count:
+			want()
 		case p, ok := <-input:
 			if !ok {
 				input = nil
@@ -716,6 +725,9 @@ type TaskView struct {
 	Percent int
 	// Waiting is set while it waits for an answer.
 	Waiting bool
+	// EndsAt is when it expects to end, if it told: the panel counts down
+	// to it, with a bar that fills from Since, when it started counting.
+	EndsAt, Since time.Time
 }
 
 // SetTasks shows tasks in the panel, with more below them, e.g. how many
@@ -816,18 +828,21 @@ func (v *view) taskRows(w int) []cardRow {
 		if t.Waiting {
 			mark, st = "?", lk.wait
 		}
-		right := ""
-		if t.Percent > 0 {
-			right = fmt.Sprintf("%d%%", min(t.Percent, 100))
+		right, bar := "", -1.0
+		switch {
+		case t.counting():
+			right, bar = t.left(time.Now())
+		case t.Percent > 0:
+			right, bar = fmt.Sprintf("%d%%", min(t.Percent, 100)), float64(min(t.Percent, 100))/100
 		}
-		// The title takes up to two rows, the percent on the first.
+		// The title takes up to two rows, how far it is on the first.
 		title := wrapLines(t.Title, w-2-textWidth(right)-1)
 		rows = append(rows, cardRow{mark: mark, markStyle: st, left: title[0], leftStyle: lk.text, right: right})
 		if len(title) > 1 {
 			rows = append(rows, cardRow{left: "  " + title[1], leftStyle: lk.text})
 		}
-		if t.Percent > 0 {
-			rows = append(rows, cardRow{isBar: true, bar: float64(min(t.Percent, 100)) / 100})
+		if bar >= 0 {
+			rows = append(rows, cardRow{isBar: true, bar: bar})
 		}
 		if t.Detail != "" {
 			detail := lk.muted

@@ -295,6 +295,74 @@ func TestScreenPanel(t *testing.T) {
 	f.waitShown(t, "sin tareas en curso") // it stays open, and says so
 }
 
+// A task that tells when it ends counts down in the panel by itself, with
+// a bar that fills as its time passes.
+func TestScreenPanelCountsDown(t *testing.T) {
+	s, f := openScreen(t, 120, 26, ScreenOptions{})
+	now := time.Now()
+	s.SetTasks([]TaskView{
+		{ID: "t1", Title: "Preparar té", Since: now.Add(-time.Hour), EndsAt: now.Add(time.Hour)},
+		{ID: "t2", Title: "Hornear el pan", Since: now, EndsAt: now.Add(2900 * time.Millisecond)},
+		{ID: "t3", Title: "Pagar la luz", Waiting: true, EndsAt: now.Add(time.Hour)},
+	}, "")
+	rows := strings.Join(f.waitShown(t, "● Preparar té", "59:5", "● Hornear el pan", "0:02", "━━━"), "\n")
+	if strings.Contains(rows, "1:00:00") || strings.Count(rows, "59:5") != 1 {
+		t.Errorf("a waiting task counts down, or the first shows no part of a second as a whole one:\n%s", rows)
+	}
+	f.waitShown(t, "0:01")
+	f.waitShown(t, "0:00")
+}
+
+func TestCountdown(t *testing.T) {
+	for _, tt := range []struct {
+		left time.Duration
+		want string
+	}{
+		{-time.Second, "0:00"}, {0, "0:00"}, {time.Millisecond, "0:01"}, {time.Second, "0:01"},
+		{59*time.Second + 1, "1:00"}, {65 * time.Second, "1:05"}, {time.Hour, "1:00:00"},
+		{24*time.Hour - time.Minute, "23:59:00"},
+	} {
+		now := time.Now()
+		got, _ := TaskView{EndsAt: now.Add(tt.left)}.left(now)
+		if got != tt.want {
+			t.Errorf("%s left shows %q, want %q", tt.left, got, tt.want)
+		}
+	}
+	since := time.Unix(1000, 0)
+	for _, tt := range []struct {
+		at   time.Duration
+		want float64
+	}{{-time.Minute, 0}, {0, 0}, {15 * time.Second, 0.25}, {time.Minute, 1}, {time.Hour, 1}} {
+		if _, done := (TaskView{Since: since, EndsAt: since.Add(time.Minute)}).left(since.Add(tt.at)); done != tt.want {
+			t.Errorf("%s into a minute is %v done, want %v", tt.at, done, tt.want)
+		}
+	}
+	if _, done := (TaskView{EndsAt: since}).left(since); done != -1 {
+		t.Errorf("a task that doesn't say since when is %v done, want no bar", done)
+	}
+}
+
+// The panel wakes when the nearest countdown says another second, and
+// not at all when none counts.
+func TestNextCount(t *testing.T) {
+	now := time.Unix(1000, 0)
+	tasks := []TaskView{
+		{EndsAt: now.Add(-time.Second)},
+		{EndsAt: now.Add(time.Hour), Waiting: true},
+		{},
+	}
+	if d, ok := nextCount(tasks, now); ok {
+		t.Errorf("wakes in %s with nothing counting", d)
+	}
+	tasks = append(tasks, TaskView{EndsAt: now.Add(10*time.Second + 300*time.Millisecond)}, TaskView{EndsAt: now.Add(5 * time.Second)})
+	if d, ok := nextCount(tasks, now); !ok || d != 300*time.Millisecond {
+		t.Errorf("wakes in %s (%v), want 300ms", d, ok)
+	}
+	if d, ok := nextCount(tasks[4:], now); !ok || d != time.Second {
+		t.Errorf("wakes in %s (%v), want 1s", d, ok)
+	}
+}
+
 func TestScreenPanelNarrow(t *testing.T) {
 	s, f := openScreen(t, 80, 20, ScreenOptions{})
 	s.SetTasks(sampleTasks, "")
